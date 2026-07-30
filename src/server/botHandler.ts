@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs, addDoc, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
 interface UserSession {
@@ -7,6 +7,7 @@ interface UserSession {
   mobile?: string;
   channelVerified?: boolean;
   groupVerified?: boolean;
+  referrerUid?: string;
 }
 
 // In-memory session state store for onboarding users
@@ -15,7 +16,7 @@ const userSessions: Map<string, UserSession> = new Map();
 /**
  * Fetch bot admin configuration dynamically from Firestore settings/config
  */
-async function getAdminConfig() {
+async function getAdminConfig(): Promise<Record<string, any> | null> {
   try {
     const configDoc = await getDoc(doc(db, 'settings', 'config'));
     if (configDoc.exists()) {
@@ -57,6 +58,25 @@ export async function getUserByTelegramId(telegramId: string) {
     }
   } catch (err) {
     console.error('Error fetching user by telegramId:', err);
+  }
+  return null;
+}
+
+/**
+ * Query user document from Firestore by unique UID
+ */
+export async function getUserByUid(uid: string) {
+  if (!uid) return null;
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('uid', '==', String(uid).trim()));
+    const querySnapshot = await getDocs(q);
+    if (!querySnapshot.empty) {
+      const docSnap = querySnapshot.docs[0];
+      return { id: docSnap.id, ...docSnap.data() } as any;
+    }
+  } catch (err) {
+    console.error('Error fetching user by uid:', err);
   }
   return null;
 }
@@ -163,10 +183,12 @@ export async function processTelegramUpdate(token: string, update: any) {
       }
 
       if (channelJoined && groupJoined) {
+        const currentSess = userSessions.get(chatId);
         userSessions.set(chatId, {
           step: 'WAITING_NAME',
           channelVerified: true,
           groupVerified: true,
+          referrerUid: currentSess?.referrerUid,
         });
 
         await sendTelegramApi(token, 'answerCallbackQuery', {
@@ -230,6 +252,26 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
+    // Parse referral parameter from command (e.g. /start 149595 or /start=149595)
+    let refParam = '';
+    const parts = text.split(/\s+/);
+    if (parts.length > 1 && parts[1]) {
+      refParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
+    } else {
+      const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
+      if (match && match[1] && match[1].toLowerCase() !== '/start') {
+        refParam = match[1].trim();
+      }
+    }
+
+    let referrerUid: string | undefined = undefined;
+    if (refParam) {
+      const referrer = await getUserByUid(refParam);
+      if (referrer && String(referrer.telegramId) !== String(chatId)) {
+        referrerUid = String(referrer.uid);
+      }
+    }
+
     // Load dynamic configuration from Firestore settings/config
     const adminConfig = await getAdminConfig();
 
@@ -246,12 +288,16 @@ export async function processTelegramUpdate(token: string, update: any) {
     const groupUsername = adminConfig.mainGroupUsername.replace(/^@/, '');
     const forceJoinEnabled = adminConfig.forceJoinEnabled !== false;
 
+    const existingSess = userSessions.get(chatId);
+    const finalReferrerUid = referrerUid || existingSess?.referrerUid;
+
     if (!forceJoinEnabled) {
       // Skip force join if disabled
       userSessions.set(chatId, {
         step: 'WAITING_NAME',
         channelVerified: true,
         groupVerified: true,
+        referrerUid: finalReferrerUid,
       });
 
       await sendTelegramApi(token, 'sendMessage', {
@@ -262,7 +308,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    userSessions.set(chatId, { step: 'FORCE_JOIN' });
+    userSessions.set(chatId, { step: 'FORCE_JOIN', referrerUid: finalReferrerUid });
 
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
@@ -327,12 +373,24 @@ export async function processTelegramUpdate(token: string, update: any) {
       }
       botUser = botUser.replace(/^@/, '');
 
+      const rewardRate = Number(adminConfig?.rewardPerReferral ?? adminConfig?.referralBonus ?? 5);
+      const totalRefs = Number(existingUser.totalReferrals ?? existingUser.successfulReferrals ?? 0);
+      const successRefs = Number(existingUser.successfulReferrals ?? existingUser.totalReferrals ?? 0);
+      const totalEarned = existingUser.totalReferralEarnings !== undefined
+        ? Number(existingUser.totalReferralEarnings)
+        : (successRefs * rewardRate);
+
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
         text: `🎁 <b>Refer & Earn</b>\n\n` +
-          `Earn ₹${adminConfig?.rewardPerReferral ?? adminConfig?.referralBonus ?? 5} for every friend you invite!\n\n` +
+          `Earn <b>₹${rewardRate}</b> for every friend you invite!\n\n` +
           `🔗 <b>Your Referral Link:</b>\n` +
-          `<code>https://t.me/${botUser || 'RoyShareWalletBot'}?start=${existingUser.uid}</code>`,
+          `<code>https://t.me/${botUser || 'RoyShareWalletBot'}?start=${existingUser.uid}</code>\n\n` +
+          `📊 <b>Your Referral Stats:</b>\n` +
+          `👥 <b>Referral Count:</b> ${totalRefs}\n` +
+          `✅ <b>Successful Referrals:</b> ${successRefs}\n` +
+          `💰 <b>Total Reward Earned:</b> ₹${totalEarned}\n` +
+          `🎁 <b>Current Referral Reward:</b> ₹${rewardRate}`,
         parse_mode: 'HTML',
       });
       return;
@@ -536,8 +594,9 @@ export async function processTelegramUpdate(token: string, update: any) {
     const adminConfig = await getAdminConfig();
     const uid = await generateUniqueUid();
     const bonus = Number(adminConfig?.registrationBonus) || 0;
+    const referralReward = Number(adminConfig?.rewardPerReferral ?? adminConfig?.referralBonus ?? 5);
 
-    const newUserData = {
+    const newUserData: Record<string, any> = {
       uid,
       telegramId: String(chatId),
       username: message.from.username ? `@${message.from.username.replace('@', '')}` : '',
@@ -547,12 +606,101 @@ export async function processTelegramUpdate(token: string, update: any) {
       channelVerified: session.channelVerified ?? true,
       groupVerified: session.groupVerified ?? true,
       createdAt: new Date().toISOString(),
+      referrerUid: session.referrerUid || null,
+      referredBy: session.referrerUid || null,
+      referralRewardReceived: false,
+      totalReferrals: 0,
+      successfulReferrals: 0,
+      totalReferralEarnings: 0,
     };
 
+    let newUserDocRef;
     try {
-      await addDoc(collection(db, 'users'), newUserData);
+      newUserDocRef = await addDoc(collection(db, 'users'), newUserData);
     } catch (dbErr) {
       console.error('Failed to create user account in Firestore:', dbErr);
+    }
+
+    // Process Referral Reward via Firestore Transaction
+    if (newUserDocRef && session.referrerUid && session.referrerUid !== uid) {
+      try {
+        const referrerQuery = query(collection(db, 'users'), where('uid', '==', String(session.referrerUid)));
+        const referrerSnap = await getDocs(referrerQuery);
+
+        if (!referrerSnap.empty) {
+          const referrerDocSnap = referrerSnap.docs[0];
+          const referrerRef = doc(db, 'users', referrerDocSnap.id);
+
+          let updatedReferrerBalance = 0;
+          let referrerTelegramId = '';
+
+          await runTransaction(db, async (transaction) => {
+            const freshReferrerSnap = await transaction.get(referrerRef);
+            if (!freshReferrerSnap.exists()) {
+              throw new Error('Referrer document does not exist.');
+            }
+
+            const refData = freshReferrerSnap.data();
+
+            // Self referral protection check
+            if (String(refData.telegramId) === String(chatId) || String(refData.uid) === uid) {
+              throw new Error('Self referral protection triggered.');
+            }
+
+            const currentBal = Number(refData.walletBalance) || 0;
+            const currentTotal = Number(refData.totalReferrals) || 0;
+            const currentSucc = Number(refData.successfulReferrals) || 0;
+            const currentEarnings = Number(refData.totalReferralEarnings) || 0;
+
+            updatedReferrerBalance = currentBal + referralReward;
+            referrerTelegramId = String(refData.telegramId || '');
+
+            transaction.update(referrerRef, {
+              walletBalance: updatedReferrerBalance,
+              totalReferrals: currentTotal + 1,
+              successfulReferrals: currentSucc + 1,
+              totalReferralEarnings: currentEarnings + referralReward,
+            });
+
+            const newUserRef = doc(db, 'users', newUserDocRef.id);
+            transaction.update(newUserRef, {
+              referralRewardReceived: true,
+              referredBy: refData.uid || session.referrerUid,
+            });
+          });
+
+          // Log referral event to logs collection
+          try {
+            await addDoc(collection(db, 'logs'), {
+              type: 'referral',
+              message: `Referral reward of ₹${referralReward} credited to UID #${session.referrerUid} for referring UID #${uid}.`,
+              timestamp: new Date().toISOString(),
+              details: {
+                referrerUid: session.referrerUid,
+                referredUid: uid,
+                reward: referralReward,
+              },
+            });
+          } catch (logErr) {
+            console.warn('Failed to add referral log entry:', logErr);
+          }
+
+          // Send notification to referrer on Telegram
+          if (referrerTelegramId && token) {
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: referrerTelegramId,
+              text: `🎉 <b>New Referral Joined!</b>\n\n` +
+                `<b>Name:</b> ${newUserData.firstName}\n` +
+                `<b>UID:</b> <code>${uid}</code>\n\n` +
+                `<b>Reward:</b> ₹${referralReward}\n\n` +
+                `<b>New Wallet Balance:</b> ₹${updatedReferrerBalance}`,
+              parse_mode: 'HTML',
+            });
+          }
+        }
+      } catch (refErr) {
+        console.error('Error processing referral reward transaction:', refErr);
+      }
     }
 
     // Clear session
