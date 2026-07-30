@@ -52,6 +52,37 @@
         "details": { "type": "object" }
       },
       "required": ["type", "message", "timestamp"]
+    },
+    "users": {
+      "title": "Registered Bot Users",
+      "description": "User accounts registered via Telegram bot onboarding",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "telegramId": { "type": "string" },
+        "username": { "type": "string" },
+        "firstName": { "type": "string" },
+        "mobile": { "type": "string" },
+        "walletBalance": { "type": "number" },
+        "channelVerified": { "type": "boolean" },
+        "groupVerified": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "telegramId", "firstName", "mobile", "walletBalance", "channelVerified", "groupVerified", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/settings/admin_config": {
+      "schema": "settings",
+      "description": "Admin configuration settings"
+    },
+    "/logs/{logId}": {
+      "schema": "logs",
+      "description": "System event logs"
+    },
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User profile and wallet account"
     }
   }
 }

@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import { processTelegramUpdate } from './src/server/botHandler';
 
 async function startServer() {
   const app = express();
@@ -37,20 +38,11 @@ async function startServer() {
 
       console.log('Incoming Telegram Update:', JSON.stringify(update));
 
-      const message = update?.message || update?.edited_message || update?.channel_post;
-
-      if (message && message.text && token) {
-        const text = message.text.trim();
-        const chatId = message.chat.id;
-
-        // Requirement 6: Implement a /start handler that replies immediately
-        if (text === '/start' || text.startsWith('/start')) {
-          await sendTelegramMessage(
-            token,
-            chatId,
-            '👋 Welcome to Roy Share Wallet Bot\n\nBot is Online ✅'
-          );
-        }
+      if (token && update) {
+        // Process update asynchronously or synchronously through complete bot handler
+        processTelegramUpdate(token, update).catch((err) =>
+          console.error('Error in processTelegramUpdate:', err)
+        );
       }
 
       // Always return 200 OK to Telegram
