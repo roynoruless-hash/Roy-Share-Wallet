@@ -13,29 +13,34 @@ interface UserSession {
 const userSessions: Map<string, UserSession> = new Map();
 
 /**
- * Fetch bot admin configuration from Firestore
+ * Fetch bot admin configuration dynamically from Firestore settings/config
  */
 async function getAdminConfig() {
   try {
-    const configDoc = await getDoc(doc(db, 'settings', 'admin_config'));
+    const configDoc = await getDoc(doc(db, 'settings', 'config'));
     if (configDoc.exists()) {
-      return configDoc.data();
+      const data = configDoc.data() || {};
+      const channel = data.mainChannelUsername ? String(data.mainChannelUsername).trim() : '';
+      const group = data.mainGroupUsername ? String(data.mainGroupUsername).trim() : '';
+
+      console.log(`Loaded Channel: ${channel}`);
+      console.log(`Loaded Group: ${group}`);
+
+      return {
+        ...data,
+        mainChannelUsername: channel,
+        mainGroupUsername: group,
+        forceJoinEnabled: data.forceJoinEnabled !== undefined ? Boolean(data.forceJoinEnabled) : true,
+        autoVerificationEnabled: data.autoVerificationEnabled !== undefined ? Boolean(data.autoVerificationEnabled) : true,
+      };
     }
   } catch (err) {
-    console.warn('Failed to load admin_config from Firestore:', err);
+    console.warn('Failed to load settings/config from Firestore:', err);
   }
-  return {
-    mainChannelUsername: 'RoyShareChannel',
-    mainGroupUsername: 'RoyShareGroup',
-    registrationBonus: 0,
-    referralBonus: 5,
-    rewardPerReferral: 5,
-    minWithdrawal: 100,
-    maxWithdrawal: 10000,
-    processingTimeNotice: 'Withdrawal requests are processed within 24 hours.',
-    supportUsername: 'RoyShareSupport',
-    supportGroup: 'RoyShareGroup',
-  };
+
+  console.log('Loaded Channel:');
+  console.log('Loaded Group:');
+  return null;
 }
 
 /**
@@ -126,8 +131,6 @@ async function checkChatMember(token: string, chatIdOrUsername: string, userId: 
 export async function processTelegramUpdate(token: string, update: any) {
   if (!token || !update) return;
 
-  const adminConfig = await getAdminConfig();
-
   // 1. HANDLE CALLBACK QUERIES (Inline Buttons like "Verify Join")
   if (update.callback_query) {
     const cb = update.callback_query;
@@ -136,11 +139,28 @@ export async function processTelegramUpdate(token: string, update: any) {
     const data = cb.data;
 
     if (data === 'check_membership') {
-      const channelUsername = adminConfig.mainChannelUsername || 'RoyShareChannel';
-      const groupUsername = adminConfig.mainGroupUsername || 'RoyShareGroup';
+      const adminConfig = await getAdminConfig();
 
-      const channelJoined = await checkChatMember(token, channelUsername, chatId);
-      const groupJoined = await checkChatMember(token, groupUsername, chatId);
+      if (!adminConfig || !adminConfig.mainChannelUsername || !adminConfig.mainGroupUsername) {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: 'Configuration Missing',
+          show_alert: true,
+        });
+        return;
+      }
+
+      const channelUsername = adminConfig.mainChannelUsername.replace(/^@/, '');
+      const groupUsername = adminConfig.mainGroupUsername.replace(/^@/, '');
+      const autoVerificationEnabled = adminConfig.autoVerificationEnabled !== false;
+
+      let channelJoined = true;
+      let groupJoined = true;
+
+      if (autoVerificationEnabled) {
+        channelJoined = await checkChatMember(token, channelUsername, chatId);
+        groupJoined = await checkChatMember(token, groupUsername, chatId);
+      }
 
       if (channelJoined && groupJoined) {
         userSessions.set(chatId, {
@@ -162,8 +182,8 @@ export async function processTelegramUpdate(token: string, update: any) {
         });
       } else {
         const missing = [];
-        if (!channelJoined) missing.push(`Channel (@${channelUsername.replace('@', '')})`);
-        if (!groupJoined) missing.push(`Group (@${groupUsername.replace('@', '')})`);
+        if (!channelJoined) missing.push(`Channel (@${channelUsername})`);
+        if (!groupJoined) missing.push(`Group (@${groupUsername})`);
 
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
@@ -210,11 +230,39 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    // Requirement 1: If user NOT in DB -> Start Onboarding Flow
-    userSessions.set(chatId, { step: 'FORCE_JOIN' });
+    // Load dynamic configuration from Firestore settings/config
+    const adminConfig = await getAdminConfig();
 
-    const channelUsername = (adminConfig.mainChannelUsername || 'RoyShareChannel').replace('@', '');
-    const groupUsername = (adminConfig.mainGroupUsername || 'RoyShareGroup').replace('@', '');
+    if (!adminConfig || !adminConfig.mainChannelUsername || !adminConfig.mainGroupUsername) {
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Configuration Missing',
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    const channelUsername = adminConfig.mainChannelUsername.replace(/^@/, '');
+    const groupUsername = adminConfig.mainGroupUsername.replace(/^@/, '');
+    const forceJoinEnabled = adminConfig.forceJoinEnabled !== false;
+
+    if (!forceJoinEnabled) {
+      // Skip force join if disabled
+      userSessions.set(chatId, {
+        step: 'WAITING_NAME',
+        channelVerified: true,
+        groupVerified: true,
+      });
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: '👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    userSessions.set(chatId, { step: 'FORCE_JOIN' });
 
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
@@ -241,6 +289,8 @@ export async function processTelegramUpdate(token: string, update: any) {
 
   // B. MAIN MENU BUTTON CLICK FOR EXISTING REGISTERED USERS
   if (existingUser) {
+    const adminConfig = await getAdminConfig();
+
     if (text === '👛 Wallet') {
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
@@ -259,29 +309,28 @@ export async function processTelegramUpdate(token: string, update: any) {
         chat_id: chatId,
         text: `💸 <b>Withdraw Funds</b>\n\n` +
           `💰 <b>Current Balance:</b> ₹${existingUser.walletBalance || 0}\n` +
-          `📉 <b>Minimum Withdrawal:</b> ₹${adminConfig.minWithdrawal || 100}\n` +
-          `📈 <b>Maximum Withdrawal:</b> ₹${adminConfig.maxWithdrawal || 10000}\n\n` +
-          `ℹ <b>Notice:</b> ${adminConfig.processingTimeNotice || 'Withdrawal requests are processed within 24 hours.'}`,
+          `📉 <b>Minimum Withdrawal:</b> ₹${adminConfig?.minWithdrawal ?? 100}\n` +
+          `📈 <b>Maximum Withdrawal:</b> ₹${adminConfig?.maxWithdrawal ?? 10000}\n\n` +
+          `ℹ <b>Notice:</b> ${adminConfig?.processingTimeNotice || 'Withdrawal requests are processed within 24 hours.'}`,
         parse_mode: 'HTML',
       });
       return;
     }
 
     if (text === '🎁 Refer & Earn') {
-      // Get bot username dynamically or fallback
-      let botUser = adminConfig.botUsername || '';
+      let botUser = adminConfig?.botUsername || '';
       if (!botUser) {
         const getMe = await sendTelegramApi(token, 'getMe', {});
         if (getMe && getMe.ok) {
           botUser = getMe.result.username;
         }
       }
-      botUser = botUser.replace('@', '');
+      botUser = botUser.replace(/^@/, '');
 
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
         text: `🎁 <b>Refer & Earn</b>\n\n` +
-          `Earn ₹${adminConfig.rewardPerReferral || adminConfig.referralBonus || 5} for every friend you invite!\n\n` +
+          `Earn ₹${adminConfig?.rewardPerReferral ?? adminConfig?.referralBonus ?? 5} for every friend you invite!\n\n` +
           `🔗 <b>Your Referral Link:</b>\n` +
           `<code>https://t.me/${botUser || 'RoyShareWalletBot'}?start=${existingUser.uid}</code>`,
         parse_mode: 'HTML',
@@ -290,15 +339,17 @@ export async function processTelegramUpdate(token: string, update: any) {
     }
 
     if (text === '☎ Contact Us') {
-      const supportUsername = (adminConfig.supportUsername || 'RoyShareSupport').replace('@', '');
-      const supportGroup = (adminConfig.supportGroup || 'RoyShareGroup').replace('@', '');
+      const supportUsername = (adminConfig?.supportUsername || '').replace(/^@/, '');
+      const supportGroup = (adminConfig?.supportGroup || '').replace(/^@/, '');
+
+      let supportText = `☎ <b>Contact Support</b>\n\nFor assistance or inquiries, please contact:\n`;
+      if (supportUsername) supportText += `💬 <b>Support Admin:</b> @${supportUsername}\n`;
+      if (supportGroup) supportText += `👥 <b>Support Group:</b> @${supportGroup}\n`;
+      if (!supportUsername && !supportGroup) supportText += `Please check back later or reach out in the main group.`;
 
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: `☎ <b>Contact Support</b>\n\n` +
-          `For assistance or inquiries, please contact:\n` +
-          `💬 <b>Support Admin:</b> @${supportUsername}\n` +
-          `👥 <b>Support Group:</b> @${supportGroup}`,
+        text: supportText,
         parse_mode: 'HTML',
       });
       return;
@@ -310,13 +361,25 @@ export async function processTelegramUpdate(token: string, update: any) {
 
   // If no session exists and user is not registered, start onboarding
   if (!session && !existingUser) {
+    const adminConfig = await getAdminConfig();
+
+    if (!adminConfig || !adminConfig.mainChannelUsername || !adminConfig.mainGroupUsername) {
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Configuration Missing',
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    const channelUsername = adminConfig.mainChannelUsername.replace(/^@/, '');
+    const groupUsername = adminConfig.mainGroupUsername.replace(/^@/, '');
+
     userSessions.set(chatId, { step: 'FORCE_JOIN' });
-    const channelUsername = (adminConfig.mainChannelUsername || 'RoyShareChannel').replace('@', '');
-    const groupUsername = (adminConfig.mainGroupUsername || 'RoyShareGroup').replace('@', '');
 
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
-      text: `👋 Please complete onboarding first!\n\nJoin Channel: @${channelUsername}\nJoin Group: @${groupUsername}`,
+      text: `👋 Please complete onboarding first!\n\n1️⃣ Join Channel: @${channelUsername}\n2️⃣ Join Group: @${groupUsername}`,
       parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
@@ -337,8 +400,19 @@ export async function processTelegramUpdate(token: string, update: any) {
 
   // STEP 1: FORCE JOIN CHECK
   if (session.step === 'FORCE_JOIN') {
-    const channelUsername = (adminConfig.mainChannelUsername || 'RoyShareChannel').replace('@', '');
-    const groupUsername = (adminConfig.mainGroupUsername || 'RoyShareGroup').replace('@', '');
+    const adminConfig = await getAdminConfig();
+
+    if (!adminConfig || !adminConfig.mainChannelUsername || !adminConfig.mainGroupUsername) {
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: 'Configuration Missing',
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    const channelUsername = adminConfig.mainChannelUsername.replace(/^@/, '');
+    const groupUsername = adminConfig.mainGroupUsername.replace(/^@/, '');
 
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
@@ -419,7 +493,6 @@ export async function processTelegramUpdate(token: string, update: any) {
   // STEP 4: STEP_WAITING_CONTACT -> Verify Shared Contact vs Entered Mobile
   if (session.step === 'WAITING_CONTACT') {
     if (!contact) {
-      // User entered text instead of pressing Share Contact button
       const cleanInput = text.replace(/\D/g, '');
       if (/^[6-9]\d{9}$/.test(cleanInput)) {
         session.mobile = cleanInput;
@@ -460,9 +533,9 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    // REQUIREMENT 9: CREATE USER ACCOUNT & WALLET IN FIRESTORE
+    const adminConfig = await getAdminConfig();
     const uid = await generateUniqueUid();
-    const bonus = Number(adminConfig.registrationBonus) || 0;
+    const bonus = Number(adminConfig?.registrationBonus) || 0;
 
     const newUserData = {
       uid,
@@ -485,7 +558,7 @@ export async function processTelegramUpdate(token: string, update: any) {
     // Clear session
     userSessions.delete(chatId);
 
-    // REQUIREMENT 10: SHOW SUCCESS MESSAGE
+    // SHOW SUCCESS MESSAGE
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
       text: `🎉 <b>Registration Successful</b>\n\n` +
@@ -498,7 +571,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       },
     });
 
-    // REQUIREMENT 11: SHOW MAIN MENU
+    // SHOW MAIN MENU
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
       text: ` Welcome to <b>Roy Share Wallet Bot</b>! Use the menu below to navigate:`,
