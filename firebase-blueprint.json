@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "settings": {
+      "title": "System Settings",
+      "description": "Global Admin Configuration for Telegram Bot",
+      "type": "object",
+      "properties": {
+        "botToken": { "type": "string" },
+        "botUsername": { "type": "string" },
+        "botName": { "type": "string" },
+        "botId": { "type": "string" },
+        "adminTelegramId": { "type": "string" },
+        "adminChatId": { "type": "string" },
+        "mainChannelUsername": { "type": "string" },
+        "mainGroupUsername": { "type": "string" },
+        "forceJoinEnabled": { "type": "boolean" },
+        "autoVerificationEnabled": { "type": "boolean" },
+        "channelVerified": { "type": "boolean" },
+        "groupVerified": { "type": "boolean" },
+        "registrationBonus": { "type": "number" },
+        "referralBonus": { "type": "number" },
+        "minWithdrawal": { "type": "number" },
+        "maxWithdrawal": { "type": "number" },
+        "withdrawalTax": { "type": "number" },
+        "uidLength": { "type": "number" },
+        "enableWithdraw": { "type": "boolean" },
+        "enableUpi": { "type": "boolean" },
+        "enableQr": { "type": "boolean" },
+        "enableRedeemCode": { "type": "boolean" },
+        "processingTimeNotice": { "type": "string" },
+        "referralEnable": { "type": "boolean" },
+        "rewardPerReferral": { "type": "number" },
+        "selfReferralProtection": { "type": "boolean" },
+        "duplicateReferralProtection": { "type": "boolean" },
+        "supportUsername": { "type": "string" },
+        "supportGroup": { "type": "string" },
+        "maintenanceMode": { "type": "boolean" },
+        "allowedAdminIds": { "type": "string" },
+        "sessionTimeout": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["botToken", "adminTelegramId", "mainChannelUsername", "mainGroupUsername"]
+    },
+    "logs": {
+      "title": "System Logs",
+      "description": "Activity, registration, withdrawal, referral, and error logs",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "details": { "type": "object" }
+      },
+      "required": ["type", "message", "timestamp"]
+    }
+  }
+}
