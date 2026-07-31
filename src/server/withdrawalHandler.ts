@@ -23,7 +23,9 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
   let telegramId = '';
   let withdrawalIdStr = '';
   let amount = 0;
+  let method = 'upi';
   let upiId = '';
+  let redeemDetails = '';
 
   try {
     const wRef = doc(db, 'withdrawals', withdrawalDocId);
@@ -40,7 +42,9 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
       telegramId = data.telegramId;
       withdrawalIdStr = data.withdrawalId;
       amount = Number(data.amount) || 0;
+      method = data.method || 'upi';
       upiId = data.upiId || '';
+      redeemDetails = data.redeemCodeDetails || '';
 
       transaction.update(wRef, {
         status: 'completed',
@@ -50,11 +54,20 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
 
     // Send Telegram Notification to User
     if (botToken && telegramId) {
+      let detailText = '';
+      if (method === 'upi') {
+        detailText = `to UPI <code>${upiId}</code>`;
+      } else if (method === 'qr') {
+        detailText = `via <b>QR Code Payment</b>`;
+      } else if (method === 'redeem_code') {
+        detailText = `via <b>Redeem Code</b> (${redeemDetails})`;
+      }
+
       await sendTelegramMessage(
         botToken,
         telegramId,
         `✅ <b>Withdrawal Approved!</b>\n\n` +
-          `Your withdrawal request of <b>₹${amount}</b> (ID: <code>${withdrawalIdStr}</code>) to UPI <code>${upiId}</code> has been approved and processed.\n\n` +
+          `Your withdrawal request of <b>₹${amount}</b> (ID: <code>${withdrawalIdStr}</code>) ${detailText} has been approved and processed.\n\n` +
           `Thank you for using Roy Share Wallet!`
       );
     }

@@ -1,24 +1,47 @@
 /**
- * Browser Device Fingerprinting Utility for Anti Self-Referral Detection
- * Generates a stable device hash using canvas 2D, WebGL, screen, audio, and browser signals.
+ * Browser Device Fingerprinting Utility for Anti Self-Referral Detection (Version 2.0)
+ * Generates a stable device hash using canvas 2D, WebGL, screen, audio, local storage, memory, and browser signals.
  */
 
 export interface DeviceFingerprintData {
   hash: string;
+  localStorageId: string;
   components: {
     userAgent: string;
+    platform: string;
     screenResolution: string;
     colorDepth: number;
     pixelRatio: number;
     timezone: string;
     language: string;
     hardwareConcurrency: number;
+    deviceMemory: string | number;
+    touchSupport: boolean;
     touchPoints: number;
     canvasHash: string;
     webglVendor: string;
     webglRenderer: string;
     audioHash: string;
+    localStorageId: string;
   };
+}
+
+/**
+ * Get or generate stable Local Storage Identifier
+ */
+export function getLocalStorageId(): string {
+  const KEY = 'roy_device_id';
+  try {
+    let existing = localStorage.getItem(KEY);
+    if (!existing) {
+      const randStr = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+      existing = `dev_ls_${randStr}`;
+      localStorage.setItem(KEY, existing);
+    }
+    return existing;
+  } catch (e) {
+    return 'ls_unavailable';
+  }
 }
 
 /**
@@ -117,14 +140,18 @@ async function getAudioFingerprint(): Promise<string> {
  * Generate complete stable device fingerprint
  */
 export async function generateDeviceFingerprint(): Promise<DeviceFingerprintData> {
+  const localStorageId = getLocalStorageId();
   const userAgent = navigator.userAgent || 'unknown';
+  const platform = navigator.platform || 'unknown';
   const screenResolution = `${window.screen.width}x${window.screen.height}`;
   const colorDepth = window.screen.colorDepth || 24;
   const pixelRatio = window.devicePixelRatio || 1;
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const language = navigator.language || (navigator as any).userLanguage || 'en-US';
   const hardwareConcurrency = navigator.hardwareConcurrency || 4;
+  const deviceMemory = (navigator as any).deviceMemory || 'N/A';
   const touchPoints = navigator.maxTouchPoints || 0;
+  const touchSupport = 'ontouchstart' in window || touchPoints > 0;
 
   const canvasHash = getCanvasFingerprint();
   const webgl = getWebGLInfo();
@@ -132,27 +159,35 @@ export async function generateDeviceFingerprint(): Promise<DeviceFingerprintData
 
   const components = {
     userAgent,
+    platform,
     screenResolution,
     colorDepth,
     pixelRatio,
     timezone,
     language,
     hardwareConcurrency,
+    deviceMemory,
+    touchSupport,
     touchPoints,
     canvasHash,
     webglVendor: webgl.vendor,
     webglRenderer: webgl.renderer,
     audioHash,
+    localStorageId,
   };
 
   const rawSignal = [
+    localStorageId,
     userAgent,
+    platform,
     screenResolution,
     colorDepth,
     pixelRatio,
     timezone,
     language,
     hardwareConcurrency,
+    deviceMemory,
+    touchSupport,
     touchPoints,
     canvasHash,
     webgl.vendor,
@@ -176,6 +211,8 @@ export async function generateDeviceFingerprint(): Promise<DeviceFingerprintData
 
   return {
     hash: `fp_${hash.substring(0, 32)}`,
+    localStorageId,
     components,
   };
 }
+

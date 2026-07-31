@@ -4,6 +4,8 @@ import { createServer as createViteServer } from 'vite';
 import { processTelegramUpdate } from './src/server/botHandler';
 import { getReferralTokenInfo, processReferralVerification } from './src/server/referralVerification';
 import { approveWithdrawal, rejectWithdrawal } from './src/server/withdrawalHandler';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from './src/services/firebase';
 
 async function startServer() {
   const app = express();
@@ -70,7 +72,8 @@ async function startServer() {
 
       const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
       const proto = (req.headers['x-forwarded-proto'] as string) || 'https';
-      const baseDomain = customDomain || `${proto}://${host}`;
+      const defaultDomain = process.env.APP_BASE_URL || process.env.APP_URL || `${proto}://${host}`;
+      const baseDomain = (customDomain || defaultDomain).replace(/\/$/, '');
 
       const webhookUrl = `${baseDomain}/api/telegram/webhook/${cleanToken}`;
 
@@ -178,7 +181,8 @@ async function startServer() {
 
       const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
       const proto = (req.headers['x-forwarded-proto'] as string) || 'https';
-      const expectedWebhookUrl = `${proto}://${host}/api/telegram/webhook/${cleanToken}`;
+      const baseDomain = (process.env.APP_BASE_URL || process.env.APP_URL || `${proto}://${host}`).replace(/\/$/, '');
+      const expectedWebhookUrl = `${baseDomain}/api/telegram/webhook/${cleanToken}`;
 
       let autoRegistered = false;
       let webhookRegError = '';
@@ -282,21 +286,59 @@ async function startServer() {
 
   app.post('/api/referral/verify', async (req, res) => {
     try {
-      const { token, deviceFingerprint, browserSignals } = req.body;
-      const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+      const {
+        token,
+        deviceFingerprint,
+        localStorageId,
+        locationPermissionStatus,
+        locationCoords,
+        rawSignals,
+        browserSignals,
+      } = req.body;
+
+      const clientIp =
+        ((req.headers['x-forwarded-for'] as string) || '').split(',')[0].trim() ||
+        req.socket.remoteAddress ||
+        '127.0.0.1';
       const userAgent = req.headers['user-agent'] || 'unknown';
 
       const result = await processReferralVerification({
         token,
         deviceFingerprint,
+        localStorageId,
+        locationPermissionStatus,
+        locationCoords,
+        rawSignals: rawSignals || browserSignals,
         clientIp,
         userAgent,
-        browserSignals,
       });
 
       return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, reason: 'SERVER_ERROR', message: err.message });
+    }
+  });
+
+  // Admin Ban Device Endpoint
+  app.post('/api/admin/referrals/ban-device', async (req, res) => {
+    try {
+      const { deviceFingerprint, localStorageId, ipAddress, reason } = req.body;
+      if (!deviceFingerprint && !localStorageId && !ipAddress) {
+        return res.status(400).json({ success: false, error: 'Device fingerprint, localStorageId, or IP is required' });
+      }
+
+      const key = deviceFingerprint || localStorageId || ipAddress;
+      await setDoc(doc(db, 'bannedDevices', key), {
+        deviceFingerprint: deviceFingerprint || '',
+        localStorageId: localStorageId || '',
+        ipAddress: ipAddress || '',
+        reason: reason || 'Banned by admin from referral system',
+        bannedAt: new Date().toISOString(),
+      });
+
+      return res.json({ success: true, message: 'Device banned successfully' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
     }
   });
 
@@ -323,6 +365,34 @@ async function startServer() {
         return res.json(result);
       } else {
         return res.status(400).json(result);
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/admin/send-message', async (req, res) => {
+    try {
+      const { token, telegramId, message } = req.body;
+      if (!token || !telegramId || !message) {
+        return res.status(400).json({ success: false, error: 'Token, Telegram ID, and Message are required' });
+      }
+
+      const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: telegramId,
+          text: message,
+          parse_mode: 'HTML',
+        }),
+      });
+
+      const tgData = await tgRes.json();
+      if (tgData.ok) {
+        return res.json({ success: true, message: 'Message sent successfully.' });
+      } else {
+        return res.status(400).json({ success: false, error: tgData.description || 'Telegram API error' });
       }
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });

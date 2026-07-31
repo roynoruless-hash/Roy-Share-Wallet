@@ -2,14 +2,17 @@ import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction 
 import { db } from '../services/firebase';
 
 interface UserSession {
-  step: 'FORCE_JOIN' | 'WAITING_NAME' | 'WAITING_MOBILE' | 'WAITING_CONTACT' | 'WITHDRAW_AMOUNT' | 'WITHDRAW_UPI' | 'WITHDRAW_CONFIRM';
+  step: 'FORCE_JOIN' | 'WAITING_NAME' | 'WAITING_MOBILE' | 'WAITING_CONTACT' | 'WITHDRAW_METHOD_SELECT' | 'WITHDRAW_AMOUNT' | 'WITHDRAW_DETAILS' | 'WITHDRAW_CONFIRM';
   fullName?: string;
   mobile?: string;
   channelVerified?: boolean;
   groupVerified?: boolean;
   referrerUid?: string;
+  withdrawMethod?: 'upi' | 'qr' | 'redeem_code';
   withdrawAmount?: number;
   withdrawUpi?: string;
+  withdrawQrUrl?: string;
+  withdrawRedeemDetails?: string;
 }
 
 // In-memory session state store for onboarding users
@@ -267,17 +270,75 @@ export async function processTelegramUpdate(token: string, update: any) {
         return;
       }
 
-      userSessions.set(chatId, { step: 'WITHDRAW_AMOUNT' });
+      userSessions.set(chatId, { step: 'WITHDRAW_METHOD_SELECT' });
 
       await sendTelegramApi(token, 'answerCallbackQuery', {
         callback_query_id: cbId,
-        text: 'Enter withdrawal amount',
+        text: 'Choose withdrawal method',
+        show_alert: false,
+      });
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `💸 <b>Select Withdrawal Method</b>\n\n` +
+          `💰 <b>Available Balance:</b> ₹${walletBal}\n` +
+          `📉 <b>Minimum:</b> ₹${minW} | 📈 <b>Maximum:</b> ₹${maxW}\n\n` +
+          `Please select your preferred withdrawal option below:`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '💳 UPI ID', callback_data: 'withdraw_method_upi' }],
+            [{ text: '🖼 QR Code Image Upload', callback_data: 'withdraw_method_qr' }],
+            [{ text: '🎁 Redeem Code', callback_data: 'withdraw_method_redeem' }],
+          ],
+        },
+      });
+      return;
+    }
+
+    if (data === 'withdraw_method_upi' || data === 'withdraw_method_qr' || data === 'withdraw_method_redeem') {
+      const existingUser = await getUserByTelegramId(chatId);
+      if (!existingUser) {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: '❌ Session expired.',
+          show_alert: true,
+        });
+        return;
+      }
+
+      const adminConfig = await getAdminConfig();
+      const minW = adminConfig?.minWithdrawal ?? 100;
+      const maxW = adminConfig?.maxWithdrawal ?? 10000;
+      const walletBal = Number(existingUser.walletBalance) || 0;
+
+      const chosenMethod = data === 'withdraw_method_upi'
+        ? 'upi'
+        : data === 'withdraw_method_qr'
+        ? 'qr'
+        : 'redeem_code';
+
+      const methodNameText = chosenMethod === 'upi'
+        ? 'UPI ID'
+        : chosenMethod === 'qr'
+        ? 'QR Code Image Upload'
+        : 'Redeem Code';
+
+      userSessions.set(chatId, {
+        step: 'WITHDRAW_AMOUNT',
+        withdrawMethod: chosenMethod,
+      });
+
+      await sendTelegramApi(token, 'answerCallbackQuery', {
+        callback_query_id: cbId,
+        text: `Selected ${methodNameText}`,
         show_alert: false,
       });
 
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
         text: `💸 <b>Enter Withdrawal Amount</b>\n\n` +
+          `📌 <b>Method:</b> ${methodNameText}\n` +
           `💰 <b>Available Balance:</b> ₹${walletBal}\n` +
           `📉 <b>Minimum:</b> ₹${minW} | 📈 <b>Maximum:</b> ₹${maxW}\n\n` +
           `Please enter the withdrawal amount in Rupees (e.g. <code>500</code>):`,
@@ -288,7 +349,12 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     if (data === 'withdraw_confirm') {
       const session = userSessions.get(chatId);
-      if (!session || session.step !== 'WITHDRAW_CONFIRM' || !session.withdrawAmount || !session.withdrawUpi) {
+      if (
+        !session ||
+        session.step !== 'WITHDRAW_CONFIRM' ||
+        !session.withdrawAmount ||
+        !session.withdrawMethod
+      ) {
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
           text: '❌ Withdrawal session expired. Please tap 💸 Withdraw again.',
@@ -299,7 +365,10 @@ export async function processTelegramUpdate(token: string, update: any) {
 
       const adminConfig = await getAdminConfig();
       const amount = session.withdrawAmount;
-      const upiId = session.withdrawUpi;
+      const method = session.withdrawMethod;
+      const upiId = session.withdrawUpi || '';
+      const qrImageUrl = session.withdrawQrUrl || '';
+      const redeemCodeDetails = session.withdrawRedeemDetails || '';
 
       try {
         const usersRef = collection(db, 'users');
@@ -343,10 +412,19 @@ export async function processTelegramUpdate(token: string, update: any) {
           telegramId: String(chatId),
           userName: freshUserData.firstName || 'User',
           amount: amount,
+          method: method,
           upiId: upiId,
+          qrImageUrl: qrImageUrl,
+          redeemCodeDetails: redeemCodeDetails,
           status: 'pending',
           createdAt: new Date().toISOString(),
         });
+
+        // Method label for transaction log
+        let methodDetailLog = '';
+        if (method === 'upi') methodDetailLog = `UPI (${upiId})`;
+        else if (method === 'qr') methodDetailLog = `QR Code Upload`;
+        else if (method === 'redeem_code') methodDetailLog = `Redeem Code (${redeemCodeDetails})`;
 
         // Add record to transactions collection
         await addDoc(collection(db, 'transactions'), {
@@ -355,7 +433,7 @@ export async function processTelegramUpdate(token: string, update: any) {
           type: 'withdrawal',
           amount: amount,
           balanceAfter: newBalance,
-          reason: `Withdrawal Request #${withdrawalId} to ${upiId}`,
+          reason: `Withdrawal Request #${withdrawalId} via ${methodDetailLog}`,
           createdAt: new Date().toISOString(),
         });
 
@@ -368,12 +446,18 @@ export async function processTelegramUpdate(token: string, update: any) {
           show_alert: false,
         });
 
+        let userMsgDetail = '';
+        if (method === 'upi') userMsgDetail = `💳 <b>UPI ID:</b> <code>${upiId}</code>\n`;
+        else if (method === 'qr') userMsgDetail = `🖼 <b>QR Image:</b> Received 📷\n`;
+        else if (method === 'redeem_code') userMsgDetail = `🎁 <b>Redeem Code Details:</b> <code>${redeemCodeDetails}</code>\n`;
+
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
           text: `🎉 <b>Withdrawal Request Submitted!</b>\n\n` +
             `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
             `💵 <b>Amount:</b> ₹${amount}\n` +
-            `💳 <b>UPI ID:</b> <code>${upiId}</code>\n` +
+            `📌 <b>Method:</b> ${method.toUpperCase()}\n` +
+            userMsgDetail +
             `⏱ <b>Processing Time:</b> ${adminConfig?.processingTimeNotice || '24 Hours'}\n` +
             `💰 <b>New Balance:</b> ₹${newBalance}\n` +
             `⌛ <b>Status:</b> Pending Approval\n\n` +
@@ -381,16 +465,22 @@ export async function processTelegramUpdate(token: string, update: any) {
           parse_mode: 'HTML',
         });
 
-        // Notify Admin via Telegram if adminTelegramId or adminChatId is configured
+        // Notify Admin via Telegram
         const adminChat = adminConfig?.adminTelegramId || adminConfig?.adminChatId;
         if (adminChat) {
+          let adminMsgDetail = '';
+          if (method === 'upi') adminMsgDetail = `💳 <b>UPI ID:</b> <code>${upiId}</code>\n`;
+          else if (method === 'qr') adminMsgDetail = `🖼 <b>QR Image:</b> ${qrImageUrl ? `<a href="${qrImageUrl}">View QR Photo</a>` : 'Uploaded'}\n`;
+          else if (method === 'redeem_code') adminMsgDetail = `🎁 <b>Redeem Code:</b> <code>${redeemCodeDetails}</code>\n`;
+
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: adminChat,
             text: `🔔 <b>New Pending Withdrawal Request!</b>\n\n` +
               `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
               `👤 <b>User:</b> ${freshUserData.firstName} (UID: <code>${freshUserData.uid}</code>)\n` +
               `💵 <b>Amount:</b> ₹${amount}\n` +
-              `💳 <b>UPI ID:</b> <code>${upiId}</code>\n` +
+              `📌 <b>Method:</b> ${method.toUpperCase()}\n` +
+              adminMsgDetail +
               `📱 <b>Mobile:</b> <code>${freshUserData.mobile}</code>`,
             parse_mode: 'HTML',
           });
@@ -569,12 +659,21 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     // Check if user is in an active withdrawal input session
     const activeSession = userSessions.get(chatId);
-    if (activeSession && (activeSession.step === 'WITHDRAW_AMOUNT' || activeSession.step === 'WITHDRAW_UPI')) {
+    if (activeSession && (activeSession.step === 'WITHDRAW_METHOD_SELECT' || activeSession.step === 'WITHDRAW_AMOUNT' || activeSession.step === 'WITHDRAW_DETAILS')) {
       if (text === '/cancel') {
         userSessions.delete(chatId);
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
           text: '❌ <b>Withdrawal Cancelled</b>\n\nYour withdrawal session has been cancelled.',
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      if (activeSession.step === 'WITHDRAW_METHOD_SELECT') {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `⚠️ <b>Please Select a Method</b>\n\nPlease tap one of the withdrawal method buttons above (UPI ID, QR Code Image, or Redeem Code):`,
           parse_mode: 'HTML',
         });
         return;
@@ -631,32 +730,85 @@ export async function processTelegramUpdate(token: string, update: any) {
         }
 
         activeSession.withdrawAmount = amt;
-        activeSession.step = 'WITHDRAW_UPI';
+        activeSession.step = 'WITHDRAW_DETAILS';
+
+        const method = activeSession.withdrawMethod || 'upi';
+        let promptText = '';
+        if (method === 'upi') {
+          promptText = `<b>Step 2/2:</b> Please enter your <b>UPI ID</b> to receive payment (e.g. <code>example@upi</code> or <code>9876543210@paytm</code>):`;
+        } else if (method === 'qr') {
+          promptText = `<b>Step 2/2:</b> Please upload your <b>Payment QR Code Image</b> 📷\n\nSend your QR code photo directly as an image message in this chat:`;
+        } else if (method === 'redeem_code') {
+          promptText = `<b>Step 2/2:</b> Please enter your requested <b>Redeem Code type/details</b> (e.g., <code>Google Play Gift Card ₹500</code> / <code>Amazon Pay Code</code> / <code>Free Fire Voucher</code>):`;
+        }
 
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
-          text: `✅ <b>Withdrawal Amount:</b> ₹${amt}\n\n` +
-            `<b>Step 2/2:</b> Please enter your <b>UPI ID</b> to receive payment (e.g. <code>example@upi</code> or <code>9876543210@paytm</code>):`,
+          text: `✅ <b>Withdrawal Amount:</b> ₹${amt}\n\n` + promptText,
           parse_mode: 'HTML',
         });
         return;
       }
 
-      if (activeSession.step === 'WITHDRAW_UPI') {
-        const upi = text.trim();
-        const upiRegex = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
+      if (activeSession.step === 'WITHDRAW_DETAILS') {
+        const method = activeSession.withdrawMethod || 'upi';
 
-        if (!upiRegex.test(upi)) {
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `❌ <b>Invalid UPI ID Format</b>\n\n` +
-              `Please enter a valid UPI address (e.g. <code>name@upi</code> or <code>9876543210@paytm</code>):`,
-            parse_mode: 'HTML',
-          });
-          return;
+        if (method === 'upi') {
+          const upi = text.trim();
+          const upiRegex = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
+
+          if (!upiRegex.test(upi)) {
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: `❌ <b>Invalid UPI ID Format</b>\n\n` +
+                `Please enter a valid UPI address (e.g. <code>name@upi</code> or <code>9876543210@paytm</code>):`,
+              parse_mode: 'HTML',
+            });
+            return;
+          }
+
+          activeSession.withdrawUpi = upi;
+        } else if (method === 'qr') {
+          const photos = message.photo;
+          if (!photos || !Array.isArray(photos) || photos.length === 0) {
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: `❌ <b>Photo Image Required</b>\n\n` +
+                `Please upload your Payment QR Code as a photo message (attachment) in this chat 📷`,
+              parse_mode: 'HTML',
+            });
+            return;
+          }
+
+          const highestPhoto = photos[photos.length - 1];
+          let qrUrl = '';
+          try {
+            const fileRes = await sendTelegramApi(token, 'getFile', { file_id: highestPhoto.file_id });
+            if (fileRes && fileRes.ok && fileRes.result?.file_path) {
+              qrUrl = `https://api.telegram.org/file/bot${token}/${fileRes.result.file_path}`;
+            } else {
+              qrUrl = highestPhoto.file_id;
+            }
+          } catch (e) {
+            qrUrl = highestPhoto.file_id;
+          }
+
+          activeSession.withdrawQrUrl = qrUrl;
+        } else if (method === 'redeem_code') {
+          const details = text.trim();
+          if (!details || details.length < 3) {
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: `❌ <b>Details Required</b>\n\n` +
+                `Please specify the Redeem Code type or voucher details (e.g. <code>Google Play Gift Card ₹500</code>):`,
+              parse_mode: 'HTML',
+            });
+            return;
+          }
+
+          activeSession.withdrawRedeemDetails = details;
         }
 
-        activeSession.withdrawUpi = upi;
         activeSession.step = 'WITHDRAW_CONFIRM';
 
         const walletBal = Number(existingUser.walletBalance) || 0;
@@ -664,11 +816,21 @@ export async function processTelegramUpdate(token: string, update: any) {
         const remaining = walletBal - amt;
         const notice = adminConfig?.processingTimeNotice || '24 Hours';
 
+        let detailDisplay = '';
+        if (method === 'upi') detailDisplay = `💳 <b>UPI ID:</b> <code>${activeSession.withdrawUpi}</code>`;
+        else if (method === 'qr') detailDisplay = `🖼 <b>QR Code Image:</b> Uploaded 📷`;
+        else if (method === 'redeem_code') detailDisplay = `🎁 <b>Redeem Code:</b> <code>${activeSession.withdrawRedeemDetails}</code>`;
+
+        let methodName = 'UPI ID';
+        if (method === 'qr') methodName = 'QR Code Upload';
+        if (method === 'redeem_code') methodName = 'Redeem Code';
+
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
           text: `📋 <b>Withdrawal Summary</b>\n\n` +
             `💵 <b>Amount:</b> ₹${amt}\n` +
-            `💳 <b>UPI ID:</b> <code>${upi}</code>\n` +
+            `📌 <b>Method:</b> ${methodName}\n` +
+            `${detailDisplay}\n` +
             `⏱ <b>Processing Time:</b> ${notice}\n` +
             `💰 <b>Remaining Balance:</b> ₹${remaining}\n\n` +
             `Please review the details above and tap <b>Confirm</b> to submit:`,
@@ -997,9 +1159,9 @@ export async function processTelegramUpdate(token: string, update: any) {
           createdAt: new Date().toISOString(),
         });
 
-        // Determine domain URL for verification link
-        const hostUrl = process.env.APP_URL || 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app';
-        const verifyUrl = `${hostUrl.replace(/\/$/, '')}/referral-verify?token=${uniqueToken}`;
+        // Determine domain URL for verification link using APP_BASE_URL
+        const baseUrl = (process.env.APP_BASE_URL || process.env.APP_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
+        const verifyUrl = `${baseUrl}/referral-verify?token=${uniqueToken}`;
 
         // Send Anti Self-Referral Verification Link to User
         await sendTelegramApi(token, 'sendMessage', {

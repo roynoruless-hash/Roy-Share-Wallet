@@ -155,13 +155,16 @@
         "telegramId": { "type": "string" },
         "userName": { "type": "string" },
         "amount": { "type": "number" },
+        "method": { "type": "string" },
         "upiId": { "type": "string" },
+        "qrImageUrl": { "type": "string" },
+        "redeemCodeDetails": { "type": "string" },
         "status": { "type": "string" },
         "rejectReason": { "type": "string" },
         "createdAt": { "type": "string" },
         "processedAt": { "type": "string" }
       },
-      "required": ["withdrawalId", "uid", "amount", "upiId", "status", "createdAt"]
+      "required": ["withdrawalId", "uid", "amount", "method", "status", "createdAt"]
     }
   },
   "firestore": {

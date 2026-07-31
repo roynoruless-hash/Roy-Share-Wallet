@@ -168,7 +168,10 @@ export interface WithdrawalRecord {
   telegramId: string;
   userName?: string;
   amount: number;
-  upiId: string;
+  method: 'upi' | 'qr' | 'redeem_code';
+  upiId?: string;
+  qrImageUrl?: string;
+  redeemCodeDetails?: string;
   status: 'pending' | 'completed' | 'rejected';
   rejectReason?: string;
   createdAt: string;
