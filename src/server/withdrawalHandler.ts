@@ -1,5 +1,6 @@
 import { collection, query, where, getDocs, doc, runTransaction, addDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { recordWalletTransaction } from './transactionService';
 
 async function sendTelegramMessage(token: string, chatId: string, text: string) {
   try {
@@ -26,6 +27,7 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
   let method = 'upi';
   let upiId = '';
   let redeemDetails = '';
+  let userUid = '';
 
   try {
     const wRef = doc(db, 'withdrawals', withdrawalDocId);
@@ -45,12 +47,26 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
       method = data.method || 'upi';
       upiId = data.upiId || '';
       redeemDetails = data.redeemCodeDetails || '';
+      userUid = data.uid;
 
       transaction.update(wRef, {
         status: 'completed',
         processedAt: new Date().toISOString(),
       });
     });
+
+    // Record Withdrawal Approved in transactions ledger
+    try {
+      await recordWalletTransaction({
+        uid: userUid,
+        type: 'Withdrawal Approved',
+        amount: 0, // balance was already deducted, this is a status log with 0 impact
+        status: 'completed',
+        description: `Withdrawal request #${withdrawalIdStr} of ₹${amount} was approved by Admin.`,
+      });
+    } catch (e) {
+      console.warn('Error recording approved withdrawal transaction:', e);
+    }
 
     // Send Telegram Notification to User
     if (botToken && telegramId) {
@@ -89,7 +105,6 @@ export async function rejectWithdrawal(botToken: string, withdrawalDocId: string
   let amount = 0;
   let userId = '';
   let userUid = '';
-  let newBalance = 0;
 
   try {
     const wRef = doc(db, 'withdrawals', withdrawalDocId);
@@ -118,56 +133,28 @@ export async function rejectWithdrawal(botToken: string, withdrawalDocId: string
       return { success: false, error: 'Associated user account not found for refund.' };
     }
 
-    const userDocRef = uSnap.docs[0].ref;
-
-    // Step 2: Run transaction to update status & refund wallet balance
+    // Step 2: Run transaction to update status
     await runTransaction(db, async (transaction) => {
-      const uDocSnap = await transaction.get(userDocRef);
-      if (!uDocSnap.exists()) {
-        throw new Error('User document missing during transaction.');
-      }
-      const userData = uDocSnap.data();
-      const currentBalance = Number(userData.walletBalance) || 0;
-      newBalance = currentBalance + amount;
-
       // Update withdrawal status
       transaction.update(wRef, {
         status: 'rejected',
         rejectReason: cleanReason,
         processedAt: new Date().toISOString(),
       });
-
-      // Refund user
-      transaction.update(userDocRef, {
-        walletBalance: newBalance,
-      });
     });
 
-    // Step 3: Record refund transaction
+    // Step 3: Record refund transaction atomically (this updates user's wallet balance too)
     try {
-      await addDoc(collection(db, 'transactions'), {
-        userId,
+      await recordWalletTransaction({
         uid: userUid,
-        type: 'withdrawal_refund',
-        amount: amount,
-        balanceAfter: newBalance,
-        reason: `Refund for rejected withdrawal #${withdrawalIdStr}: ${cleanReason}`,
-        createdAt: new Date().toISOString(),
+        type: 'Withdrawal Rejected',
+        amount: amount, // refund is positive credit
+        status: 'rejected',
+        description: `Refund for rejected withdrawal #${withdrawalIdStr}: ${cleanReason}`,
+        botToken: botToken,
       });
     } catch (e) {
       console.warn('Transaction refund log warning:', e);
-    }
-
-    // Step 4: Notify user via Telegram
-    if (botToken && telegramId) {
-      await sendTelegramMessage(
-        botToken,
-        telegramId,
-        `❌ <b>Withdrawal Request Rejected</b>\n\n` +
-          `Your withdrawal request of <b>₹${amount}</b> (ID: <code>${withdrawalIdStr}</code>) was rejected.\n` +
-          `<b>Reason:</b> ${cleanReason}\n\n` +
-          `💰 <b>₹${amount}</b> has been refunded automatically back to your wallet balance.`
-      );
     }
 
     return { success: true, message: 'Withdrawal rejected and funds refunded automatically.' };

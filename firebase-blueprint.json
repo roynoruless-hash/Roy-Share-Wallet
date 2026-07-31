@@ -85,15 +85,22 @@
       "description": "Ledger of credits, debits, referral rewards, and withdrawals",
       "type": "object",
       "properties": {
+        "transactionId": { "type": "string" },
         "userId": { "type": "string" },
         "uid": { "type": "string" },
+        "telegramId": { "type": "string" },
+        "fullName": { "type": "string" },
+        "mobile": { "type": "string" },
         "type": { "type": "string" },
         "amount": { "type": "number" },
+        "balanceBefore": { "type": "number" },
         "balanceAfter": { "type": "number" },
+        "status": { "type": "string" },
+        "description": { "type": "string" },
         "reason": { "type": "string" },
         "createdAt": { "type": "string" }
       },
-      "required": ["uid", "type", "amount", "balanceAfter", "createdAt"]
+      "required": ["transactionId", "uid", "telegramId", "fullName", "mobile", "type", "amount", "balanceBefore", "balanceAfter", "status", "description", "createdAt"]
     },
     "adminLogs": {
       "title": "Admin Audit Logs",

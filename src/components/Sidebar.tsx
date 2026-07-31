@@ -126,6 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const uniqueMenuItems = [
     { id: 'dashboard' as TabType, label: 'Dashboard', icon: LayoutDashboard },
     { id: 'users' as TabType, label: 'User Management', icon: Users, badge: 'Users' },
+    { id: 'transactions' as TabType, label: 'Wallet Transactions', icon: FileText, badge: 'Passbook' },
     { id: 'telegram' as TabType, label: 'Telegram Configuration', icon: Send, badge: 'Core' },
     { id: 'channel' as TabType, label: 'Channel & Group', icon: Users2 },
     { id: 'wallet' as TabType, label: 'Wallet Settings', icon: Wallet },

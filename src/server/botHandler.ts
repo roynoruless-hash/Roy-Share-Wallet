@@ -1,5 +1,6 @@
 import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { recordWalletTransaction } from './transactionService';
 
 interface UserSession {
   step: 'FORCE_JOIN' | 'WAITING_NAME' | 'WAITING_MOBILE' | 'WAITING_CONTACT' | 'WITHDRAW_METHOD_SELECT' | 'WITHDRAW_AMOUNT' | 'WITHDRAW_DETAILS' | 'WITHDRAW_CONFIRM';
@@ -558,17 +559,9 @@ export async function processTelegramUpdate(token: string, update: any) {
           return;
         }
 
-        const newBalance = currentBal - amount;
         const withdrawalId = `WDR_${Date.now().toString().slice(-6)}_${Math.floor(1000 + Math.random() * 9000)}`;
 
-        // Deduct balance from user wallet
-        await runTransaction(db, async (transaction) => {
-          transaction.update(userDocRef, {
-            walletBalance: newBalance,
-          });
-        });
-
-        // Add document to withdrawals collection
+        // Add document to withdrawals collection first (maintaining status: pending)
         await addDoc(collection(db, 'withdrawals'), {
           withdrawalId,
           userId: userDocId,
@@ -590,16 +583,19 @@ export async function processTelegramUpdate(token: string, update: any) {
         else if (method === 'qr') methodDetailLog = `QR Code Upload`;
         else if (method === 'redeem_code') methodDetailLog = `Redeem Code (${redeemCodeDetails})`;
 
-        // Add record to transactions collection
-        await addDoc(collection(db, 'transactions'), {
-          userId: userDocId,
+        // Deduct balance and write immutable transaction atomically
+        const txResult = await recordWalletTransaction({
           uid: freshUserData.uid,
-          type: 'withdrawal',
-          amount: amount,
-          balanceAfter: newBalance,
-          reason: `Withdrawal Request #${withdrawalId} via ${methodDetailLog}`,
-          createdAt: new Date().toISOString(),
+          type: 'Withdrawal Request',
+          amount: -amount, // debit is negative
+          status: 'pending',
+          description: `Withdrawal Request #${withdrawalId} via ${methodDetailLog}`,
+          botToken: token,
         });
+
+        const newBalance = txResult.success && txResult.balanceAfter !== undefined
+          ? txResult.balanceAfter
+          : Math.max(0, (Number(freshUserData.walletBalance) || 0) - amount);
 
         // Clear session
         userSessions.delete(chatId);
@@ -1246,7 +1242,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       username: message.from.username ? `@${message.from.username.replace('@', '')}` : '',
       firstName: session.fullName || message.from.first_name || 'User',
       mobile: enteredDigits,
-      walletBalance: bonus,
+      walletBalance: 0, // start with 0 and then record credit transaction
       channelVerified: session.channelVerified ?? true,
       groupVerified: session.groupVerified ?? true,
       createdAt: new Date().toISOString(),
@@ -1261,6 +1257,18 @@ export async function processTelegramUpdate(token: string, update: any) {
     let newUserDocRef;
     try {
       newUserDocRef = await addDoc(collection(db, 'users'), newUserData);
+      
+      // Credit welcome bonus atomically
+      if (newUserDocRef && bonus > 0) {
+        await recordWalletTransaction({
+          uid,
+          type: 'Registration Bonus',
+          amount: bonus,
+          status: 'completed',
+          description: 'Onboarding welcome bonus credited to wallet',
+          botToken: token,
+        });
+      }
     } catch (dbErr) {
       console.error('Failed to create user account in Firestore:', dbErr);
     }

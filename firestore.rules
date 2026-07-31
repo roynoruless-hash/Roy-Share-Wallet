@@ -1,6 +1,13 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Transaction history must be strictly immutable
+    match /transactions/{txId} {
+      allow create: if request.auth != null;
+      allow read: if request.auth != null;
+      allow update, delete: if false;
+    }
+
     match /{document=**} {
       allow read, write: if true;
     }

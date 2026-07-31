@@ -25,6 +25,7 @@ import {
   Loader2,
   Send,
   History,
+  FileText,
 } from 'lucide-react';
 import { AdminConfig, BotUser, WalletTransaction } from '../types';
 import {
@@ -51,6 +52,12 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
   const [selectedUser, setSelectedUser] = useState<BotUser | null>(null);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [isLoadingTx, setIsLoadingTx] = useState(false);
+
+  // Passbook modal state
+  const [isPassbookOpen, setIsPassbookOpen] = useState(false);
+  const [passbookSearch, setPassbookSearch] = useState('');
+  const [passbookFilter, setPassbookFilter] = useState('all');
+  const [passbookPage, setPassbookPage] = useState(1);
 
   // Modal Action States
   const [activeModal, setActiveModal] = useState<'credit' | 'debit' | 'ban' | 'unban' | 'message' | null>(null);
@@ -657,7 +664,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
                   <History className="w-4 h-4 text-sky-400" />
-                  <span>Latest Wallet Transactions</span>
+                  <span>Wallet Transaction Ledger</span>
                 </h4>
                 <span className="text-[11px] text-slate-500">{transactions.length} records</span>
               </div>
@@ -672,51 +679,58 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
                   No transaction records found for this user.
                 </div>
               ) : (
-                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                  {transactions.map((tx) => {
-                    const isCredit = tx.type === 'admin_credit' || tx.type === 'referral' || tx.type === 'registration_bonus';
-                    return (
-                      <div
-                        key={tx.id}
-                        className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80 flex items-center justify-between text-xs"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div
-                            className={`p-2 rounded-lg border ${
-                              isCredit
-                                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                                : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                            }`}
-                          >
-                            {isCredit ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
-                          </div>
-                          <div>
-                            <div className="font-bold text-white">
-                              {tx.type === 'admin_credit'
-                                ? 'Admin Credit'
-                                : tx.type === 'admin_debit'
-                                ? 'Admin Debit'
-                                : tx.type === 'referral'
-                                ? 'Referral Reward'
-                                : tx.type === 'withdrawal'
-                                ? 'Withdrawal'
-                                : tx.type}
+                <div className="space-y-2">
+                  <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                    {transactions.slice(0, 3).map((tx) => {
+                      const isCredit = tx.amount >= 0;
+                      return (
+                        <div
+                          key={tx.id}
+                          className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80 flex items-center justify-between text-xs animate-scaleIn"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`p-2 rounded-lg border ${
+                                isCredit
+                                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                  : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                              }`}
+                            >
+                              {isCredit ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
                             </div>
-                            <div className="text-[11px] text-slate-400">{tx.reason || 'No description'}</div>
+                            <div>
+                              <div className="font-bold text-white">
+                                {tx.type || 'Transaction'}
+                              </div>
+                              <div className="text-[11px] text-slate-400 line-clamp-1">{tx.description || tx.reason || 'No description'}</div>
+                            </div>
                           </div>
-                        </div>
 
-                        <div className="text-right">
-                          <div className={`font-bold ${isCredit ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {isCredit ? `+₹${tx.amount}` : `-₹${tx.amount}`}
-                          </div>
-                          <div className="text-[10px] text-slate-500">
-                            Bal: ₹{tx.balanceAfter} | {new Date(tx.createdAt).toLocaleDateString()}
+                          <div className="text-right">
+                            <div className={`font-bold ${isCredit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {isCredit ? `+` : ''}₹{tx.amount}
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              Bal: ₹{tx.balanceAfter}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setIsPassbookOpen(true);
+                      setPassbookSearch('');
+                      setPassbookFilter('all');
+                      setPassbookPage(1);
+                    }}
+                    className="w-full mt-2 flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-xs font-bold bg-slate-950 hover:bg-slate-850 text-sky-400 border border-slate-800 transition shadow-sm"
+                  >
+                    <History className="w-4 h-4 text-sky-400" />
+                    <span>View Full Transaction History & Passbook</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -1005,6 +1019,198 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
               >
                 {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 <span>Send Message</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DETAILED USER TRANSACTIONS HISTORY & PASSBOOK MODAL */}
+      {isPassbookOpen && selectedUser && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl p-6 space-y-4 shadow-2xl animate-scaleIn flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <History className="w-5 h-5 text-sky-400" />
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    {selectedUser.firstName}'s Transaction History
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Registered Mobile: <span className="font-mono text-slate-200">{selectedUser.mobile || 'N/A'}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsPassbookOpen(false)}
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-850"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search and Filters bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 shrink-0">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={passbookSearch}
+                  onChange={(e) => {
+                    setPassbookSearch(e.target.value);
+                    setPassbookPage(1);
+                  }}
+                  placeholder="Search by description or type..."
+                  className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-850 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 transition"
+                />
+              </div>
+
+              <div>
+                <select
+                  value={passbookFilter}
+                  onChange={(e) => {
+                    setPassbookFilter(e.target.value);
+                    setPassbookPage(1);
+                  }}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-850 rounded-xl text-xs text-slate-300 focus:outline-none focus:border-sky-500 transition appearance-none"
+                >
+                  <option value="all">All Transactions</option>
+                  <option value="bonus">Bonus (Registration, Milestones)</option>
+                  <option value="referral">Referral Bonuses</option>
+                  <option value="feedback">Feedback Rewards</option>
+                  <option value="withdrawal">Withdrawals</option>
+                  <option value="credit">Admin Credits</option>
+                  <option value="debit">Admin Debits</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Transactions Table/List Container */}
+            <div className="flex-1 overflow-y-auto min-h-[250px] border border-slate-800 rounded-xl bg-slate-950/40">
+              {(() => {
+                // Filter logic
+                const filtered = transactions.filter((tx) => {
+                  // Search query match
+                  if (passbookSearch.trim()) {
+                    const sq = passbookSearch.toLowerCase();
+                    const typeMatch = tx.type?.toLowerCase().includes(sq);
+                    const descMatch = (tx.description || tx.reason || '').toLowerCase().includes(sq);
+                    const idMatch = tx.transactionId?.toLowerCase().includes(sq);
+                    if (!typeMatch && !descMatch && !idMatch) return false;
+                  }
+
+                  // Dropdown filter match
+                  if (passbookFilter !== 'all') {
+                    const type = tx.type?.toLowerCase() || '';
+                    if (passbookFilter === 'bonus') {
+                      if (!type.includes('bonus') && !type.includes('milestone')) return false;
+                    } else if (passbookFilter === 'referral') {
+                      if (!type.includes('referral')) return false;
+                    } else if (passbookFilter === 'feedback') {
+                      if (!type.includes('feedback')) return false;
+                    } else if (passbookFilter === 'withdrawal') {
+                      if (!type.includes('withdrawal')) return false;
+                    } else if (passbookFilter === 'credit') {
+                      if (!type.includes('credit')) return false;
+                    } else if (passbookFilter === 'debit') {
+                      if (!type.includes('debit')) return false;
+                    }
+                  }
+
+                  return true;
+                });
+
+                // Pagination math
+                const passbookPageSize = 8;
+                const totalItems = filtered.length;
+                const totalPages = Math.ceil(totalItems / passbookPageSize) || 1;
+                const startIndex = (passbookPage - 1) * passbookPageSize;
+                const paginatedItems = filtered.slice(startIndex, startIndex + passbookPageSize);
+
+                return (
+                  <div className="flex flex-col h-full justify-between">
+                    {/* List */}
+                    <div className="divide-y divide-slate-850">
+                      {paginatedItems.length > 0 ? (
+                        paginatedItems.map((tx) => {
+                          const isCredit = tx.amount >= 0;
+                          return (
+                            <div key={tx.id} className="p-3.5 flex items-center justify-between hover:bg-slate-900/40 text-xs transition">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-[10px] text-slate-500">{tx.transactionId || 'N/A'}</span>
+                                  <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                                    isCredit ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
+                                  }`}>
+                                    {tx.type || 'Transaction'}
+                                  </span>
+                                </div>
+                                <p className="text-slate-300 font-medium">{tx.description || tx.reason || 'No description'}</p>
+                                <span className="text-[10px] text-slate-500 block">
+                                  {tx.createdAt ? new Date(tx.createdAt).toLocaleString() : 'N/A'}
+                                </span>
+                              </div>
+
+                              <div className="text-right space-y-1">
+                                <div className={`font-black text-sm font-mono ${isCredit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {isCredit ? '+' : ''}₹{tx.amount}
+                                </div>
+                                <div className="text-[10px] font-bold text-slate-400 font-mono">
+                                  Bal: ₹{tx.balanceAfter}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="py-16 text-center text-slate-600 text-xs flex flex-col items-center justify-center gap-2">
+                          <FileText className="w-8 h-8 text-slate-700" />
+                          <span>No transaction records matched criteria.</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Pagination control footer */}
+                    {totalPages > 1 && (
+                      <div className="p-3 bg-slate-900/60 border-t border-slate-850 flex items-center justify-between shrink-0">
+                        <span className="text-[11px] text-slate-400 font-medium">
+                          Showing {startIndex + 1}-{Math.min(startIndex + passbookPageSize, totalItems)} of {totalItems}
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            disabled={passbookPage === 1}
+                            onClick={() => setPassbookPage((p) => Math.max(1, p - 1))}
+                            className="px-2.5 py-1 rounded bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 disabled:opacity-30 text-[11px] font-bold transition"
+                          >
+                            Prev
+                          </button>
+                          <span className="text-[11px] text-slate-400 font-mono px-1">
+                            {passbookPage} / {totalPages}
+                          </span>
+                          <button
+                            disabled={passbookPage === totalPages}
+                            onClick={() => setPassbookPage((p) => Math.min(totalPages, p + 1))}
+                            className="px-2.5 py-1 rounded bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 disabled:opacity-30 text-[11px] font-bold transition"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Footer buttons */}
+            <div className="flex items-center justify-end shrink-0 pt-1">
+              <button
+                onClick={() => setIsPassbookOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200"
+              >
+                Close Passbook
               </button>
             </div>
           </div>

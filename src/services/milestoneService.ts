@@ -250,15 +250,30 @@ export async function approveMilestoneClaimInDb(claimId: string, adminId: string
         approvedBy: adminId,
       });
       
+      // Generate strict Transaction ID format: TXNXXXXXXXX
+      const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let randStr = '';
+      for (let i = 0; i < 8; i++) {
+        randStr += characters.charAt(Math.floor(Math.random() * characters.length));
+      }
+      const transactionId = `TXN${randStr}`;
+
       // Add wallet/coins transaction
-      const txRef = doc(collection(db, 'transactions'));
+      const txRef = doc(db, 'transactions', transactionId);
       transaction.set(txRef, {
+        id: transactionId,
+        transactionId: transactionId,
         userId: userSnap.docs[0].id,
         uid: String(data.uid),
-        type: 'milestone_reward',
+        telegramId: String(userData.telegramId || ''),
+        fullName: String(userData.firstName || 'User'),
+        mobile: String(userData.mobile || ''),
+        type: 'Referral Milestone Reward',
         amount: rewardAmt,
+        balanceBefore: rewardType === 'coins' ? curCoins : rewardType === 'bonus' ? curBonus : curBal,
         balanceAfter: balanceAfter,
-        reason: `Milestone Claim Approved: ${data.requiredReferrals} referrals (${rewardType})`,
+        status: 'completed',
+        description: `Milestone Claim Approved: ${data.requiredReferrals} referrals (${rewardType})`,
         createdAt: new Date().toISOString(),
       });
     });

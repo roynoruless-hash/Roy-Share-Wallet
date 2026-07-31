@@ -19,6 +19,7 @@ import { SecurityView } from './components/SecurityView';
 import { DiagnosticsView } from './components/DiagnosticsView';
 import { LogsView } from './components/LogsView';
 import { UserManagementView } from './components/UserManagementView';
+import { TransactionsView } from './components/TransactionsView';
 import { ReferralVerifyView } from './components/ReferralVerifyView';
 import { ClaimRewardView } from './components/ClaimRewardView';
 import { AdminLoginView } from './components/AdminLoginView';
@@ -478,6 +479,10 @@ export default function App() {
 
           {activeTab === 'users' && (
             <UserManagementView config={config} showToast={showToast} />
+          )}
+
+          {activeTab === 'transactions' && (
+            <TransactionsView />
           )}
 
           {activeTab === 'telegram' && (

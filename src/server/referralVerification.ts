@@ -12,6 +12,7 @@ import {
   runTransaction,
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { recordWalletTransaction } from './transactionService';
 
 async function sendTelegramMessage(token: string, chatId: string | number, text: string) {
   if (!token || !chatId) return;
@@ -412,17 +413,14 @@ export async function processReferralVerification(params: VerifyReferralParams) 
         }
 
         const refData = refFreshSnap.data();
-        const currentBal = Number(refData.walletBalance || 0);
         const currentTotal = Number(refData.totalReferrals || 0);
         const currentSucc = Number(refData.successfulReferrals || 0);
         const currentEarned = Number(refData.totalReferralEarnings || 0);
 
-        updatedReferrerBalance = currentBal + rewardAmount;
         newReferralCount = currentSucc + 1;
 
-        // Credit referrer
+        // Update referrer statistics (balance is updated below via recordWalletTransaction)
         transaction.update(referrerDocRef, {
-          walletBalance: updatedReferrerBalance,
           totalReferrals: currentTotal + 1,
           successfulReferrals: newReferralCount,
           totalReferralEarnings: currentEarned + rewardAmount,
@@ -447,16 +445,15 @@ export async function processReferralVerification(params: VerifyReferralParams) 
         });
       });
 
-      // Record Wallet Transaction for Referrer
+      // Record Wallet Transaction for Referrer atomically
       try {
-        await addDoc(collection(db, 'transactions'), {
-          userId: referrerSnap.docs[0].id,
+        await recordWalletTransaction({
           uid: String(referrerUid),
-          type: 'referral',
+          type: 'Referral Bonus',
           amount: rewardAmount,
-          balanceAfter: updatedReferrerBalance,
-          reason: `Referral Reward for Verified Friend (UID #${referredUid})`,
-          createdAt: new Date().toISOString(),
+          status: 'completed',
+          description: `Referral Reward for Verified Friend (UID #${referredUid})`,
+          botToken: botToken,
         });
       } catch (txErr) {
         console.warn('Error recording transaction:', txErr);

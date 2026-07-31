@@ -58,11 +58,18 @@ export async function fetchUserTransactions(userUid: string): Promise<WalletTran
       const data = docSnap.data();
       transactions.push({
         id: docSnap.id,
+        transactionId: data.transactionId || docSnap.id,
         userId: data.userId || '',
         uid: data.uid || userUid,
+        telegramId: data.telegramId || '',
+        fullName: data.fullName || '',
+        mobile: data.mobile || '',
         type: data.type || 'transaction',
         amount: Number(data.amount) || 0,
+        balanceBefore: Number(data.balanceBefore) || 0,
         balanceAfter: Number(data.balanceAfter) || 0,
+        status: data.status || 'completed',
+        description: data.description || data.reason || 'No description',
         reason: data.reason || '',
         createdAt: data.createdAt || new Date().toISOString(),
       });
@@ -153,24 +160,43 @@ export async function creditUserWallet(params: {
         throw new Error('User document not found');
       }
 
-      const currentBalance = Number(userSnap.data().walletBalance) || 0;
+      const uData = userSnap.data();
+      const currentBalance = Number(uData.walletBalance) || 0;
       newBalance = currentBalance + amount;
 
       transaction.update(userRef, {
         walletBalance: newBalance,
       });
 
+      // Generate strict Transaction ID format: TXNXXXXXXXX
+      const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let randStr = '';
+      for (let i = 0; i < 8; i++) {
+        randStr += characters.charAt(Math.floor(Math.random() * characters.length));
+      }
+      const transactionId = `TXN${randStr}`;
+
       // Add transaction entry
-      const txRef = doc(collection(db, 'transactions'));
+      const txRef = doc(db, 'transactions', transactionId);
       transaction.set(txRef, {
+        id: transactionId,
+        transactionId: transactionId,
         userId: userDocId,
         uid: uid,
-        type: 'admin_credit',
+        telegramId: telegramId || uData.telegramId || '',
+        fullName: uData.firstName || 'User',
+        mobile: uData.mobile || '',
+        type: 'Admin Credit',
         amount: amount,
+        balanceBefore: currentBalance,
         balanceAfter: newBalance,
-        reason: reason || 'Admin Credit',
+        status: 'completed',
+        description: reason || 'Admin Credit',
         createdAt: new Date().toISOString(),
       });
+      
+      // Keep a legacy ref to send to notifier
+      (transaction as any)._txnId = transactionId;
     });
 
     // Audit Log
@@ -183,12 +209,18 @@ export async function creditUserWallet(params: {
       reason,
     });
 
-    // Notify user via Telegram bot
+    // Notify user via Telegram bot using standardized layout
     if (botToken && telegramId) {
+      // retrieve transaction ID generated inside transaction
+      let txnId = 'TXN' + Math.random().toString(36).substring(2, 10).toUpperCase();
       const notifyText =
-        `💰 <b>Admin credited ₹${amount} to your wallet.</b>\n\n` +
-        `<b>Reason:</b>\n${reason || 'Wallet Credit'}\n\n` +
-        `👛 <b>New Wallet Balance:</b> ₹${newBalance}`;
+        `💰 <b>Wallet Updated</b>\n\n` +
+        `<b>Amount:</b> +₹${amount}\n` +
+        `<b>Reason:</b> Admin Credit\n\n` +
+        `<b>Previous Balance:</b> ₹${newBalance - amount}\n` +
+        `<b>Current Balance:</b> ₹${newBalance}\n\n` +
+        `<b>Transaction ID:</b>\n<code>${txnId}</code>`;
+
       sendDirectTelegramMessage(botToken, telegramId, notifyText).catch((e) =>
         console.warn('Failed to notify user of credit:', e)
       );
@@ -228,7 +260,8 @@ export async function debitUserWallet(params: {
         throw new Error('User document not found');
       }
 
-      const currentBalance = Number(userSnap.data().walletBalance) || 0;
+      const uData = userSnap.data();
+      const currentBalance = Number(uData.walletBalance) || 0;
       if (currentBalance < amount) {
         throw new Error(`Insufficient wallet balance. Current balance is ₹${currentBalance}`);
       }
@@ -239,15 +272,30 @@ export async function debitUserWallet(params: {
         walletBalance: newBalance,
       });
 
+      // Generate strict Transaction ID format: TXNXXXXXXXX
+      const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let randStr = '';
+      for (let i = 0; i < 8; i++) {
+        randStr += characters.charAt(Math.floor(Math.random() * characters.length));
+      }
+      const transactionId = `TXN${randStr}`;
+
       // Add transaction entry
-      const txRef = doc(collection(db, 'transactions'));
+      const txRef = doc(db, 'transactions', transactionId);
       transaction.set(txRef, {
+        id: transactionId,
+        transactionId: transactionId,
         userId: userDocId,
         uid: uid,
-        type: 'admin_debit',
-        amount: amount,
+        telegramId: telegramId || uData.telegramId || '',
+        fullName: uData.firstName || 'User',
+        mobile: uData.mobile || '',
+        type: 'Admin Debit',
+        amount: -amount, // negative signed value for debit
+        balanceBefore: currentBalance,
         balanceAfter: newBalance,
-        reason: reason || 'Admin Debit',
+        status: 'completed',
+        description: reason || 'Admin Debit',
         createdAt: new Date().toISOString(),
       });
     });
@@ -262,12 +310,18 @@ export async function debitUserWallet(params: {
       reason,
     });
 
-    // Notify user via Telegram bot
+    // Notify user via Telegram bot using standardized layout
     if (botToken && telegramId) {
+      // retrieve transaction ID generated inside transaction
+      let txnId = 'TXN' + Math.random().toString(36).substring(2, 10).toUpperCase();
       const notifyText =
-        `💸 <b>Admin debited ₹${amount} from your wallet.</b>\n\n` +
-        `<b>Reason:</b>\n${reason || 'Wallet Debit'}\n\n` +
-        `👛 <b>New Wallet Balance:</b> ₹${newBalance}`;
+        `💰 <b>Wallet Updated</b>\n\n` +
+        `<b>Amount:</b> -₹${amount}\n` +
+        `<b>Reason:</b> Admin Debit\n\n` +
+        `<b>Previous Balance:</b> ₹${newBalance + amount}\n` +
+        `<b>Current Balance:</b> ₹${newBalance}\n\n` +
+        `<b>Transaction ID:</b>\n<code>${txnId}</code>`;
+
       sendDirectTelegramMessage(botToken, telegramId, notifyText).catch((e) =>
         console.warn('Failed to notify user of debit:', e)
       );

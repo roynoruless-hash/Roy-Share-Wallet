@@ -11,6 +11,7 @@ import {
   runTransaction
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { recordWalletTransaction } from './transactionService';
 
 async function sendTelegramMessage(token: string, chatId: string | number, text: string) {
   if (!token || !chatId) return;
@@ -342,21 +343,15 @@ export async function processMilestoneClaim(params: VerifyMilestoneClaimParams) 
         }
 
         const uData = freshUserSnap.data();
-        const curWallet = Number(uData.walletBalance || 0);
         const curCoins = Number(uData.coinsBalance || 0);
         const curBonus = Number(uData.bonusBalance || 0);
         const curEarned = Number(uData.totalReferralEarnings || 0);
 
         let updateFields: any = {};
         if (rewardType === 'coins') {
-          updatedBalance = curCoins + Number(rewardAmount);
-          updateFields.coinsBalance = updatedBalance;
+          updateFields.coinsBalance = curCoins + Number(rewardAmount);
         } else if (rewardType === 'bonus') {
-          updatedBalance = curBonus + Number(rewardAmount);
-          updateFields.bonusBalance = updatedBalance;
-        } else {
-          updatedBalance = curWallet + Number(rewardAmount);
-          updateFields.walletBalance = updatedBalance;
+          updateFields.bonusBalance = curBonus + Number(rewardAmount);
         }
         
         // Update referral earnings too
@@ -371,16 +366,15 @@ export async function processMilestoneClaim(params: VerifyMilestoneClaimParams) 
         transaction.update(tokenRef, { used: true, usedAt: new Date().toISOString() });
       });
 
-      // Log wallet transaction
+      // Log wallet transaction and update walletBalance atomically
       try {
-        await addDoc(collection(db, 'transactions'), {
-          userId: userDocId,
+        await recordWalletTransaction({
           uid: String(uid),
-          type: 'milestone_claim',
+          type: 'Referral Milestone Reward',
           amount: Number(rewardAmount),
-          balanceAfter: updatedBalance,
-          reason: `Milestone Reward Claimed for ${requiredReferrals} Valid Referrals`,
-          createdAt: new Date().toISOString(),
+          status: 'completed',
+          description: `Milestone Reward Claimed for ${requiredReferrals} Valid Referrals`,
+          botToken: botToken,
         });
       } catch (e) {
         console.warn('Error saving transaction record:', e);

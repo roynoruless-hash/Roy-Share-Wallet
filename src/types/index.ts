@@ -105,6 +105,7 @@ export interface DiagnosticItem {
 export type TabType =
   | 'dashboard'
   | 'users'
+  | 'transactions'
   | 'telegram'
   | 'channel'
   | 'wallet'
@@ -143,11 +144,18 @@ export interface BotUser {
 
 export interface WalletTransaction {
   id: string;
+  transactionId: string;
   userId?: string;
   uid: string;
-  type: 'admin_credit' | 'admin_debit' | 'referral' | 'withdrawal' | 'registration_bonus' | string;
+  telegramId: string;
+  fullName: string;
+  mobile: string;
+  type: string;
   amount: number;
+  balanceBefore: number;
   balanceAfter: number;
+  status: string;
+  description: string;
   reason?: string;
   createdAt: string;
 }

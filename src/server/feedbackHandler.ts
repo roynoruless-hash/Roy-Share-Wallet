@@ -1,5 +1,6 @@
 import { collection, query, where, getDocs, doc, runTransaction, addDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { recordWalletTransaction } from './transactionService';
 
 async function sendTelegramMessage(token: string, chatId: string, text: string) {
   try {
@@ -57,16 +58,8 @@ export async function approveFeedbackReview(botToken: string, reviewDocId: strin
     const userDocRef = uSnap.docs[0].ref;
     userId = uSnap.docs[0].id;
 
-    // Run transaction
+    // Run transaction to update feedback status
     await runTransaction(db, async (transaction) => {
-      const uDocSnap = await transaction.get(userDocRef);
-      if (!uDocSnap.exists()) {
-        throw new Error('User document missing during transaction.');
-      }
-      const userData = uDocSnap.data();
-      const currentBalance = Number(userData.walletBalance) || 0;
-      newBalance = currentBalance + rewardAmount;
-
       // Update feedback status
       transaction.update(reviewRef, {
         status: 'approved',
@@ -74,37 +67,20 @@ export async function approveFeedbackReview(botToken: string, reviewDocId: strin
         approveReason: cleanReason,
         processedAt: new Date().toISOString(),
       });
-
-      // Credit user's wallet
-      transaction.update(userDocRef, {
-        walletBalance: newBalance,
-      });
     });
 
-    // Add record to transactions collection
+    // Credit user's wallet & write immutable transaction log atomically
     try {
-      await addDoc(collection(db, 'transactions'), {
-        userId,
+      await recordWalletTransaction({
         uid: userUid,
-        type: 'feedback_reward',
+        type: 'Feedback Reward',
         amount: rewardAmount,
-        balanceAfter: newBalance,
-        reason: `Feedback Campaign "${campaignName}" Reward: ${cleanReason}`,
-        createdAt: new Date().toISOString(),
+        status: 'completed',
+        description: `Feedback Campaign "${campaignName}" Reward: ${cleanReason}`,
+        botToken: botToken,
       });
     } catch (e) {
       console.warn('Transaction feedback log warning:', e);
-    }
-
-    // Notify user via Telegram
-    if (botToken && telegramId) {
-      await sendTelegramMessage(
-        botToken,
-        telegramId,
-        `🎉 <b>Feedback Reward Received</b>\n\n` +
-          `<b>₹${rewardAmount}</b> has been added to your wallet.\n\n` +
-          `<b>Reason:</b> ${cleanReason}`
-      );
     }
 
     return { success: true, message: 'Feedback approved and reward credited successfully!' };
