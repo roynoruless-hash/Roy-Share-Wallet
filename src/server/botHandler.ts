@@ -170,10 +170,28 @@ async function sendContestantVoteCard(token: string, chatId: string, contestId: 
   const contest = contests.find((c) => c.id === contestId);
 
   const now = new Date();
-  if (!contest || contest.status !== 'active' || now > new Date(contest.votingEndDate)) {
+  if (!contest) {
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
-      text: '🔒 <b>This voting contest has ended or is currently inactive.</b>',
+      text: '❌ <b>Contest not found.</b>',
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
+  if (contest.status === 'completed' || contest.votingEndedProcessed || (contest.votingEndDate && now > new Date(contest.votingEndDate))) {
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: '🔒 <b>Voting Ended</b>\n\nVoting for this contest has concluded and voting links are now disabled.',
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
+  if (!contest.votingStarted && !contest.registrationClosedProcessed && contest.status !== 'active') {
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: '⏳ <b>Voting Not Started</b>\n\nVoting for this contest has not been started yet by the administrator.',
       parse_mode: 'HTML',
     });
     return;
@@ -1273,10 +1291,28 @@ export async function processTelegramUpdate(token: string, update: any) {
       const contest = contests.find((c) => c.id === contestId);
       const now = new Date();
 
-      if (!contest || contest.status !== 'active' || now > new Date(contest.votingEndDate)) {
+      if (!contest) {
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
-          text: '🔒 <b>This voting contest has ended or is currently inactive.</b>',
+          text: '❌ <b>Contest not found.</b>',
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      if (contest.status === 'completed' || contest.votingEndedProcessed || (contest.votingEndDate && now > new Date(contest.votingEndDate))) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: '🔒 <b>Voting Ended</b>\n\nVoting for this contest has concluded and voting links are now disabled.',
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      if (!contest.votingStarted && !contest.registrationClosedProcessed && contest.status !== 'active') {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: '⏳ <b>Voting Not Started</b>\n\nVoting for this contest has not been started yet by the administrator.',
           parse_mode: 'HTML',
         });
         return;

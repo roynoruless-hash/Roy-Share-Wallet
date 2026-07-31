@@ -27,7 +27,10 @@ import {
   Loader2,
   Sparkles,
   Clock,
-  CheckCircle2
+  CheckCircle2,
+  Rocket,
+  CheckCircle,
+  XCircle
 } from 'lucide-react';
 import { Contest, Contestant, VoteLog, AdminConfig, ContestLog } from '../types';
 import {
@@ -372,6 +375,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   const [contestSearch, setContestSearch] = useState('');
   const [contestantSearch, setContestantSearch] = useState('');
   const [selectedContestFilter, setSelectedContestFilter] = useState('all');
+  const [contestantStatusFilter, setContestantStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [logSearch, setLogSearch] = useState('');
 
   // Initial Fetch
@@ -395,6 +399,168 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     } catch (err) {
       console.error(err);
       showToast('Failed to load Voting System data', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleStartVoting = async (contest: Contest) => {
+    const contestContestants = contestants.filter(cn => cn.contestId === contest.id);
+    const approvedContestants = contestContestants.filter(cn => cn.status === 'approved');
+
+    if (approvedContestants.length === 0) {
+      showToast('Cannot start voting: Please approve at least one participant first.', 'error');
+      return;
+    }
+
+    const confirmStart = window.confirm(
+      `🚀 Start Voting for "${contest.title}"?\n\n` +
+      `This will:\n` +
+      `1. Close participant registration immediately.\n` +
+      `2. Generate unique Telegram Deep Links for all ${approvedContestants.length} approved participants.\n` +
+      `3. Send each participant their personal vote link via Telegram Bot.\n` +
+      `4. Switch contest status to 'Voting Live'.\n\n` +
+      `Do you want to proceed?`
+    );
+
+    if (!confirmStart) return;
+
+    setIsLoading(true);
+    try {
+      const botUsername = config.botUsername || 'RoyShareWalletBot';
+      let linksDispatched = 0;
+
+      // 1. Mark contest as voting started & registration closed
+      await saveContest({
+        ...contest,
+        votingStarted: true,
+        registrationClosedProcessed: true,
+        votingStartedAt: new Date().toISOString(),
+        status: 'active'
+      });
+
+      // 2. Generate & dispatch unique voting link for every approved contestant
+      for (const cn of approvedContestants) {
+        const uniqueLink = `https://t.me/${botUsername}?start=vote_${contest.id}_${cn.id}`;
+        const linkId = `vote_${contest.id}_${cn.id}`;
+
+        await saveVoteLink({
+          id: linkId,
+          contestId: contest.id,
+          contestantId: cn.id,
+          voteLink: uniqueLink,
+        });
+
+        await saveContestant({
+          ...cn,
+          voteLink: uniqueLink
+        });
+
+        if (cn.telegramId) {
+          await handleResendVotingLink({ ...cn, voteLink: uniqueLink });
+          linksDispatched++;
+        }
+      }
+
+      await addContestLog({
+        contestId: contest.id,
+        action: 'START_VOTING',
+        details: `Admin manually started voting. Closed registration and dispatched unique vote links for ${approvedContestants.length} approved contestants (${linksDispatched} notified via Telegram).`
+      });
+
+      showToast(`🚀 Voting is now LIVE! Dispatched unique voting links to ${approvedContestants.length} participants.`, 'success');
+      await reloadAllData();
+    } catch (err: any) {
+      console.error('Error starting voting:', err);
+      showToast('Failed to start voting: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleApproveContestant = async (cn: Contestant) => {
+    try {
+      await saveContestant({
+        ...cn,
+        status: 'approved'
+      });
+      showToast(`Approved ${cn.name}!`, 'success');
+      await reloadAllData();
+    } catch (err: any) {
+      showToast('Failed to approve participant', 'error');
+    }
+  };
+
+  const handleRejectContestant = async (cn: Contestant) => {
+    try {
+      await saveContestant({
+        ...cn,
+        status: 'rejected'
+      });
+      showToast(`Rejected ${cn.name}.`, 'info');
+      await reloadAllData();
+    } catch (err: any) {
+      showToast('Failed to reject participant', 'error');
+    }
+  };
+
+  const handleApproveAll = async (contestIdFilter?: string) => {
+    const targetContestants = contestants.filter(cn => {
+      const matchesContest = !contestIdFilter || contestIdFilter === 'all' || cn.contestId === contestIdFilter;
+      return matchesContest && cn.status === 'pending';
+    });
+
+    if (targetContestants.length === 0) {
+      showToast('No pending participants found to approve.', 'info');
+      return;
+    }
+
+    const confirmApprove = window.confirm(`Approve all ${targetContestants.length} pending participants?`);
+    if (!confirmApprove) return;
+
+    setIsLoading(true);
+    try {
+      for (const cn of targetContestants) {
+        await saveContestant({
+          ...cn,
+          status: 'approved'
+        });
+      }
+      showToast(`Approved ${targetContestants.length} participants!`, 'success');
+      await reloadAllData();
+    } catch (err) {
+      showToast('Failed to approve all participants.', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRejectAll = async (contestIdFilter?: string) => {
+    const targetContestants = contestants.filter(cn => {
+      const matchesContest = !contestIdFilter || contestIdFilter === 'all' || cn.contestId === contestIdFilter;
+      return matchesContest && cn.status === 'pending';
+    });
+
+    if (targetContestants.length === 0) {
+      showToast('No pending participants found to reject.', 'info');
+      return;
+    }
+
+    const confirmReject = window.confirm(`Reject all ${targetContestants.length} pending participants?`);
+    if (!confirmReject) return;
+
+    setIsLoading(true);
+    try {
+      for (const cn of targetContestants) {
+        await saveContestant({
+          ...cn,
+          status: 'rejected'
+        });
+      }
+      showToast(`Rejected ${targetContestants.length} participants!`, 'info');
+      await reloadAllData();
+    } catch (err) {
+      showToast('Failed to reject all participants.', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -689,7 +855,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
     const matchesContest = selectedContestFilter === 'all' || cn.contestId === selectedContestFilter;
 
-    return matchesSearch && matchesContest;
+    const matchesStatus =
+      contestantStatusFilter === 'all' || (cn.status || 'approved') === contestantStatusFilter;
+
+    return matchesSearch && matchesContest && matchesStatus;
   });
 
   const filteredLogs = voteLogs.filter(
@@ -730,6 +899,113 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
           </button>
         </div>
       </div>
+
+      {/* Admin Overview Dashboard Box */}
+      {contests.length > 0 && (
+        <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-3">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">
+                Contest Control Dashboard:
+              </span>
+              <select
+                value={selectedContestId || contests[0]?.id}
+                onChange={e => {
+                  setSelectedContestId(e.target.value);
+                  setSelectedContestFilter(e.target.value);
+                }}
+                className="px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-950 border border-slate-800 text-sky-400 focus:outline-none focus:border-sky-500"
+              >
+                {contests.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Voting Status & Voting Countdown Badge */}
+            {(() => {
+              const selectedC = contests.find(c => c.id === (selectedContestId || contests[0]?.id)) || contests[0];
+              if (!selectedC) return null;
+              const p = getContestPhase(selectedC);
+              const cd = getTimeRemainingString(selectedC.votingEndDate);
+              return (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className={`px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 ${p.colorClass}`}>
+                    <span>{p.icon}</span>
+                    <span>Status: {p.label}</span>
+                  </div>
+                  <div className="px-2.5 py-1 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono font-bold text-sky-400 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Countdown: {cd === 'Ended' ? 'Voting Ended 🔴' : cd}</span>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Participant Metrics & Action Toolbar */}
+          {(() => {
+            const selectedC = contests.find(c => c.id === (selectedContestId || contests[0]?.id)) || contests[0];
+            if (!selectedC) return null;
+            const cContestants = contestants.filter(cn => cn.contestId === selectedC.id);
+            const pending = cContestants.filter(cn => cn.status === 'pending');
+            const approved = cContestants.filter(cn => cn.status === 'approved');
+            const rejected = cContestants.filter(cn => cn.status === 'rejected');
+
+            return (
+              <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 pt-1">
+                <div className="grid grid-cols-3 gap-2 flex-1">
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-center">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">Pending</span>
+                    <span className="text-base font-black text-amber-300 font-mono">{pending.length}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-center">
+                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">Approved</span>
+                    <span className="text-base font-black text-emerald-300 font-mono">{approved.length}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-center">
+                    <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider block">Rejected</span>
+                    <span className="text-base font-black text-rose-300 font-mono">{rejected.length}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center flex-wrap gap-2 shrink-0 justify-end">
+                  <button
+                    onClick={() => handleApproveAll(selectedC.id)}
+                    className="py-2 px-3.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 transition text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                    title="Approve all pending participants for this contest"
+                  >
+                    <CheckCircle className="w-4 h-4 text-emerald-400" />
+                    <span>Approve All</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleRejectAll(selectedC.id)}
+                    className="py-2 px-3.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                    title="Reject all pending participants for this contest"
+                  >
+                    <XCircle className="w-4 h-4 text-rose-400" />
+                    <span>Reject All</span>
+                  </button>
+
+                  {!selectedC.votingStarted && selectedC.status !== 'completed' && (
+                    <button
+                      onClick={() => handleStartVoting(selectedC)}
+                      className="py-2 px-4 rounded-xl bg-gradient-to-r from-emerald-500 via-sky-500 to-indigo-500 hover:from-emerald-400 hover:to-indigo-400 text-slate-950 transition text-xs font-extrabold flex items-center gap-1.5 shadow-lg shadow-sky-500/20 cursor-pointer"
+                      title="Start voting immediately, close registration & generate deep links"
+                    >
+                      <Rocket className="w-4 h-4 fill-slate-950" />
+                      <span>🚀 Start Voting</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       {/* Primary Sub-Navigation Tabs */}
       <div className="border-b border-slate-800/80">
@@ -814,17 +1090,13 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
             <div className="grid grid-cols-1 gap-4">
               {filteredContests.map(c => {
                 const cContestants = contestants.filter(cn => cn.contestId === c.id);
-                const approvedContestants = cContestants.filter(cn => cn.status === 'approved');
-                const contestantsWithLinks = approvedContestants.filter(cn => cn.voteLink || cn.telegramId);
-                const linksPct = approvedContestants.length > 0
-                  ? Math.round((contestantsWithLinks.length / approvedContestants.length) * 100)
-                  : 0;
-
+                const cPending = cContestants.filter(cn => cn.status === 'pending');
+                const cApproved = cContestants.filter(cn => cn.status === 'approved');
+                const cRejected = cContestants.filter(cn => cn.status === 'rejected');
                 const totalVotes = cContestants.reduce((acc, curr) => acc + (curr.votesCount || 0), 0);
                 const registrationUrl = `${window.location.origin}/register-contest/${c.id}`;
                 const phase = getContestPhase(c);
-                const regCountdown = getTimeRemainingString(c.registrationEndDate, c.registrationStartDate);
-                const voteCountdown = getTimeRemainingString(c.votingEndDate, c.registrationEndDate);
+                const voteCountdown = getTimeRemainingString(c.votingEndDate);
 
                 return (
                   <div
@@ -883,15 +1155,35 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                         </div>
                       </div>
 
-                      {/* Top Action buttons */}
+                      {/* Action buttons toolbar */}
                       <div className="flex items-center flex-wrap gap-1.5 self-end sm:self-start shrink-0">
+                        {!c.votingStarted && c.status !== 'completed' && (
+                          <button
+                            onClick={() => handleStartVoting(c)}
+                            className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500 via-sky-500 to-indigo-500 hover:from-emerald-400 hover:to-indigo-400 text-slate-950 transition text-xs font-extrabold flex items-center gap-1.5 cursor-pointer shadow-md"
+                            title="Start Voting Immediately"
+                          >
+                            <Rocket className="w-3.5 h-3.5 fill-slate-950" />
+                            <span>🚀 Start Voting</span>
+                          </button>
+                        )}
+
                         <button
-                          onClick={() => handleGenerateAndSendAllLinks(c)}
-                          className="py-1.5 px-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-500 hover:from-sky-400 hover:to-indigo-400 text-slate-950 transition text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md"
-                          title="Generate & Dispatch Telegram Vote Links"
+                          onClick={() => handleApproveAll(c.id)}
+                          className="py-1.5 px-2.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition text-xs font-bold flex items-center gap-1 cursor-pointer"
+                          title="Approve All Pending"
                         >
-                          <Sparkles className="w-3.5 h-3.5 fill-slate-950" />
-                          <span>Generate & Send Links</span>
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          <span>Approve All</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleRejectAll(c.id)}
+                          className="py-1.5 px-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition text-xs font-bold flex items-center gap-1 cursor-pointer"
+                          title="Reject All Pending"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>Reject All</span>
                         </button>
 
                         <button
@@ -913,7 +1205,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                               ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/20'
                               : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
                           }`}
-                          title={c.status === 'active' ? 'Pause Voting' : 'Activate Voting'}
+                          title={c.status === 'active' ? 'Pause Contest' : 'Activate Contest'}
                         >
                           {c.status === 'active' ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                         </button>
@@ -936,57 +1228,54 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                       </div>
                     </div>
 
-                    {/* Phase 1 & 2 Dashboard Metrics Panel */}
+                    {/* Voting Dashboard Metrics Panel */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 rounded-xl bg-slate-950/80 border border-slate-800/80">
                       <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/60">
                         <div className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                          <Calendar className="w-3 h-3 text-emerald-400" />
-                          Registration Timer
-                        </div>
-                        <div className="text-xs font-mono font-bold text-slate-200 mt-1 truncate">
-                          {regCountdown === 'Ended' ? 'Closed 🟡' : regCountdown}
-                        </div>
-                        <div className="text-[9px] text-slate-500 mt-0.5 truncate">
-                          End: {c.registrationEndDate ? c.registrationEndDate.replace('T', ' ') : 'N/A'}
-                        </div>
-                      </div>
-
-                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/60">
-                        <div className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
                           <Clock className="w-3 h-3 text-sky-400" />
-                          Voting Timer
-                        </div>
-                        <div className="text-xs font-mono font-bold text-slate-200 mt-1 truncate">
-                          {voteCountdown === 'Ended' ? 'Voting Closed 🔴' : voteCountdown}
-                        </div>
-                        <div className="text-[9px] text-slate-500 mt-0.5 truncate">
-                          End: {c.votingEndDate ? c.votingEndDate.replace('T', ' ') : 'N/A'}
-                        </div>
-                      </div>
-
-                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/60">
-                        <div className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                          <Users className="w-3 h-3 text-indigo-400" />
-                          Contestants & Votes
+                          Voting Countdown
                         </div>
                         <div className="text-xs font-mono font-bold text-sky-400 mt-1 truncate">
-                          {cContestants.length} Users | {totalVotes} Votes
+                          {voteCountdown === 'Ended' ? 'Voting Ended 🔴' : voteCountdown}
                         </div>
                         <div className="text-[9px] text-slate-500 mt-0.5 truncate">
-                          Approved: {approvedContestants.length}
+                          Ends: {c.votingEndDate ? c.votingEndDate.replace('T', ' ') : 'N/A'}
                         </div>
                       </div>
 
-                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/60">
-                        <div className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                          Link Dispatch Progress
+                      <div className="p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20">
+                        <div className="text-[9px] font-extrabold text-amber-400 uppercase tracking-wider flex items-center gap-1">
+                          ⏳ Pending Approval
                         </div>
-                        <div className="text-xs font-mono font-bold text-emerald-400 mt-1 truncate">
-                          {contestantsWithLinks.length} / {approvedContestants.length} ({linksPct}%)
+                        <div className="text-sm font-mono font-black text-amber-300 mt-1 truncate">
+                          {cPending.length} Participants
                         </div>
                         <div className="text-[9px] text-slate-500 mt-0.5 truncate">
-                          Updated: {lastUpdatedTime}
+                          Awaiting Review
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-emerald-500/5 border border-emerald-500/20">
+                        <div className="text-[9px] font-extrabold text-emerald-400 uppercase tracking-wider flex items-center gap-1">
+                          ✅ Approved
+                        </div>
+                        <div className="text-sm font-mono font-black text-emerald-300 mt-1 truncate">
+                          {cApproved.length} Participants
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-0.5 truncate">
+                          Ready for Voting
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-rose-500/5 border border-rose-500/20">
+                        <div className="text-[9px] font-extrabold text-rose-400 uppercase tracking-wider flex items-center gap-1">
+                          ❌ Rejected
+                        </div>
+                        <div className="text-sm font-mono font-black text-rose-300 mt-1 truncate">
+                          {cRejected.length} Participants
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-0.5 truncate">
+                          Denied Entry
                         </div>
                       </div>
                     </div>
@@ -1101,6 +1390,84 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
             </button>
           </div>
 
+          {/* Status Filter Tabs & Bulk Actions Bar */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900 border border-slate-800">
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none w-full sm:w-auto">
+              <button
+                onClick={() => setContestantStatusFilter('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  contestantStatusFilter === 'all'
+                    ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <span>All Statuses</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300 font-mono">
+                  {contestants.filter(cn => selectedContestFilter === 'all' || cn.contestId === selectedContestFilter).length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setContestantStatusFilter('pending')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  contestantStatusFilter === 'pending'
+                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <span>⏳ Pending</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500/20 text-amber-300 font-mono">
+                  {contestants.filter(cn => (selectedContestFilter === 'all' || cn.contestId === selectedContestFilter) && cn.status === 'pending').length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setContestantStatusFilter('approved')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  contestantStatusFilter === 'approved'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <span>✅ Approved</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-500/20 text-emerald-300 font-mono">
+                  {contestants.filter(cn => (selectedContestFilter === 'all' || cn.contestId === selectedContestFilter) && cn.status === 'approved').length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setContestantStatusFilter('rejected')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  contestantStatusFilter === 'rejected'
+                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <span>❌ Rejected</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-rose-500/20 text-rose-300 font-mono">
+                  {contestants.filter(cn => (selectedContestFilter === 'all' || cn.contestId === selectedContestFilter) && cn.status === 'rejected').length}
+                </span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0 justify-end">
+              <button
+                onClick={() => handleApproveAll(selectedContestFilter)}
+                className="py-1.5 px-3 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+              >
+                <CheckCircle className="w-3.5 h-3.5" />
+                <span>Approve All Pending</span>
+              </button>
+              <button
+                onClick={() => handleRejectAll(selectedContestFilter)}
+                className="py-1.5 px-3 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                <span>Reject All Pending</span>
+              </button>
+            </div>
+          </div>
+
           {/* Contestants Cards Grid */}
           {isLoading ? (
             <div className="py-16 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
@@ -1149,17 +1516,41 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                         <div className="space-y-1 min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <h4 className="text-sm font-bold text-white truncate">{cn.name}</h4>
-                            <span
-                              className={`px-2 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-wider shrink-0 ${
-                                cn.status === 'approved'
-                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                  : cn.status === 'pending'
-                                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                  : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                              }`}
-                            >
-                              {cn.status}
-                            </span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-wider ${
+                                  cn.status === 'approved'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                    : cn.status === 'pending'
+                                    ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                    : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                }`}
+                              >
+                                {cn.status}
+                              </span>
+
+                              {cn.status !== 'approved' && (
+                                <button
+                                  onClick={() => handleApproveContestant(cn)}
+                                  className="px-1.5 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold transition flex items-center gap-0.5 cursor-pointer"
+                                  title="Approve Participant"
+                                >
+                                  <CheckCircle className="w-3 h-3 text-emerald-400" />
+                                  <span>Approve</span>
+                                </button>
+                              )}
+
+                              {cn.status !== 'rejected' && (
+                                <button
+                                  onClick={() => handleRejectContestant(cn)}
+                                  className="px-1.5 py-0.5 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-[9px] font-bold transition flex items-center gap-0.5 cursor-pointer"
+                                  title="Reject Participant"
+                                >
+                                  <XCircle className="w-3 h-3 text-rose-400" />
+                                  <span>Reject</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
 
                           {cn.username && <p className="text-[11px] text-sky-400 font-bold truncate">{cn.username}</p>}

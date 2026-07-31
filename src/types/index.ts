@@ -309,8 +309,10 @@ export interface Contest {
   description: string;
   imageUrl?: string;
   registrationStartDate: string;
-  registrationEndDate: string;
+  registrationEndDate?: string;
   votingEndDate: string;
+  votingStarted?: boolean;
+  votingStartedAt?: string;
   registrationClosedProcessed?: boolean;
   votingEndedProcessed?: boolean;
   status: 'upcoming' | 'active' | 'completed' | 'paused';

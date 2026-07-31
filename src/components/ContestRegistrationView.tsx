@@ -157,7 +157,7 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
         description: description.trim(),
         imageUrl: imageUrl,
         votesCount: 0,
-        status: 'approved', // Auto-approved for direct appearance in list
+        status: 'pending', // Requirement 3: Every participant goes into "Pending Approval"
         createdAt: new Date().toISOString()
       });
 
@@ -215,25 +215,27 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
 
   // Check scheduling
   const now = new Date();
-  const regStartDate = contest.registrationStartDate ? new Date(contest.registrationStartDate + 'T00:00:00') : null;
-  const regEndDate = contest.registrationEndDate ? new Date(contest.registrationEndDate) : null;
+  const regStartDate = contest.registrationStartDate
+    ? new Date(contest.registrationStartDate + (contest.registrationStartDate.includes('T') ? '' : 'T00:00:00'))
+    : null;
 
-  const isBeforeReg = regStartDate && now < regStartDate;
-  const isAfterReg = regEndDate && now > regEndDate;
-  const isClosed = contest.status === 'completed' || contest.status === 'paused' || isAfterReg;
+  const isBeforeReg = regStartDate ? now < regStartDate : false;
+  const isRegClosed = contest.registrationClosedProcessed || contest.votingStarted || contest.status === 'completed' || contest.status === 'paused';
 
   let scheduleMessage = '';
   if (isBeforeReg && regStartDate) {
     scheduleMessage = `Registration opens on ${regStartDate.toLocaleDateString()} at ${regStartDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
-  } else if (isAfterReg) {
-    scheduleMessage = `Registration closed on ${regEndDate?.toLocaleDateString()} at ${regEndDate?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
-  } else if (contest.status === 'paused') {
-    scheduleMessage = 'This contest is temporarily paused by the moderator.';
-  } else if (contest.status === 'completed') {
-    scheduleMessage = 'This contest has already completed.';
+  } else if (isRegClosed) {
+    if (contest.status === 'paused') {
+      scheduleMessage = 'This contest is temporarily paused by the moderator.';
+    } else if (contest.status === 'completed') {
+      scheduleMessage = 'This contest has already completed.';
+    } else {
+      scheduleMessage = 'Registration for this contest is now closed by the moderator.';
+    }
   }
 
-  if (isClosed || isBeforeReg) {
+  if (isRegClosed || isBeforeReg) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-sky-600/10 rounded-full blur-3xl pointer-events-none" />
@@ -274,8 +276,8 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
           </div>
 
           <div className="space-y-1.5">
-            <h2 className="text-xl font-bold text-slate-200">Registration Successful!</h2>
-            <p className="text-xs text-slate-400">You are now entered as a contestant</p>
+            <h2 className="text-xl font-bold text-slate-200">Registration Submitted!</h2>
+            <p className="text-xs text-amber-400 font-semibold">⏳ Status: Pending Admin Approval</p>
           </div>
 
           <div className="p-4 rounded-2xl bg-slate-950 border border-slate-850 space-y-3 text-left">
@@ -291,8 +293,9 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
 
             <div className="pt-2 border-t border-slate-900 text-xs text-slate-400 space-y-2">
               <p>🏁 <b>What happens next?</b></p>
-              <p>Once registration officially ends, our system will automatically generate your unique voting link and message it to you directly via the Telegram bot.</p>
-              <p>You can then share that link to collect votes and climb the leaderboard! 🚀</p>
+              <p>1. The admin will review your registration details.</p>
+              <p>2. Once approved and the admin starts voting, your unique voting link will be generated and sent directly to you via the Telegram bot.</p>
+              <p>3. You can then share your personal link to collect votes! 🚀</p>
             </div>
           </div>
 

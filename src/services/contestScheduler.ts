@@ -66,95 +66,23 @@ async function runSchedulerCycle() {
       }
 
       const regStartDateStr = contest.registrationStartDate; // "YYYY-MM-DD"
-      const regEndDateStr = contest.registrationEndDate;     // "YYYY-MM-DDTHH:MM"
       const voteEndDateStr = contest.votingEndDate;         // "YYYY-MM-DDTHH:MM"
 
-      if (!regStartDateStr || !regEndDateStr || !voteEndDateStr) {
+      if (!regStartDateStr || !voteEndDateStr) {
         continue;
       }
 
-      const regStartDate = new Date(regStartDateStr + 'T00:00:00');
-      const regEndDate = new Date(regEndDateStr);
+      const regStartDate = new Date(regStartDateStr + (regStartDateStr.includes('T') ? '' : 'T00:00:00'));
       const voteEndDate = new Date(voteEndDateStr);
 
       // 1. Transition: Upcoming -> Active (When registration opens)
-      if (contest.status === 'upcoming' && now >= regStartDate && now < regEndDate) {
+      if (contest.status === 'upcoming' && now >= regStartDate) {
         console.log(`[Scheduler] Transitioning contest "${contest.title}" (${contest.id}) to active status (Registration Opened)`);
         await setDoc(doc(db, 'contests', contest.id), { status: 'active' }, { merge: true });
         continue;
       }
 
-      // 2. Transition: Registration Ends -> Generate & Send Unique Voting Links to participants
-      if (now >= regEndDate && now < voteEndDate && !contest.registrationClosedProcessed) {
-        console.log(`[Scheduler] Closing registration for contest "${contest.title}" (${contest.id}) and sending voting links`);
-        
-        // Mark as processed immediately to lock other executions
-        await setDoc(doc(db, 'contests', contest.id), {
-          registrationClosedProcessed: true,
-          status: 'active' // Ensure it is active for voting
-        }, { merge: true });
-
-        // Retrieve config and bot details
-        const config = await getDecryptedConfig();
-        if (config && config.botToken) {
-          const token = config.botToken;
-          const botUsername = config.botUsername || 'RoyShareWalletBot';
-
-          // Get contestants for this contest
-          const contestantsRef = collection(db, 'contestants');
-          const q = query(contestantsRef, where('contestId', '==', contest.id));
-          const contestantsSnap = await getDocs(q);
-
-          let generatedLinksCount = 0;
-          for (const contestantDoc of contestantsSnap.docs) {
-            const contestant = contestantDoc.data();
-            // Send links to approved contestants
-            if (contestant.status === 'approved') {
-              const uniqueLink = `https://t.me/${botUsername}?start=vote_${contest.id}_${contestantDoc.id}`;
-              const linkId = `vote_${contest.id}_${contestantDoc.id}`;
-
-              // Store permanently in voteLinks collection
-              await setDoc(doc(db, 'voteLinks', linkId), {
-                id: linkId,
-                contestId: contest.id,
-                contestantId: contestantDoc.id,
-                voteLink: uniqueLink,
-                createdAt: new Date().toISOString(),
-              }, { merge: true });
-
-              // Save on contestant doc
-              await setDoc(doc(db, 'contestants', contestantDoc.id), {
-                voteLink: uniqueLink,
-              }, { merge: true });
-
-              generatedLinksCount++;
-
-              if (contestant.telegramId) {
-                const messageText = `🎉 <b>Voting Started!</b>\n\n` +
-                  `Hello ${contestant.name},\n\n` +
-                  `Your personal vote link is ready.\n\n` +
-                  `🔗 ${uniqueLink}\n\n` +
-                  `📢 Share this link with your friends.\n\n` +
-                  `Only verified users can vote.\n\n` +
-                  `Good Luck! 🏆`;
-
-                await sendTelegramMessage(token, contestant.telegramId, messageText);
-              }
-            }
-          }
-
-          // Add contest log
-          await setDoc(doc(db, 'contestLogs', `log_${contest.id}_voting_started`), {
-            contestId: contest.id,
-            action: 'VOTING_STARTED',
-            details: `Registration ended. Generated ${generatedLinksCount} vote links and notified contestants via Telegram.`,
-            timestamp: new Date().toISOString(),
-          }, { merge: true });
-        }
-        continue;
-      }
-
-      // 3. Transition: Voting End -> Stop votes, Lock leaderboard, Calculate final results, Mark contest completed
+      // 2. Transition: Voting End Date reached -> Stop votes, Lock leaderboard, Calculate final results, Mark contest completed
       if (now >= voteEndDate && !contest.votingEndedProcessed) {
         console.log(`[Scheduler] Ending voting and calculating final standings for contest "${contest.title}" (${contest.id})`);
 

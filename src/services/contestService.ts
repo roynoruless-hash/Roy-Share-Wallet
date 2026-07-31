@@ -34,6 +34,8 @@ export async function getContests(): Promise<Contest[]> {
         registrationStartDate: data.registrationStartDate || '',
         registrationEndDate: data.registrationEndDate || '',
         votingEndDate: data.votingEndDate || '',
+        votingStarted: data.votingStarted || false,
+        votingStartedAt: data.votingStartedAt || '',
         registrationClosedProcessed: data.registrationClosedProcessed || false,
         votingEndedProcessed: data.votingEndedProcessed || false,
         status: data.status || 'active',
@@ -60,13 +62,15 @@ export async function getContests(): Promise<Contest[]> {
 export async function saveContest(contest: Partial<Contest> & { id?: string }): Promise<string> {
   const contestId = contest.id || 'CST' + Math.random().toString(36).substring(2, 9).toUpperCase();
   const contestRef = doc(db, 'contests', contestId);
-  const dataToSave = {
+  const dataToSave: any = {
     title: contest.title || '',
     description: contest.description || '',
     imageUrl: contest.imageUrl || '',
     registrationStartDate: contest.registrationStartDate || new Date().toISOString().split('T')[0],
-    registrationEndDate: contest.registrationEndDate || new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0] + 'T23:59',
+    registrationEndDate: contest.registrationEndDate || '',
     votingEndDate: contest.votingEndDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0] + 'T23:59',
+    votingStarted: contest.votingStarted !== undefined ? contest.votingStarted : false,
+    votingStartedAt: contest.votingStartedAt || '',
     registrationClosedProcessed: contest.registrationClosedProcessed !== undefined ? contest.registrationClosedProcessed : false,
     votingEndedProcessed: contest.votingEndedProcessed !== undefined ? contest.votingEndedProcessed : false,
     status: contest.status || 'active',
@@ -122,7 +126,7 @@ export async function getContestants(contestId?: string): Promise<Contestant[]> 
         description: data.description || '',
         imageUrl: data.imageUrl || '',
         votesCount: Number(data.votesCount) || 0,
-        status: data.status || 'approved',
+        status: data.status || 'pending',
         createdAt: data.createdAt || new Date().toISOString(),
         voteLink: data.voteLink || '',
       });
@@ -151,7 +155,7 @@ export async function saveContestant(contestant: Partial<Contestant> & { id?: st
     description: contestant.description || '',
     imageUrl: contestant.imageUrl || '',
     votesCount: contestant.votesCount !== undefined ? Number(contestant.votesCount) : 0,
-    status: contestant.status || 'approved',
+    status: contestant.status || 'pending',
     createdAt: contestant.createdAt || new Date().toISOString(),
   };
   if (contestant.voteLink !== undefined) {
@@ -314,14 +318,14 @@ export async function submitVote(params: {
     }
 
     const now = new Date();
-    const regEndDate = new Date(contest.registrationEndDate);
-    const voteEndDate = new Date(contest.votingEndDate);
+    const voteEndDate = contest.votingEndDate ? new Date(contest.votingEndDate) : new Date(0);
 
-    if (now < regEndDate) {
-      return { success: false, error: 'Voting has not started yet. Registration is still open.' };
+    if (contest.status === 'completed' || contest.votingEndedProcessed || (contest.votingEndDate && now > voteEndDate)) {
+      return { success: false, error: '🔒 This voting contest has ended. All voting links are now disabled.' };
     }
-    if (now > voteEndDate) {
-      return { success: false, error: '🔒 This voting contest has ended or is currently inactive.' };
+
+    if (!contest.votingStarted && !contest.registrationClosedProcessed && contest.status !== 'active') {
+      return { success: false, error: '⏳ Voting for this contest has not been started yet by the administrator.' };
     }
 
     // Read the contestant
