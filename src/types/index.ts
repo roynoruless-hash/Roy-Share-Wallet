@@ -54,6 +54,18 @@ export interface AdminConfig {
   rewardPerReferral: number;
   selfReferralProtection: boolean;
   duplicateReferralProtection: boolean;
+  referralRewardType?: 'wallet' | 'coins' | 'bonus';
+  referralRewardCredit?: 'automatic' | 'manual';
+  minReferralsBeforeClaim?: number;
+  maxMilestoneLimit?: number;
+  allowOnlyOneClaimPerMilestone?: boolean;
+  resetMilestoneOption?: boolean;
+  requireDeviceVerification?: boolean;
+  requireIpCheck?: boolean;
+  requireFingerprintCheck?: boolean;
+  rejectSameDevice?: boolean;
+  rejectSelfReferral?: boolean;
+  rejectDuplicateBrowser?: boolean;
 
   // Support Settings
   supportUsername: string;

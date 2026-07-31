@@ -44,6 +44,18 @@ export const DEFAULT_CONFIG: AdminConfig = {
   rewardPerReferral: 5,
   selfReferralProtection: true,
   duplicateReferralProtection: true,
+  referralRewardType: 'wallet',
+  referralRewardCredit: 'automatic',
+  minReferralsBeforeClaim: 0,
+  maxMilestoneLimit: 100,
+  allowOnlyOneClaimPerMilestone: true,
+  resetMilestoneOption: false,
+  requireDeviceVerification: true,
+  requireIpCheck: true,
+  requireFingerprintCheck: true,
+  rejectSameDevice: true,
+  rejectSelfReferral: true,
+  rejectDuplicateBrowser: true,
 
   // Support Settings
   supportUsername: '@royshare',
