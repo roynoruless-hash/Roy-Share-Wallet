@@ -11,6 +11,7 @@ interface HeaderProps {
   setIsMobileOpen: (open: boolean) => void;
   activeTabTitle: string;
   hasUnsavedChanges: boolean;
+  sessionTimeLeft?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,6 +23,7 @@ export const Header: React.FC<HeaderProps> = ({
   setIsMobileOpen,
   activeTabTitle,
   hasUnsavedChanges,
+  sessionTimeLeft = 10800,
 }) => {
   return (
     <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-slate-800/80 px-4 py-3 sm:px-6">
@@ -78,6 +80,19 @@ export const Header: React.FC<HeaderProps> = ({
               <CheckCircle2 className="w-3.5 h-3.5" />
               <span>Firestore Active</span>
             </div>
+          </div>
+
+          {/* Session Timer Badge */}
+          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700/60 text-xs">
+            <span className="text-slate-400">Session:</span>
+            <span className="text-sky-400 font-mono font-bold tracking-wider">
+              {(() => {
+                const h = Math.floor(sessionTimeLeft / 3600);
+                const m = Math.floor((sessionTimeLeft % 3600) / 60);
+                const s = sessionTimeLeft % 60;
+                return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+              })()}
+            </span>
           </div>
 
           {/* Unsaved Badge */}

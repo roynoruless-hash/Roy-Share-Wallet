@@ -64,8 +64,8 @@ export const DEFAULT_CONFIG: AdminConfig = {
   // Security
   maintenanceMode: false,
   allowedAdminIds: '',
-  sessionTimeout: 60,
-  adminPin: 'admin123',
+  sessionTimeout: 180, // Default to 180 minutes (3 hours)
+  adminMobileNumber: '',
   diagnosticError: '',
 
   // Metadata
@@ -151,6 +151,19 @@ export interface LoadConfigResult {
   errorMessage?: string;
 }
 
+const SESSION_STORAGE_KEY = 'royshare_admin_session';
+
+function getSessionToken(): string | null {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return parsed.sessionToken || null;
+    }
+  } catch (e) {}
+  return null;
+}
+
 /**
  * Loads the admin configuration from Firestore settings/config document.
  * Caches loaded config to local storage to preserve form state if Firestore is unavailable.
@@ -167,6 +180,29 @@ export async function loadAdminConfig(): Promise<LoadConfigResult> {
     }
   } catch (e) {
     // ignore JSON parse error
+  }
+
+  const token = getSessionToken();
+  if (token) {
+    try {
+      const res = await fetch('/api/admin/config', {
+        headers: {
+          'x-admin-session-token': token,
+        },
+      });
+      const data = await res.json();
+      if (data.success && data.config) {
+        const merged: AdminConfig = {
+          ...DEFAULT_CONFIG,
+          ...data.config,
+        };
+        const sanitizedMerged = sanitizeFirestoreData(merged);
+        localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(sanitizedMerged));
+        return { config: sanitizedMerged, isError: false };
+      }
+    } catch (err: any) {
+      console.warn('Failed to load admin config from server API:', err);
+    }
   }
 
   try {
@@ -209,7 +245,7 @@ export async function loadAdminConfig(): Promise<LoadConfigResult> {
  * Saves all settings into Firestore collection 'settings', document 'config'.
  * Also updates local storage cache.
  */
-export async function saveAdminConfig(config: AdminConfig): Promise<void> {
+export async function saveAdminConfig(config: AdminConfig, changeOtp?: string): Promise<void> {
   const rawPayload: AdminConfig = {
     ...config,
     updatedAt: new Date().toISOString(),
@@ -222,6 +258,26 @@ export async function saveAdminConfig(config: AdminConfig): Promise<void> {
     localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(payload));
   } catch (e) {
     console.warn('Unable to cache config to local storage:', e);
+  }
+
+  const token = getSessionToken();
+  if (token) {
+    const res = await fetch('/api/admin/config', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-session-token': token,
+      },
+      body: JSON.stringify({ config: payload, changeOtp }),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      if (data.needsOtp) {
+        throw new Error('NEEDS_OTP');
+      }
+      throw new Error(data.error || 'Failed to save configuration via API.');
+    }
+    return;
   }
 
   const configDocRef = doc(db, SETTINGS_COLLECTION, CONFIG_DOC_ID);

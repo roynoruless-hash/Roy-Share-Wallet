@@ -32,6 +32,7 @@ interface SidebarProps {
   onLogout?: () => void;
   isSaving: boolean;
   hasUnsavedChanges: boolean;
+  sessionTimeLeft?: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -43,6 +44,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onLogout,
   isSaving,
   hasUnsavedChanges,
+  sessionTimeLeft = 10800,
 }) => {
   const menuItems = [
     {
@@ -249,6 +251,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Save className="w-4 h-4" />
             <span>{isSaving ? 'Saving Settings...' : 'Save Configuration'}</span>
           </button>
+
+          <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 flex flex-col gap-1.5">
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Admin Session Timer</span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-400 font-medium">Session expires in:</span>
+              <span className="text-xs text-sky-400 font-mono font-black tracking-wider">
+                {(() => {
+                  const h = Math.floor(sessionTimeLeft / 3600);
+                  const m = Math.floor((sessionTimeLeft % 3600) / 60);
+                  const s = sessionTimeLeft % 60;
+                  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                })()}
+              </span>
+            </div>
+          </div>
 
           {onLogout && (
             <button

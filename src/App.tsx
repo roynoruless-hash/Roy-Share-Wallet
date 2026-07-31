@@ -40,8 +40,7 @@ export default function App() {
       const rawSession = localStorage.getItem(SESSION_STORAGE_KEY);
       if (rawSession) {
         const session = JSON.parse(rawSession);
-        const timeoutMs = (DEFAULT_CONFIG.sessionTimeout || 60) * 60 * 1000; // 1 hour default
-        if (session.loggedIn && Date.now() - session.lastActive < timeoutMs) {
+        if (session.loggedIn && session.expiresAt && Date.now() < session.expiresAt) {
           return true;
         }
       }
@@ -52,6 +51,12 @@ export default function App() {
   });
 
   const lastActivityRef = useRef<number>(Date.now());
+
+  // Settings Change Verification OTP States
+  const [isOtpModalOpen, setIsOtpModalOpen] = useState(false);
+  const [settingsChangeOtp, setSettingsChangeOtp] = useState('');
+  const [isVerifyingSettingsChange, setIsVerifyingSettingsChange] = useState(false);
+  const [settingsChangeError, setSettingsChangeError] = useState('');
 
   // Toast Helper
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -97,16 +102,31 @@ export default function App() {
     initConfig();
   }, []);
 
+  const [sessionTimeLeft, setSessionTimeLeft] = useState<number>(3 * 3600);
+
   // Update session active timestamp
   const refreshSessionActivity = () => {
     const now = Date.now();
     lastActivityRef.current = now;
     if (isLoggedIn) {
       try {
+        const rawSession = localStorage.getItem(SESSION_STORAGE_KEY);
+        let token = '';
+        if (rawSession) {
+          token = JSON.parse(rawSession).sessionToken || '';
+        }
+        const expiresAt = now + 3 * 3600 * 1000; // 3 hours sliding window
         localStorage.setItem(
           SESSION_STORAGE_KEY,
-          JSON.stringify({ loggedIn: true, lastActive: now })
+          JSON.stringify({ loggedIn: true, lastActive: now, expiresAt, sessionToken: token })
         );
+
+        // Ping configuration endpoint on server to extend Firestore session sliding window
+        if (token) {
+          fetch('/api/admin/config', {
+            headers: { 'x-admin-session-token': token }
+          }).catch(() => {});
+        }
       } catch (e) {
         // ignore
       }
@@ -123,7 +143,7 @@ export default function App() {
         throttleTimer = setTimeout(() => {
           refreshSessionActivity();
           throttleTimer = null;
-        }, 10000); // throttle to once per 10s
+        }, 15000); // throttle to once per 15s
       }
     };
 
@@ -143,36 +163,65 @@ export default function App() {
     };
   }, [isLoggedIn]);
 
-  // Session Inactivity Interval Check (1 hour / config.sessionTimeout)
+  // Session Inactivity Countdown check (runs every second)
   useEffect(() => {
     if (!isLoggedIn) return;
 
     const interval = setInterval(() => {
-      const timeoutMs = (config.sessionTimeout || 60) * 60 * 1000;
-      if (Date.now() - lastActivityRef.current >= timeoutMs) {
-        handleLogout('Session expired after 1 hour of inactivity.');
+      try {
+        const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const expiresAt = parsed.expiresAt || (Date.now() + 3 * 3600 * 1000);
+          const remainingSeconds = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+          setSessionTimeLeft(remainingSeconds);
+
+          if (remainingSeconds <= 0) {
+            handleLogout('Session expired after 3 hours of inactivity.');
+          }
+        }
+      } catch (e) {
+        // ignore
       }
-    }, 15000);
+    }, 1000);
 
     return () => clearInterval(interval);
-  }, [isLoggedIn, config.sessionTimeout]);
+  }, [isLoggedIn]);
 
-  const handleLoginSuccess = () => {
+  const handleLoginSuccess = async (sessionData?: { sessionToken: string; expiresAt: number }) => {
     setIsLoggedIn(true);
     const now = Date.now();
     lastActivityRef.current = now;
+
+    // Fetch decrypted config from server now that we are logged in
+    setIsLoading(true);
     try {
-      localStorage.setItem(
-        SESSION_STORAGE_KEY,
-        JSON.stringify({ loggedIn: true, lastActive: now })
-      );
-    } catch (e) {
-      console.warn('Could not save login session:', e);
+      const res = await loadAdminConfig();
+      setConfig(res.config);
+      if (res.isError) {
+        showToast(`Firestore unavailable: ${res.errorMessage}. Existing values preserved.`, 'error');
+      }
+    } catch (err: any) {
+      console.error('Failed to load config on login:', err);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleLogout = (reason?: string) => {
+  const handleLogout = async (reason?: string) => {
     setIsLoggedIn(false);
+    try {
+      const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.sessionToken) {
+          await fetch('/api/admin/logout', {
+            method: 'POST',
+            headers: { 'x-admin-session-token': parsed.sessionToken }
+          }).catch(() => {});
+        }
+      }
+    } catch (e) {}
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
     } catch (e) {
@@ -207,6 +256,71 @@ export default function App() {
     return true;
   };
 
+  // Request settings change verification OTP
+  const requestSettingsChangeOtp = async () => {
+    const rawSession = localStorage.getItem(SESSION_STORAGE_KEY);
+    let token = '';
+    if (rawSession) {
+      token = JSON.parse(rawSession).sessionToken || '';
+    }
+    try {
+      const res = await fetch('/api/admin/request-settings-change-otp', {
+        method: 'POST',
+        headers: { 'x-admin-session-token': token }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsOtpModalOpen(true);
+        setSettingsChangeOtp('');
+        setSettingsChangeError('');
+        showToast('🔐 Settings change verification OTP sent to your Telegram Bot!', 'info');
+      } else {
+        showToast(`Failed to request verification OTP: ${data.error}`, 'error');
+      }
+    } catch (err: any) {
+      showToast('Network error while requesting verification OTP.', 'error');
+    }
+  };
+
+  // Verify settings change via OTP and save
+  const handleVerifySettingsChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSettingsChangeError('');
+    if (!settingsChangeOtp.trim() || settingsChangeOtp.trim().length !== 6) {
+      setSettingsChangeError('Please enter a valid 6-digit OTP.');
+      return;
+    }
+
+    setIsVerifyingSettingsChange(true);
+    try {
+      await saveAdminConfig(config, settingsChangeOtp.trim());
+      await logSystemEvent('activity', 'Admin successfully verified settings change via OTP.', {
+        botUsername: config.botUsername,
+        adminTelegramId: config.adminTelegramId,
+      });
+
+      setHasUnsavedChanges(false);
+      setIsOtpModalOpen(false);
+
+      // Automatically register Webhook after saving valid Bot Token
+      if (config.botToken.trim()) {
+        const whRes = await registerWebhook(config.botToken);
+        if (whRes.success) {
+          showToast('✅ Configuration Saved & Webhook Registered Successfully', 'success');
+        } else {
+          showToast(`✅ Config Saved, but Webhook Failed: ${whRes.error || 'Check Bot Token permissions'}`, 'error');
+        }
+      } else {
+        showToast('✅ Configuration Saved Successfully', 'success');
+      }
+    } catch (error: any) {
+      setSettingsChangeError(error.message || 'OTP verification and save failed.');
+      showToast(error.message || 'Failed to save configuration.', 'error');
+    } finally {
+      setIsVerifyingSettingsChange(false);
+    }
+  };
+
   // Save Configuration to Firestore settings/config
   const handleSaveConfiguration = async () => {
     if (!validateConfig()) return;
@@ -233,8 +347,12 @@ export default function App() {
         showToast('✅ Configuration Saved Successfully', 'success');
       }
     } catch (error: any) {
-      console.error('Error saving configuration:', error);
-      showToast(`Save Failed: ${error.message || 'Firestore write error'}. Existing values preserved.`, 'error');
+      if (error.message === 'NEEDS_OTP') {
+        await requestSettingsChangeOtp();
+      } else {
+        console.error('Error saving configuration:', error);
+        showToast(`Save Failed: ${error.message || 'Firestore write error'}. Existing values preserved.`, 'error');
+      }
     } finally {
       setIsSaving(false);
     }
@@ -334,6 +452,7 @@ export default function App() {
         onLogout={() => handleLogout()}
         isSaving={isSaving}
         hasUnsavedChanges={hasUnsavedChanges}
+        sessionTimeLeft={sessionTimeLeft}
       />
 
       {/* Main Content Area */}
@@ -348,6 +467,7 @@ export default function App() {
           setIsMobileOpen={setIsMobileOpen}
           activeTabTitle={getActiveTabTitle()}
           hasUnsavedChanges={hasUnsavedChanges}
+          sessionTimeLeft={sessionTimeLeft}
         />
 
         {/* Dynamic Body Content View */}
@@ -453,6 +573,68 @@ export default function App() {
           {activeTab === 'logs' && <LogsView showToast={showToast} />}
         </main>
       </div>
+
+      {/* Settings Change OTP Modal */}
+      {isOtpModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-sm p-6 rounded-2xl bg-slate-900 border border-slate-800/80 shadow-2xl space-y-4">
+            <div className="text-center space-y-2">
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400">
+                <Loader2 className="w-6 h-6 animate-pulse" />
+              </div>
+              <h3 className="text-lg font-bold text-white">Verify Settings Change</h3>
+              <p className="text-xs text-slate-400">
+                You are modifying sensitive system settings. Please enter the 6-digit OTP sent to your admin Telegram Bot.
+              </p>
+            </div>
+
+            <form onSubmit={handleVerifySettingsChange} className="space-y-4">
+              <div className="space-y-1">
+                <input
+                  type="text"
+                  maxLength={6}
+                  value={settingsChangeOtp}
+                  onChange={(e) => setSettingsChangeOtp(e.target.value)}
+                  placeholder="123456"
+                  className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-800 text-center text-lg font-black tracking-[0.4em] text-sky-400 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 font-mono"
+                  disabled={isVerifyingSettingsChange}
+                />
+              </div>
+
+              {settingsChangeError && (
+                <p className="text-xs text-rose-400 text-center font-medium">
+                  {settingsChangeError}
+                </p>
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsOtpModalOpen(false)}
+                  className="w-1/3 py-2.5 rounded-xl border border-slate-800/80 text-xs font-bold hover:bg-slate-800 text-slate-300 transition"
+                  disabled={isVerifyingSettingsChange}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isVerifyingSettingsChange}
+                  className="flex-1 py-2.5 rounded-xl font-bold text-xs bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+                >
+                  {isVerifyingSettingsChange ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Verifying...</span>
+                    </>
+                  ) : (
+                    <span>Verify & Save</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Global Notification Toast */}
       <Toast toasts={toasts} onDismiss={dismissToast} />

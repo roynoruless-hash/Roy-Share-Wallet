@@ -75,7 +75,7 @@ export interface AdminConfig {
   maintenanceMode: boolean;
   allowedAdminIds: string;
   sessionTimeout: number;
-  adminPin?: string;
+  adminMobileNumber?: string;
   diagnosticError?: string;
 
   // Metadata

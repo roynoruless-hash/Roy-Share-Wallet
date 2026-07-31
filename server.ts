@@ -8,6 +8,8 @@ import { approveWithdrawal, rejectWithdrawal } from './src/server/withdrawalHand
 import { approveFeedbackReview, rejectFeedbackReview } from './src/server/feedbackHandler';
 import { doc, setDoc, collection, query, where, getDocs, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { db } from './src/services/firebase';
+import crypto from 'crypto';
+import { encrypt, decrypt } from './src/utils/encryption';
 
 async function startServer() {
   const app = express();
@@ -730,6 +732,409 @@ async function startServer() {
       } else {
         return res.status(400).json(result);
       }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ==========================================
+  // SECURE ADMIN TELEGRAM OTP AUTHENTICATION ENDPOINTS
+  // ==========================================
+
+  // Helper to load settings/config and decrypt sensitive fields
+  async function getDecryptedConfig() {
+    try {
+      const configDoc = await getDoc(doc(db, 'settings', 'config'));
+      if (configDoc.exists()) {
+        const data = configDoc.data() || {};
+        return {
+          ...data,
+          botToken: decrypt(data.botToken || ''),
+          adminChatId: decrypt(data.adminChatId || ''),
+          adminMobileNumber: decrypt(data.adminMobileNumber || ''),
+        };
+      }
+    } catch (err) {
+      console.error('Error fetching decrypted config:', err);
+    }
+    return null;
+  }
+
+  // Middleware to require a valid admin session
+  async function requireAdminSession(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const token = req.headers['x-admin-session-token'] as string;
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'Unauthorized: Session token missing.' });
+    }
+
+    try {
+      const sessionDoc = await getDoc(doc(db, 'adminSessions', 'active_session'));
+      if (!sessionDoc.exists()) {
+        return res.status(401).json({ success: false, error: 'Unauthorized: Session invalid.' });
+      }
+
+      const data = sessionDoc.data();
+      if (data.sessionToken !== token) {
+        return res.status(401).json({ success: false, error: 'Unauthorized: Session invalid.' });
+      }
+
+      if (Date.now() > data.expiresAt) {
+        return res.status(401).json({ success: false, error: 'Unauthorized: Session expired.' });
+      }
+
+      // Update lastActive and extend expiresAt (3 hours sliding window)
+      const newExpiresAt = Date.now() + 3 * 3600 * 1000;
+      await setDoc(doc(db, 'adminSessions', 'active_session'), {
+        ...data,
+        lastActive: Date.now(),
+        expiresAt: newExpiresAt
+      }, { merge: true });
+
+      next();
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: 'Server error validating session: ' + err.message });
+    }
+  }
+
+  // Check setup/configuration status
+  app.get('/api/admin/status', async (req, res) => {
+    try {
+      const config = await getDecryptedConfig();
+      if (config && config.botToken && config.adminChatId && config.adminMobileNumber) {
+        return res.json({ isConfigured: true });
+      }
+      return res.json({ isConfigured: false });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Setup Step 1: Save & Verify Bot Token + Chat ID
+  app.post('/api/admin/setup', async (req, res) => {
+    try {
+      const { botToken, adminChatId } = req.body;
+      const cleanToken = botToken?.trim();
+      const cleanChatId = adminChatId?.trim();
+
+      if (!cleanToken || !cleanChatId) {
+        return res.status(400).json({ success: false, error: 'Both Bot Token and Chat ID are required.' });
+      }
+
+      // Verify Bot Token via Telegram API
+      const getMeRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`);
+      const getMeData = await getMeRes.json();
+      if (!getMeData.ok) {
+        return res.status(400).json({ success: false, error: 'Invalid Bot Token. ' + (getMeData.description || '') });
+      }
+
+      const botUser = getMeData.result;
+
+      // Send a verification ping message to ensure Chat ID works
+      const pingRes = await fetch(`https://api.telegram.org/bot${cleanToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: cleanChatId,
+          text: `🤖 <b>Roy Share Bot: Admin Setup Verification</b>\n\nYour Telegram Chat ID has been verified successfully!`,
+          parse_mode: 'HTML',
+        }),
+      });
+      const pingData = await pingRes.json();
+      if (!pingData.ok) {
+        return res.status(400).json({ success: false, error: 'Could not send verification message. Ensure you have started the bot on Telegram.' });
+      }
+
+      // Save credentials encrypted
+      await setDoc(doc(db, 'settings', 'config'), {
+        botToken: encrypt(cleanToken),
+        adminChatId: encrypt(cleanChatId),
+        botName: botUser.first_name,
+        botUsername: botUser.username,
+        botId: String(botUser.id),
+        botTokenValidated: true,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+
+      return res.json({ success: true, message: 'Bot details and Chat ID saved and verified!' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Setup Step 2: Save Admin Mobile & Send OTP
+  app.post('/api/admin/setup-mobile', async (req, res) => {
+    try {
+      const { adminMobileNumber } = req.body;
+      const cleanMobile = String(adminMobileNumber || '').replace(/\D/g, '');
+
+      if (!cleanMobile || cleanMobile.length < 10) {
+        return res.status(400).json({ success: false, error: 'Invalid mobile number. Please enter a valid 10-digit number.' });
+      }
+
+      // Save Admin Mobile Number encrypted
+      await setDoc(doc(db, 'settings', 'config'), {
+        adminMobileNumber: encrypt(cleanMobile),
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+
+      // Generate 6-digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
+
+      await setDoc(doc(db, 'adminOtps', 'admin_login_otp'), {
+        otp,
+        expiresAt,
+        attempts: 0,
+        createdAt: new Date().toISOString()
+      });
+
+      // Get configuration to send OTP
+      const decryptedConfig = await getDecryptedConfig();
+      if (!decryptedConfig || !decryptedConfig.botToken || !decryptedConfig.adminChatId) {
+        return res.status(400).json({ success: false, error: 'Bot and Chat ID must be configured first.' });
+      }
+
+      // Send OTP via bot
+      const text = `🔐 <b>Roy Share Admin Login Setup</b>\n\nYour Setup Verification OTP is:\n<b>${otp}</b>\n\nValid for 5 minutes.`;
+      await sendTelegramMessage(decryptedConfig.botToken, decryptedConfig.adminChatId, text);
+
+      return res.json({ success: true, message: 'OTP sent successfully!' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Send login OTP (when admin is already configured)
+  app.post('/api/admin/send-otp', async (req, res) => {
+    try {
+      const { mobile } = req.body;
+      const cleanMobile = String(mobile || '').replace(/\D/g, '');
+
+      if (!cleanMobile) {
+        return res.status(400).json({ success: false, error: 'Mobile number is required.' });
+      }
+
+      // Check lockout status
+      const lockoutDoc = await getDoc(doc(db, 'adminLoginAttempts', 'admin_lockout'));
+      if (lockoutDoc.exists()) {
+        const lockData = lockoutDoc.data();
+        if (lockData.lockedUntil && lockData.lockedUntil > Date.now()) {
+          const minutesLeft = Math.ceil((lockData.lockedUntil - Date.now()) / (60 * 1000));
+          return res.status(403).json({ success: false, error: `Login is temporarily locked due to 5 wrong attempts. Please try again in ${minutesLeft} minutes.` });
+        }
+      }
+
+      const decryptedConfig = await getDecryptedConfig();
+      if (!decryptedConfig || !decryptedConfig.adminMobileNumber) {
+        return res.status(400).json({ success: false, error: 'Admin is not configured yet.' });
+      }
+
+      if (decryptedConfig.adminMobileNumber !== cleanMobile) {
+        return res.status(400).json({ success: false, error: 'Unauthorized: Mobile number does not match the configured admin number.' });
+      }
+
+      // Generate 6-digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
+
+      await setDoc(doc(db, 'adminOtps', 'admin_login_otp'), {
+        otp,
+        expiresAt,
+        attempts: 0,
+        createdAt: new Date().toISOString()
+      });
+
+      // Send OTP
+      const text = `🔐 <b>Roy Share Admin Login</b>\n\nOTP:\n<b>${otp}</b>\n\nValid for 5 minutes.`;
+      await sendTelegramMessage(decryptedConfig.botToken, decryptedConfig.adminChatId, text);
+
+      return res.json({ success: true, message: 'OTP sent via Telegram Bot.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Verify OTP and issue secure session
+  app.post('/api/admin/verify-otp', async (req, res) => {
+    try {
+      const { otp } = req.body;
+      const cleanOtp = String(otp || '').trim();
+
+      if (!cleanOtp) {
+        return res.status(400).json({ success: false, error: 'OTP is required.' });
+      }
+
+      // Check lockout status
+      const lockoutDoc = await getDoc(doc(db, 'adminLoginAttempts', 'admin_lockout'));
+      let lockoutData = lockoutDoc.exists() ? lockoutDoc.data() : { failedAttempts: 0, lockedUntil: 0 };
+      if (lockoutData.lockedUntil && lockoutData.lockedUntil > Date.now()) {
+        const minutesLeft = Math.ceil((lockoutData.lockedUntil - Date.now()) / (60 * 1000));
+        return res.status(403).json({ success: false, error: `Login is locked. Please try again in ${minutesLeft} minutes.` });
+      }
+
+      // Fetch active OTP
+      const otpDoc = await getDoc(doc(db, 'adminOtps', 'admin_login_otp'));
+      if (!otpDoc.exists()) {
+        return res.status(400).json({ success: false, error: 'OTP has expired or is not found. Please request a new OTP.' });
+      }
+
+      const otpData = otpDoc.data();
+      if (Date.now() > otpData.expiresAt) {
+        return res.status(400).json({ success: false, error: 'OTP has expired. Please request a new OTP.' });
+      }
+
+      if (otpData.otp !== cleanOtp) {
+        // Increment failed attempts
+        const newFailedAttempts = (lockoutData.failedAttempts || 0) + 1;
+        let newLockedUntil = 0;
+        let errorMsg = `Invalid OTP. Attempts left: ${5 - newFailedAttempts}`;
+
+        if (newFailedAttempts >= 5) {
+          newLockedUntil = Date.now() + 15 * 60 * 1000; // 15 mins
+          errorMsg = 'Too many wrong attempts. Login locked for 15 minutes.';
+        }
+
+        await setDoc(doc(db, 'adminLoginAttempts', 'admin_lockout'), {
+          failedAttempts: newFailedAttempts,
+          lockedUntil: newLockedUntil,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+
+        return res.status(400).json({ success: false, error: errorMsg, attemptsLeft: 5 - newFailedAttempts });
+      }
+
+      // Success: clear lockout
+      await setDoc(doc(db, 'adminLoginAttempts', 'admin_lockout'), {
+        failedAttempts: 0,
+        lockedUntil: 0,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+
+      // Generate session
+      const sessionToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = Date.now() + 3 * 3600 * 1000; // 3 hours
+
+      await setDoc(doc(db, 'adminSessions', 'active_session'), {
+        sessionToken,
+        lastActive: Date.now(),
+        expiresAt,
+        createdAt: new Date().toISOString()
+      });
+
+      // Clear OTP
+      await deleteDoc(doc(db, 'adminOtps', 'admin_login_otp'));
+
+      return res.json({ success: true, sessionToken, expiresAt });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Admin Logout
+  app.post('/api/admin/logout', async (req, res) => {
+    try {
+      await deleteDoc(doc(db, 'adminSessions', 'active_session'));
+      return res.json({ success: true, message: 'Logged out successfully.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Request settings change verification OTP
+  app.post('/api/admin/request-settings-change-otp', requireAdminSession, async (req, res) => {
+    try {
+      const decryptedConfig = await getDecryptedConfig();
+      if (!decryptedConfig || !decryptedConfig.botToken || !decryptedConfig.adminChatId) {
+        return res.status(400).json({ success: false, error: 'Bot is not fully configured.' });
+      }
+
+      // Generate settings update OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
+
+      await setDoc(doc(db, 'adminOtps', 'admin_settings_change_otp'), {
+        otp,
+        expiresAt,
+        createdAt: new Date().toISOString()
+      });
+
+      // Send OTP via bot
+      const text = `🔐 <b>Roy Share Admin Settings Change</b>\n\nYour OTP to verify credentials update is:\n<b>${otp}</b>\n\nValid for 5 minutes.`;
+      await sendTelegramMessage(decryptedConfig.botToken, decryptedConfig.adminChatId, text);
+
+      return res.json({ success: true, message: 'Settings change verification OTP sent.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Load Admin Config (Protected)
+  app.get('/api/admin/config', requireAdminSession, async (req, res) => {
+    try {
+      const config = await getDecryptedConfig();
+      return res.json({ success: true, config: config || {} });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Save Admin Config (Protected)
+  app.post('/api/admin/config', requireAdminSession, async (req, res) => {
+    try {
+      const { config, changeOtp } = req.body;
+      if (!config) {
+        return res.status(400).json({ success: false, error: 'Config is required.' });
+      }
+
+      const currentConfig = await getDecryptedConfig();
+
+      const isSensitiveChanged = currentConfig && (
+        (config.botToken && config.botToken !== currentConfig.botToken) ||
+        (config.adminChatId && config.adminChatId !== currentConfig.adminChatId) ||
+        (config.adminMobileNumber && config.adminMobileNumber !== currentConfig.adminMobileNumber)
+      );
+
+      if (isSensitiveChanged) {
+        if (!changeOtp) {
+          return res.status(400).json({ success: false, needsOtp: true, error: 'OTP verification is required to change credentials.' });
+        }
+
+        // Verify the settings change OTP
+        const otpDoc = await getDoc(doc(db, 'adminOtps', 'admin_settings_change_otp'));
+        if (!otpDoc.exists()) {
+          return res.status(400).json({ success: false, error: 'Verification OTP has not been sent or has expired.' });
+        }
+
+        const otpData = otpDoc.data();
+        if (Date.now() > otpData.expiresAt) {
+          return res.status(400).json({ success: false, error: 'Verification OTP has expired.' });
+        }
+
+        if (otpData.otp !== String(changeOtp).trim()) {
+          return res.status(400).json({ success: false, error: 'Invalid verification OTP.' });
+        }
+
+        // Clean OTP after verification
+        await deleteDoc(doc(db, 'adminOtps', 'admin_settings_change_otp'));
+      }
+
+      // Save with encrypted credentials
+      const savePayload = { ...config };
+      if (savePayload.botToken) savePayload.botToken = encrypt(savePayload.botToken);
+      if (savePayload.adminChatId) savePayload.adminChatId = encrypt(savePayload.adminChatId);
+      if (savePayload.adminMobileNumber) savePayload.adminMobileNumber = encrypt(savePayload.adminMobileNumber.replace(/\D/g, ''));
+
+      // If bot token is decrypted and saved, update validation status
+      if (savePayload.botToken && savePayload.botToken !== currentConfig?.botToken) {
+        savePayload.botTokenValidated = true;
+      }
+
+      await setDoc(doc(db, 'settings', 'config'), {
+        ...savePayload,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+
+      return res.json({ success: true, message: 'Configuration saved successfully.' });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
