@@ -1392,12 +1392,27 @@ async function startServer() {
       const botUsername = config.botUsername || 'RoyShareWalletBot';
       const uniqueLink = `https://t.me/${botUsername}?start=vote_${contestId}_${contestantId}`;
 
-      const messageText = `🏁 <b>Your Voting Link is active!</b>\n\n` +
-        `🏆 Contest: <b>${contest.title}</b>\n` +
-        `👤 Contestant: <b>${contestant.name}</b>\n\n` +
-        `Here is your unique voting link. Share this link with your friends, groups, and channels to gather votes:\n` +
-        `👉 ${uniqueLink}\n\n` +
-        `Good luck! 🚀`;
+      // Save permanently in voteLinks collection and update contestant doc
+      const linkId = `vote_${contestId}_${contestantId}`;
+      await setDoc(doc(db, 'voteLinks', linkId), {
+        id: linkId,
+        contestId,
+        contestantId,
+        voteLink: uniqueLink,
+        createdAt: new Date().toISOString()
+      }, { merge: true });
+
+      await setDoc(doc(db, 'contestants', contestantId), {
+        voteLink: uniqueLink
+      }, { merge: true });
+
+      const messageText = `🎉 <b>Voting Started!</b>\n\n` +
+        `Hello ${contestant.name},\n\n` +
+        `Your personal vote link is ready.\n\n` +
+        `🔗 ${uniqueLink}\n\n` +
+        `📢 Share this link with your friends.\n\n` +
+        `Only verified users can vote.\n\n` +
+        `Good Luck! 🏆`;
 
       const response = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
         method: 'POST',

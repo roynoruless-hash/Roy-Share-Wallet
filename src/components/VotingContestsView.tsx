@@ -24,9 +24,12 @@ import {
   Link,
   Share2,
   Send,
-  Loader2
+  Loader2,
+  Sparkles,
+  Clock,
+  CheckCircle2
 } from 'lucide-react';
-import { Contest, Contestant, VoteLog, AdminConfig } from '../types';
+import { Contest, Contestant, VoteLog, AdminConfig, ContestLog } from '../types';
 import {
   getContests,
   saveContest,
@@ -35,7 +38,10 @@ import {
   saveContestant,
   deleteContestant,
   getVoteLogs,
-  submitVote
+  getVoteLinks,
+  getContestLogs,
+  saveVoteLink,
+  addContestLog
 } from '../services/contestService';
 
 interface VotingContestsViewProps {
@@ -43,16 +49,136 @@ interface VotingContestsViewProps {
   showToast: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
+export function getContestPhase(contest: Contest) {
+  const now = new Date();
+  const regStart = contest.registrationStartDate
+    ? new Date(contest.registrationStartDate + (contest.registrationStartDate.includes('T') ? '' : 'T00:00:00'))
+    : new Date(0);
+  const regEnd = contest.registrationEndDate ? new Date(contest.registrationEndDate) : new Date(0);
+  const voteEnd = contest.votingEndDate ? new Date(contest.votingEndDate) : new Date(0);
+
+  if (contest.status === 'completed' || contest.votingEndedProcessed) {
+    return {
+      code: 'winners_announced',
+      label: 'Winners Announced',
+      icon: '🏆',
+      colorClass: 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+    };
+  }
+  if (contest.status === 'paused') {
+    return {
+      code: 'paused',
+      label: 'Paused',
+      icon: '⏸',
+      colorClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+    };
+  }
+  if (now < regStart) {
+    return {
+      code: 'registration_pending',
+      label: 'Registration Upcoming',
+      icon: '⏳',
+      colorClass: 'bg-slate-800 text-slate-300 border border-slate-700'
+    };
+  }
+  if (now >= regStart && now <= regEnd) {
+    return {
+      code: 'registration_open',
+      label: 'Registration Open',
+      icon: '🟢',
+      colorClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+    };
+  }
+  if (now > regEnd && now <= voteEnd) {
+    return {
+      code: 'voting_open',
+      label: 'Voting Open',
+      icon: '🔵',
+      colorClass: 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+    };
+  }
+  if (now > voteEnd) {
+    return {
+      code: 'voting_closed',
+      label: 'Voting Closed',
+      icon: '🔴',
+      colorClass: 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+    };
+  }
+  return {
+    code: 'registration_closed',
+    label: 'Registration Closed',
+    icon: '🟡',
+    colorClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+  };
+}
+
+export function getTimeRemainingString(targetDateStr: string, startDateStr?: string) {
+  if (!targetDateStr) return 'N/A';
+  const now = new Date().getTime();
+  const target = new Date(targetDateStr).getTime();
+
+  if (startDateStr) {
+    const start = new Date(startDateStr + (startDateStr.includes('T') ? '' : 'T00:00:00')).getTime();
+    if (now < start) {
+      const diffStart = start - now;
+      const days = Math.floor(diffStart / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diffStart % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const mins = Math.floor((diffStart % (1000 * 60 * 60)) / (1000 * 60));
+      const secs = Math.floor((diffStart % (1000 * 60)) / 1000);
+      return `Starts in ${days > 0 ? `${days}d ` : ''}${hours.toString().padStart(2, '0')}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
+    }
+  }
+
+  if (now > target) {
+    return 'Ended';
+  }
+
+  const diff = target - now;
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  const secs = Math.floor((diff % (1000 * 60)) / 1000);
+
+  return `${days > 0 ? `${days}d ` : ''}${hours.toString().padStart(2, '0')}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
+}
+
 export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, showToast }) => {
   const [contests, setContests] = useState<Contest[]>([]);
   const [contestants, setContestants] = useState<Contestant[]>([]);
   const [voteLogs, setVoteLogs] = useState<VoteLog[]>([]);
+  const [contestLogs, setContestLogs] = useState<ContestLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [lastUpdatedTime, setLastUpdatedTime] = useState(new Date().toLocaleTimeString());
 
-  // Active Tab within Voting System
+  // 1-second live ticker
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Active Sub-Tab
   const [activeSubTab, setActiveSubTab] = useState<'contests' | 'contestants' | 'logs'>('contests');
 
+  // Loading indicator for resending Telegram link
   const [isResending, setIsResending] = useState<string | null>(null);
+
+  // Get Admin session token from storage
+  const getAdminSessionToken = (): string => {
+    try {
+      const raw = localStorage.getItem('royshare_admin_session') || sessionStorage.getItem('royshare_admin_session');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return parsed?.sessionToken || '';
+      }
+    } catch (err) {
+      console.error('Error reading admin session:', err);
+    }
+    return '';
+  };
 
   const handleCopyLink = (link: string) => {
     navigator.clipboard.writeText(link);
@@ -61,14 +187,16 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
   const handleShareLink = (title: string, link: string) => {
     if (navigator.share) {
-      navigator.share({
-        title: title,
-        text: `Register for the voting contest "${title}" here!`,
-        url: link
-      }).catch(() => {
-        navigator.clipboard.writeText(link);
-        showToast('Link copied to clipboard!', 'success');
-      });
+      navigator
+        .share({
+          title: title,
+          text: `Register for the voting contest "${title}" here!`,
+          url: link
+        })
+        .catch(() => {
+          navigator.clipboard.writeText(link);
+          showToast('Link copied to clipboard!', 'success');
+        });
     } else {
       navigator.clipboard.writeText(link);
       showToast('Link copied to clipboard!', 'success');
@@ -80,19 +208,30 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       showToast('This contestant has no Telegram ID registered.', 'error');
       return;
     }
-    
+
     setIsResending(contestant.id);
     try {
+      const token = getAdminSessionToken();
       const response = await fetch('/api/admin/contestants/resend-link', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-session-token': token
+        },
         body: JSON.stringify({
           contestantId: contestant.id,
-          contestId: contestant.contestId,
-        }),
+          contestId: contestant.contestId
+        })
       });
-      
+
       const data = await response.json();
+
+      if (response.status === 401 || (data.error && data.error.toLowerCase().includes('unauthorized'))) {
+        showToast('Session expired or missing. Refreshing admin session...', 'error');
+        window.dispatchEvent(new Event('admin-session-expired'));
+        return;
+      }
+
       if (data.success) {
         showToast(data.message || 'Voting link sent successfully!', 'success');
       } else {
@@ -111,6 +250,13 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   const [editingContest, setEditingContest] = useState<Contest | null>(null);
   const [isSavingContest, setIsSavingContest] = useState(false);
   const [isFormDirty, setIsFormDirty] = useState(false);
+
+  // Form states - Contestants
+  const [showContestantForm, setShowContestantForm] = useState(false);
+  const [editingContestant, setEditingContestant] = useState<Contestant | null>(null);
+  const [isSavingContestant, setIsSavingContestant] = useState(false);
+  const [selectedContestId, setSelectedContestId] = useState<string>('');
+
   const [contestForm, setContestForm] = useState({
     title: '',
     description: '',
@@ -129,7 +275,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   // Warn on page reload/navigation if form is dirty
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (showContestForm && isFormDirty) {
+      if ((showContestForm || showContestantForm) && isFormDirty) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -138,13 +284,15 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [showContestForm, isFormDirty]);
+  }, [showContestForm, showContestantForm, isFormDirty]);
 
   // Safely cancel contest form
   const handleCancelContestForm = () => {
     if (isSavingContest) return;
     if (isFormDirty) {
-      const confirmLeave = window.confirm('You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?');
+      const confirmLeave = window.confirm(
+        'You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?'
+      );
       if (!confirmLeave) return;
     }
     setIsFormDirty(false);
@@ -154,20 +302,26 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
   // Safely change active subtab
   const handleSubTabChange = (tab: 'contests' | 'contestants' | 'logs') => {
-    if (showContestForm && isFormDirty) {
-      const confirmLeave = window.confirm('You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?');
+    if ((showContestForm || showContestantForm) && isFormDirty) {
+      const confirmLeave = window.confirm(
+        'You have unsaved changes in the editor. Are you sure you want to discard your changes?'
+      );
       if (!confirmLeave) return;
     }
     setIsFormDirty(false);
     setShowContestForm(false);
+    setShowContestantForm(false);
     setEditingContest(null);
+    setEditingContestant(null);
     setActiveSubTab(tab);
   };
 
   // Safely start new contest form
   const handleNewContestClick = () => {
     if (showContestForm && isFormDirty) {
-      const confirmLeave = window.confirm('You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?');
+      const confirmLeave = window.confirm(
+        'You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?'
+      );
       if (!confirmLeave) return;
     }
     setIsFormDirty(false);
@@ -189,10 +343,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     setShowContestForm(true);
   };
 
-  // Form states - Contestants
-  const [showContestantForm, setShowContestantForm] = useState(false);
-  const [editingContestant, setEditingContestant] = useState<Contestant | null>(null);
-  const [selectedContestId, setSelectedContestId] = useState<string>('');
+  // Contestant form data state
   const [contestantForm, setContestantForm] = useState({
     contestId: '',
     name: '',
@@ -203,6 +354,19 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     votesCount: 0,
     status: 'approved' as Contestant['status']
   });
+
+  const handleCancelContestantForm = () => {
+    if (isSavingContestant) return;
+    if (isFormDirty) {
+      const confirmLeave = window.confirm(
+        'You have unsaved changes in the Contestant editor. Are you sure you want to discard your changes?'
+      );
+      if (!confirmLeave) return;
+    }
+    setIsFormDirty(false);
+    setShowContestantForm(false);
+    setEditingContestant(null);
+  };
 
   // Filter and Search states
   const [contestSearch, setContestSearch] = useState('');
@@ -217,10 +381,13 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       const cList = await getContests();
       const cnList = await getContestants();
       const lList = await getVoteLogs();
+      const cLogList = await getContestLogs();
 
       setContests(cList);
       setContestants(cnList);
       setVoteLogs(lList);
+      setContestLogs(cLogList);
+      setLastUpdatedTime(new Date().toLocaleTimeString());
 
       if (cList.length > 0 && !selectedContestId) {
         setSelectedContestId(cList[0].id);
@@ -228,6 +395,53 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     } catch (err) {
       console.error(err);
       showToast('Failed to load Voting System data', 'error');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGenerateAndSendAllLinks = async (contest: Contest) => {
+    const contestContestants = contestants.filter(cn => cn.contestId === contest.id && cn.status === 'approved');
+    if (contestContestants.length === 0) {
+      showToast('No approved contestants found for this contest.', 'info');
+      return;
+    }
+
+    const confirmGen = window.confirm(
+      `Generate and send unique voting links via Telegram to all ${contestContestants.length} approved contestants?`
+    );
+    if (!confirmGen) return;
+
+    setIsLoading(true);
+    try {
+      let successCount = 0;
+      const botUsername = config.botUsername || 'RoyShareWalletBot';
+
+      for (const cn of contestContestants) {
+        const uniqueLink = `https://t.me/${botUsername}?start=vote_${contest.id}_${cn.id}`;
+        await saveVoteLink({
+          contestId: contest.id,
+          contestantId: cn.id,
+          voteLink: uniqueLink,
+        });
+
+        if (cn.telegramId) {
+          await handleResendVotingLink(cn);
+          successCount++;
+        }
+      }
+
+      await addContestLog({
+        contestId: contest.id,
+        action: 'ADMIN_GENERATE_LINKS',
+        details: `Admin manually generated and dispatched vote links to ${successCount} contestants.`,
+      });
+
+      showToast(`Voting links generated & dispatched for ${contestContestants.length} contestants!`, 'success');
+      await reloadAllData();
+    } catch (err: any) {
+      console.error('Error generating links:', err);
+      showToast('Failed to complete link generation.', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -250,7 +464,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     setIsSavingContest(true);
 
     try {
-      const savedId = await saveContest({
+      await saveContest({
         ...(editingContest ? { id: editingContest.id } : {}),
         title: contestForm.title,
         description: contestForm.description,
@@ -281,8 +495,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   };
 
   // Handle Contestant Save
-  const handleContestantSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleContestantSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (isSavingContestant) return;
+
     const targetContestId = contestantForm.contestId || selectedContestId;
     if (!targetContestId) {
       showToast('Please select or create a contest first', 'error');
@@ -294,6 +510,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     }
 
     const targetContest = contests.find(c => c.id === targetContestId);
+    setIsSavingContestant(true);
 
     try {
       await saveContestant({
@@ -311,12 +528,15 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       });
 
       showToast(editingContestant ? 'Contestant updated successfully!' : 'Contestant added successfully!', 'success');
+      setIsFormDirty(false);
       setShowContestantForm(false);
       setEditingContestant(null);
       reloadAllData();
     } catch (err) {
       console.error(err);
       showToast('Failed to save contestant', 'error');
+    } finally {
+      setIsSavingContestant(false);
     }
   };
 
@@ -345,7 +565,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
         votesCount: next
       });
       showToast(`Votes updated for ${contestant.name} to ${next}`, 'success');
-      setContestants(prev => prev.map(c => c.id === contestant.id ? { ...c, votesCount: next } : c));
+      setContestants(prev => prev.map(c => (c.id === contestant.id ? { ...c, votesCount: next } : c)));
     } catch (err) {
       showToast('Failed to adjust votes count', 'error');
     }
@@ -353,7 +573,12 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
   // Delete Contest Action
   const handleContestDelete = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this contest? All associated contestants and votes will be cleared!')) return;
+    if (
+      !window.confirm(
+        'Are you sure you want to delete this contest? All associated contestants and votes will be cleared!'
+      )
+    )
+      return;
     try {
       await deleteContest(id);
       showToast('Contest deleted successfully', 'success');
@@ -378,7 +603,9 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   // Open Edit Contest Form
   const openEditContest = (contest: Contest) => {
     if (showContestForm && isFormDirty) {
-      const confirmLeave = window.confirm('You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?');
+      const confirmLeave = window.confirm(
+        'You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?'
+      );
       if (!confirmLeave) return;
     }
     setIsFormDirty(false);
@@ -402,6 +629,13 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
   // Open Edit Contestant Form
   const openEditContestant = (contestant: Contestant) => {
+    if (showContestantForm && isFormDirty) {
+      const confirmLeave = window.confirm(
+        'You have unsaved changes in the Contestant editor. Are you sure you want to discard your changes?'
+      );
+      if (!confirmLeave) return;
+    }
+    setIsFormDirty(false);
     setEditingContestant(contestant);
     setContestantForm({
       contestId: contestant.contestId,
@@ -429,8 +663,8 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') {
+        setIsFormDirty(true);
         if (type === 'contest') {
-          setIsFormDirty(true);
           setContestForm(prev => ({ ...prev, imageUrl: reader.result as string }));
         } else {
           setContestantForm(prev => ({ ...prev, imageUrl: reader.result as string }));
@@ -441,13 +675,15 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   };
 
   // Filter Contests and Contestants based on search
-  const filteredContests = contests.filter(c =>
-    c.title.toLowerCase().includes(contestSearch.toLowerCase()) ||
-    c.description.toLowerCase().includes(contestSearch.toLowerCase())
+  const filteredContests = contests.filter(
+    c =>
+      c.title.toLowerCase().includes(contestSearch.toLowerCase()) ||
+      c.description.toLowerCase().includes(contestSearch.toLowerCase())
   );
 
   const filteredContestants = contestants.filter(cn => {
-    const matchesSearch = cn.name.toLowerCase().includes(contestantSearch.toLowerCase()) ||
+    const matchesSearch =
+      cn.name.toLowerCase().includes(contestantSearch.toLowerCase()) ||
       (cn.description && cn.description.toLowerCase().includes(contestantSearch.toLowerCase())) ||
       (cn.username && cn.username.toLowerCase().includes(contestantSearch.toLowerCase()));
 
@@ -456,562 +692,343 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     return matchesSearch && matchesContest;
   });
 
-  const filteredLogs = voteLogs.filter(l =>
-    l.contestTitle.toLowerCase().includes(logSearch.toLowerCase()) ||
-    l.contestantName.toLowerCase().includes(logSearch.toLowerCase()) ||
-    l.voterName.toLowerCase().includes(logSearch.toLowerCase()) ||
-    l.voterTelegramId.includes(logSearch)
+  const filteredLogs = voteLogs.filter(
+    l =>
+      l.contestTitle.toLowerCase().includes(logSearch.toLowerCase()) ||
+      l.contestantName.toLowerCase().includes(logSearch.toLowerCase()) ||
+      l.voterName.toLowerCase().includes(logSearch.toLowerCase()) ||
+      l.voterTelegramId.includes(logSearch)
   );
 
   return (
-    <div className="space-y-6 animate-fade-in font-sans">
+    <div className="w-full max-w-full space-y-4 sm:space-y-6 font-sans overflow-x-hidden">
       {/* Top Banner Information */}
-      <div className="p-4 rounded-2xl bg-gradient-to-r from-sky-500/10 to-blue-600/10 border border-sky-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <div className="p-2.5 rounded-xl bg-sky-500/15 text-sky-400 border border-sky-500/25 mt-0.5 sm:mt-0">
-            <ThumbsUp className="w-5 h-5 animate-pulse" />
+      <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-sky-950/40 border border-slate-800 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-start gap-3.5 min-w-0">
+          <div className="p-2.5 rounded-xl bg-sky-500/15 text-sky-400 border border-sky-500/25 shrink-0 mt-0.5">
+            <ThumbsUp className="w-5 h-5 animate-pulse text-sky-400" />
           </div>
-          <div>
-            <h3 className="text-sm font-bold text-white">Telegram Voting Contest Engine</h3>
-            <p className="text-[11px] text-slate-400 mt-1">
-              Engage users with interactive voting campaigns. Award wallet cash to voters to boost virality!
+          <div className="space-y-1 min-w-0">
+            <h3 className="text-sm sm:text-base font-bold text-white tracking-tight flex items-center gap-2">
+              Telegram Voting Contest Engine
+              <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                PRO
+              </span>
+            </h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Manage interactive voting contests, register participants, and reward users via wallet bonuses automatically.
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
           <button
             onClick={handleNewContestClick}
-            className="flex-1 sm:flex-initial py-2 px-3.5 rounded-xl font-bold text-xs bg-sky-500 hover:bg-sky-400 text-slate-950 transition flex items-center justify-center gap-1.5 cursor-pointer"
+            className="w-full sm:w-auto py-2.5 px-4 rounded-xl font-bold text-xs bg-sky-500 hover:bg-sky-400 text-slate-950 transition flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/15 cursor-pointer"
           >
-            <Plus className="w-3.5 h-3.5 stroke-[3px]" />
-            New Contest
+            <Plus className="w-4 h-4 stroke-[3px]" />
+            <span>New Contest</span>
           </button>
         </div>
       </div>
 
       {/* Primary Sub-Navigation Tabs */}
-      <div className="flex border-b border-slate-800 gap-1.5">
-        <button
-          onClick={() => handleSubTabChange('contests')}
-          className={`px-4 py-3 text-xs font-bold tracking-wide uppercase transition relative flex items-center gap-1.5 ${
-            activeSubTab === 'contests' ? 'text-sky-400' : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Settings className="w-3.5 h-3.5" />
-          Manage Contests ({contests.length})
-          {activeSubTab === 'contests' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-500" />}
-        </button>
-        <button
-          onClick={() => handleSubTabChange('contestants')}
-          className={`px-4 py-3 text-xs font-bold tracking-wide uppercase transition relative flex items-center gap-1.5 ${
-            activeSubTab === 'contestants' ? 'text-sky-400' : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Users className="w-3.5 h-3.5" />
-          Contestants ({contestants.length})
-          {activeSubTab === 'contestants' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-500" />}
-        </button>
-        <button
-          onClick={() => handleSubTabChange('logs')}
-          className={`px-4 py-3 text-xs font-bold tracking-wide uppercase transition relative flex items-center gap-1.5 ${
-            activeSubTab === 'logs' ? 'text-sky-400' : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <History className="w-3.5 h-3.5" />
-          Voting Audit Logs
-          {activeSubTab === 'logs' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-500" />}
-        </button>
+      <div className="border-b border-slate-800/80">
+        <div className="flex gap-2 overflow-x-auto pb-0.5 scrollbar-none">
+          <button
+            onClick={() => handleSubTabChange('contests')}
+            className={`px-3.5 py-2.5 text-xs font-bold transition rounded-xl flex items-center gap-2 shrink-0 cursor-pointer ${
+              activeSubTab === 'contests'
+                ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+            }`}
+          >
+            <Settings className="w-3.5 h-3.5" />
+            <span>Contests</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+              {contests.length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => handleSubTabChange('contestants')}
+            className={`px-3.5 py-2.5 text-xs font-bold transition rounded-xl flex items-center gap-2 shrink-0 cursor-pointer ${
+              activeSubTab === 'contestants'
+                ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>Contestants</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+              {contestants.length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => handleSubTabChange('logs')}
+            className={`px-3.5 py-2.5 text-xs font-bold transition rounded-xl flex items-center gap-2 shrink-0 cursor-pointer ${
+              activeSubTab === 'logs'
+                ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+            }`}
+          >
+            <History className="w-3.5 h-3.5" />
+            <span>Voting Audit Logs</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+              {voteLogs.length}
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* TAB 1: CONTESTS */}
       {activeSubTab === 'contests' && (
         <div className="space-y-4">
           {/* Contest Search/Filter Header */}
-          <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
             <div className="flex-1 relative">
-              <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
+              <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
               <input
                 type="text"
                 value={contestSearch}
                 onChange={e => setContestSearch(e.target.value)}
-                placeholder="Search contests by title or details..."
-                className="w-full pl-9 pr-4 py-2 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                placeholder="Search contests by title or rules..."
+                className="w-full pl-10 pr-4 py-2.5 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500"
               />
             </div>
           </div>
 
-          {/* Create / Edit Contest Dialog */}
-          {showContestForm && (
-            <div className="rounded-2xl bg-slate-900/80 border border-slate-800 shadow-2xl relative overflow-hidden backdrop-blur-sm">
-              {/* Sticky Top Action Bar */}
-              <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md p-4 border-b border-slate-800 rounded-t-2xl flex flex-wrap items-center justify-between gap-3 shadow-md">
-                <div className="flex items-center gap-2">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
-                    <Edit2 className="w-3.5 h-3.5" />
-                    {editingContest ? 'Edit Voting Contest' : 'Configure New Voting Contest'}
-                  </h4>
-                  {isFormDirty && (
-                    <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                      Unsaved Changes
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleCancelContestForm}
-                    disabled={isSavingContest}
-                    className="py-1.5 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-750 text-slate-300 transition cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleContestSubmit()}
-                    disabled={isSavingContest}
-                    className="py-1.5 px-4 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 transition flex items-center gap-1.5 shadow-lg shadow-sky-500/10 cursor-pointer"
-                  >
-                    {isSavingContest ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        <Check className="w-3.5 h-3.5 stroke-[3px]" />
-                        {editingContest ? 'Save Changes' : 'Launch Contest'}
-                      </>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCancelContestForm}
-                    disabled={isSavingContest}
-                    className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer ml-1"
-                    title="Close form"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              <form onSubmit={handleContestSubmit} className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Title */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contest Title *</label>
-                  <input
-                    type="text"
-                    required
-                    value={contestForm.title}
-                    onChange={e => {
-                      setIsFormDirty(true);
-                      setContestForm(prev => ({ ...prev, title: e.target.value }));
-                    }}
-                    placeholder="e.g. Best Telegram Creator of July"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Status */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Default Status</label>
-                  <select
-                    value={contestForm.status}
-                    onChange={e => {
-                      setIsFormDirty(true);
-                      setContestForm(prev => ({ ...prev, status: e.target.value as Contest['status'] }));
-                    }}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="active">Active (Voting Open)</option>
-                    <option value="upcoming">Upcoming</option>
-                    <option value="paused">Paused</option>
-                    <option value="completed">Completed</option>
-                  </select>
-                </div>
-
-                {/* Description */}
-                <div className="space-y-1.5 md:col-span-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Description</label>
-                  <textarea
-                    rows={2}
-                    value={contestForm.description}
-                    onChange={e => {
-                      setIsFormDirty(true);
-                      setContestForm(prev => ({ ...prev, description: e.target.value }));
-                    }}
-                    placeholder="Provide description of the contest, categories, and criteria..."
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Scheduling Parameters */}
-                <div className="space-y-1.5 md:col-span-2">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Registration Start Date</label>
-                      <input
-                        type="date"
-                        required
-                        value={contestForm.registrationStartDate}
-                        onChange={e => {
-                          setIsFormDirty(true);
-                          setContestForm(prev => ({ ...prev, registrationStartDate: e.target.value }));
-                        }}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Registration End Date & Time</label>
-                      <input
-                        type="datetime-local"
-                        required
-                        value={contestForm.registrationEndDate}
-                        onChange={e => {
-                          setIsFormDirty(true);
-                          setContestForm(prev => ({ ...prev, registrationEndDate: e.target.value }));
-                        }}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Voting End Date & Time</label>
-                      <input
-                        type="datetime-local"
-                        required
-                        value={contestForm.votingEndDate}
-                        onChange={e => {
-                          setIsFormDirty(true);
-                          setContestForm(prev => ({ ...prev, votingEndDate: e.target.value }));
-                        }}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Rules */}
-                <div className="space-y-1.5 md:col-span-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Special Rules (Optional)</label>
-                  <input
-                    type="text"
-                    value={contestForm.rules}
-                    onChange={e => {
-                      setIsFormDirty(true);
-                      setContestForm(prev => ({ ...prev, rules: e.target.value }));
-                    }}
-                    placeholder="e.g. Only Indian Mobile verified users can vote. Accounts must be 5+ days old."
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Max Votes and Limit Interval */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Max Total Votes Per User</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={contestForm.maxVotesPerUser}
-                    onChange={e => {
-                      setIsFormDirty(true);
-                      setContestForm(prev => ({ ...prev, maxVotesPerUser: parseInt(e.target.value) || 1 }));
-                    }}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Vote Interval Hours (e.g. 24 for Daily)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={contestForm.voteIntervalHours}
-                    onChange={e => {
-                      setIsFormDirty(true);
-                      setContestForm(prev => ({ ...prev, voteIntervalHours: parseInt(e.target.value) || 0 }));
-                    }}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Reward settings */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                    <Coins className="w-3.5 h-3.5 text-sky-400" />
-                    Voter Reward Cash (₹)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={contestForm.voterRewardAmount}
-                    onChange={e => {
-                      setIsFormDirty(true);
-                      setContestForm(prev => ({ ...prev, voterRewardAmount: parseFloat(e.target.value) || 0 }));
-                    }}
-                    placeholder="0.00"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                    <Award className="w-3.5 h-3.5 text-amber-400" />
-                    Winner Cash/Description Reward (₹)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={contestForm.winnerRewardAmount}
-                    onChange={e => {
-                      setIsFormDirty(true);
-                      setContestForm(prev => ({ ...prev, winnerRewardAmount: parseFloat(e.target.value) || 0 }));
-                    }}
-                    placeholder="0.00"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Banner Image */}
-                <div className="space-y-2 md:col-span-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                    <Image className="w-3.5 h-3.5" /> Banner Cover Image
-                  </label>
-                  <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={e => handleImageUpload(e, 'contest')}
-                      className="hidden"
-                      id="contest-banner-uploader"
-                    />
-                    <label
-                      htmlFor="contest-banner-uploader"
-                      className="cursor-pointer py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-bold flex items-center gap-1.5 transition"
-                    >
-                      Choose Cover Image
-                    </label>
-                    <input
-                      type="text"
-                      value={contestForm.imageUrl}
-                      onChange={e => {
-                        setIsFormDirty(true);
-                        setContestForm(prev => ({ ...prev, imageUrl: e.target.value }));
-                      }}
-                      placeholder="Or enter image URL here..."
-                      className="flex-1 px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500 w-full"
-                    />
-                  </div>
-                  {contestForm.imageUrl && (
-                    <div className="w-full max-h-40 rounded-xl overflow-hidden border border-slate-800 mt-2 bg-slate-950 flex items-center justify-center">
-                      <img
-                        src={contestForm.imageUrl}
-                        alt="Preview"
-                        className="max-h-40 object-cover"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-
-                {/* Bottom Submit */}
-                <div className="md:col-span-2 pt-4 border-t border-slate-800/80 flex items-center justify-between gap-2">
-                  <div className="text-[11px] text-slate-400">
-                    {isFormDirty ? (
-                      <span className="text-amber-400 font-medium flex items-center gap-1">
-                        ⚠️ You have unsaved changes
-                      </span>
-                    ) : (
-                      <span className="text-slate-500">All changes saved</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleCancelContestForm}
-                      disabled={isSavingContest}
-                      className="py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-850 hover:bg-slate-800 text-slate-300 transition cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={isSavingContest}
-                      className="py-2.5 px-5 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-sky-500/10"
-                    >
-                      {isSavingContest ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        <>
-                          <Check className="w-3.5 h-3.5 stroke-[3px]" />
-                          {editingContest ? 'Update Contest Settings' : 'Launch Contest Campaign'}
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </form>
-            </div>
-          )}
-
-          {/* Contests Grid */}
+          {/* Contests Cards Grid */}
           {isLoading ? (
-            <div className="py-20 text-center text-xs text-slate-400 animate-pulse">Loading Contest campaigns...</div>
+            <div className="py-16 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
+              <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
+              <span>Loading voting contest campaigns...</span>
+            </div>
           ) : filteredContests.length === 0 ? (
-            <div className="p-12 text-center rounded-2xl bg-slate-900/40 border border-slate-850/60 text-slate-500 text-xs">
-              <AlertTriangle className="w-8 h-8 mx-auto text-slate-600 mb-2" />
-              No voting contests found matching your filters.
+            <div className="p-8 sm:p-12 text-center rounded-2xl bg-slate-900/50 border border-slate-800 text-slate-500 text-xs space-y-2">
+              <AlertTriangle className="w-8 h-8 mx-auto text-slate-600 mb-1" />
+              <p className="font-semibold text-slate-400">No voting contests found</p>
+              <p className="text-slate-500 text-[11px]">Click "New Contest" above to configure your first campaign.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4">
               {filteredContests.map(c => {
                 const cContestants = contestants.filter(cn => cn.contestId === c.id);
+                const approvedContestants = cContestants.filter(cn => cn.status === 'approved');
+                const contestantsWithLinks = approvedContestants.filter(cn => cn.voteLink || cn.telegramId);
+                const linksPct = approvedContestants.length > 0
+                  ? Math.round((contestantsWithLinks.length / approvedContestants.length) * 100)
+                  : 0;
+
                 const totalVotes = cContestants.reduce((acc, curr) => acc + (curr.votesCount || 0), 0);
+                const registrationUrl = `${window.location.origin}/register-contest/${c.id}`;
+                const phase = getContestPhase(c);
+                const regCountdown = getTimeRemainingString(c.registrationEndDate, c.registrationStartDate);
+                const voteCountdown = getTimeRemainingString(c.votingEndDate, c.registrationEndDate);
 
                 return (
                   <div
                     key={c.id}
-                    className="p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 hover:border-slate-750 transition"
+                    className="p-4 sm:p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-md flex flex-col gap-4 hover:border-slate-700 transition w-full overflow-hidden"
                   >
-                    {/* Image and info block */}
-                    <div className="flex items-start gap-4 flex-1">
-                      {c.imageUrl ? (
-                        <div className="w-16 h-16 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0 hidden sm:block">
-                          <img
-                            src={c.imageUrl}
-                            alt="Contest Cover"
-                            className="w-full h-full object-cover"
-                            referrerPolicy="no-referrer"
-                          />
-                        </div>
-                      ) : (
-                        <div className="w-16 h-16 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-600 shrink-0 hidden sm:block">
-                          <Image className="w-6 h-6" />
-                        </div>
-                      )}
-                      <div className="space-y-1">
-                        <div className="flex items-center flex-wrap gap-2">
-                          <h4 className="text-sm font-bold text-white">{c.title}</h4>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
-                            c.status === 'active' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                            c.status === 'paused' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
-                            c.status === 'upcoming' ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20' :
-                            'bg-slate-800 text-slate-400'
-                          }`}>
-                            {c.status}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-400 max-w-xl">{c.description || 'No description provided.'}</p>
-
-                        {/* Sub metadata */}
-                        <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-[10px] text-slate-500 font-medium pt-1">
-                          <span className="flex items-center gap-1 text-slate-400">
-                            <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                            Reg: {c.registrationStartDate} to {c.registrationEndDate?.replace('T', ' ')} | Vote Ends: {c.votingEndDate?.replace('T', ' ')}
-                          </span>
-                          <span className="flex items-center gap-1 text-sky-400 font-bold">
-                            <Coins className="w-3.5 h-3.5 text-sky-500" />
-                            Reward: ₹{c.voterRewardAmount || 0} / vote
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Users className="w-3.5 h-3.5 text-slate-500" />
-                            {cContestants.length} Contestant(s)
-                          </span>
-                          <span className="flex items-center gap-1 font-bold text-slate-300">
-                            Total Votes: {totalVotes}
-                          </span>
-                        </div>
-
-                        {/* Contest Link and Action buttons */}
-                        <div className="mt-3 p-3 rounded-xl bg-slate-950 border border-slate-850 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 max-w-xl">
-                          <div className="flex flex-col min-w-0 flex-1">
-                            <span className="text-[9px] font-bold text-slate-550 uppercase tracking-wider block">Registration Link</span>
-                            <span className="text-xs font-mono text-slate-350 truncate block selection:bg-sky-500/20">{`${window.location.origin}/register-contest/${c.id}`}</span>
+                    {/* Header info */}
+                    <div className="flex flex-col sm:flex-row items-start gap-4 justify-between min-w-0">
+                      <div className="flex items-start gap-3.5 min-w-0 flex-1">
+                        {c.imageUrl ? (
+                          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0">
+                            <img
+                              src={c.imageUrl}
+                              alt="Contest Cover"
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
                           </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <button
-                              onClick={() => handleCopyLink(`${window.location.origin}/register-contest/${c.id}`)}
-                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition text-[10px] font-bold flex items-center gap-1"
-                              title="Copy Link to Clipboard"
-                            >
-                              <Link className="w-3.5 h-3.5 text-sky-400" />
-                              <span className="hidden sm:inline">Copy</span>
-                            </button>
-                            <button
-                              onClick={() => handleShareLink(c.title, `${window.location.origin}/register-contest/${c.id}`)}
-                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition text-[10px] font-bold flex items-center gap-1"
-                              title="Share Contest Link"
-                            >
-                              <Share2 className="w-3.5 h-3.5 text-indigo-450" />
-                              <span className="hidden sm:inline">Share</span>
-                            </button>
-                            <a
-                              href={`/register-contest/${c.id}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition text-[10px] font-bold flex items-center gap-1"
-                              title="Preview Registration Page"
-                            >
-                              <Eye className="w-3.5 h-3.5 text-emerald-400" />
-                              <span className="hidden sm:inline">Preview</span>
-                            </a>
+                        ) : (
+                          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-600 shrink-0">
+                            <Image className="w-6 h-6" />
                           </div>
+                        )}
+
+                        <div className="space-y-1.5 min-w-0 flex-1">
+                          <div className="flex items-center flex-wrap gap-2">
+                            <h4 className="text-sm sm:text-base font-bold text-white tracking-tight break-words">
+                              {c.title}
+                            </h4>
+                            <span
+                              className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider shrink-0 flex items-center gap-1 ${phase.colorClass}`}
+                            >
+                              <span>{phase.icon}</span>
+                              <span>{phase.label}</span>
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
+                            {c.description || 'No description provided.'}
+                          </p>
+
+                          {/* Contest stats metadata */}
+                          <div className="flex flex-wrap items-center gap-y-1.5 gap-x-3 text-[10px] text-slate-400 pt-1 font-medium">
+                            <span className="flex items-center gap-1 bg-slate-950 px-2 py-1 rounded-lg border border-slate-800 text-sky-400 font-bold">
+                              <Coins className="w-3 h-3 text-sky-500" />
+                              Reward: ₹{c.voterRewardAmount || 0} / vote
+                            </span>
+                            <span className="flex items-center gap-1 bg-slate-950 px-2 py-1 rounded-lg border border-slate-800">
+                              <Users className="w-3 h-3 text-indigo-400" />
+                              {cContestants.length} Contestants
+                            </span>
+                            <span className="flex items-center gap-1 bg-slate-950 px-2 py-1 rounded-lg border border-slate-800 text-slate-200 font-bold">
+                              Total Votes: {totalVotes}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Top Action buttons */}
+                      <div className="flex items-center flex-wrap gap-1.5 self-end sm:self-start shrink-0">
+                        <button
+                          onClick={() => handleGenerateAndSendAllLinks(c)}
+                          className="py-1.5 px-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-500 hover:from-sky-400 hover:to-indigo-400 text-slate-950 transition text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md"
+                          title="Generate & Dispatch Telegram Vote Links"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 fill-slate-950" />
+                          <span>Generate & Send Links</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setSelectedContestFilter(c.id);
+                            setActiveSubTab('contestants');
+                          }}
+                          className="py-1.5 px-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-800 hover:border-slate-700 transition text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                          title="Manage Contestants"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-sky-400" />
+                          <span>Contestants</span>
+                        </button>
+
+                        <button
+                          onClick={() => toggleContestStatus(c)}
+                          className={`p-2 rounded-xl border transition cursor-pointer ${
+                            c.status === 'active'
+                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/20'
+                              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
+                          }`}
+                          title={c.status === 'active' ? 'Pause Voting' : 'Activate Voting'}
+                        >
+                          {c.status === 'active' ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                        </button>
+
+                        <button
+                          onClick={() => openEditContest(c)}
+                          className="p-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-sky-400 border border-slate-800 hover:border-slate-700 transition cursor-pointer"
+                          title="Edit Contest Settings"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          onClick={() => handleContestDelete(c.id)}
+                          className="p-2 rounded-xl bg-slate-950 hover:bg-rose-500/20 text-rose-400 border border-slate-800 hover:border-rose-500/30 transition cursor-pointer"
+                          title="Delete Contest"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Phase 1 & 2 Dashboard Metrics Panel */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/60">
+                        <div className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <Calendar className="w-3 h-3 text-emerald-400" />
+                          Registration Timer
+                        </div>
+                        <div className="text-xs font-mono font-bold text-slate-200 mt-1 truncate">
+                          {regCountdown === 'Ended' ? 'Closed 🟡' : regCountdown}
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-0.5 truncate">
+                          End: {c.registrationEndDate ? c.registrationEndDate.replace('T', ' ') : 'N/A'}
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/60">
+                        <div className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-sky-400" />
+                          Voting Timer
+                        </div>
+                        <div className="text-xs font-mono font-bold text-slate-200 mt-1 truncate">
+                          {voteCountdown === 'Ended' ? 'Voting Closed 🔴' : voteCountdown}
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-0.5 truncate">
+                          End: {c.votingEndDate ? c.votingEndDate.replace('T', ' ') : 'N/A'}
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/60">
+                        <div className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <Users className="w-3 h-3 text-indigo-400" />
+                          Contestants & Votes
+                        </div>
+                        <div className="text-xs font-mono font-bold text-sky-400 mt-1 truncate">
+                          {cContestants.length} Users | {totalVotes} Votes
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-0.5 truncate">
+                          Approved: {approvedContestants.length}
+                        </div>
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/60">
+                        <div className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                          Link Dispatch Progress
+                        </div>
+                        <div className="text-xs font-mono font-bold text-emerald-400 mt-1 truncate">
+                          {contestantsWithLinks.length} / {approvedContestants.length} ({linksPct}%)
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-0.5 truncate">
+                          Updated: {lastUpdatedTime}
                         </div>
                       </div>
                     </div>
 
-                    {/* Actions block */}
-                    <div className="flex items-center gap-2 self-stretch md:self-auto justify-end border-t md:border-t-0 border-slate-800/60 pt-3 md:pt-0">
-                      <button
-                        onClick={() => {
-                          setSelectedContestFilter(c.id);
-                          setActiveSubTab('contestants');
-                        }}
-                        className="p-2 rounded-xl bg-slate-950/60 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-slate-700 transition text-[11px] font-bold flex items-center gap-1"
-                        title="View Contestants"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Contestants</span>
-                      </button>
-
-                      <button
-                        onClick={() => toggleContestStatus(c)}
-                        className={`p-2 rounded-xl border transition ${
-                          c.status === 'active'
-                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/20'
-                            : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
-                        }`}
-                        title={c.status === 'active' ? 'Pause Voting' : 'Activate Voting'}
-                      >
-                        {c.status === 'active' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                      </button>
-
-                      <button
-                        onClick={() => openEditContest(c)}
-                        className="p-2 rounded-xl bg-slate-950/60 hover:bg-slate-800 text-sky-400 border border-slate-800 hover:border-slate-700 transition"
-                        title="Edit Settings"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        onClick={() => handleContestDelete(c.id)}
-                        className="p-2 rounded-xl bg-slate-950/60 hover:bg-rose-500/20 text-rose-400 border border-slate-800 hover:border-rose-500/30 transition"
-                        title="Delete Contest"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                    {/* Registration Link Box */}
+                    <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 w-full min-w-0">
+                      <div className="min-w-0 flex-1 w-full">
+                        <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block">
+                          Public Registration Link
+                        </span>
+                        <span className="text-xs font-mono text-sky-400 truncate block selection:bg-sky-500/20 w-full">
+                          {registrationUrl}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0 w-full sm:w-auto justify-end">
+                        <button
+                          onClick={() => handleCopyLink(registrationUrl)}
+                          className="flex-1 sm:flex-initial py-1.5 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 transition text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                          title="Copy Link to Clipboard"
+                        >
+                          <Link className="w-3.5 h-3.5 text-sky-400" />
+                          <span>Copy</span>
+                        </button>
+                        <button
+                          onClick={() => handleShareLink(c.title, registrationUrl)}
+                          className="flex-1 sm:flex-initial py-1.5 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 transition text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                          title="Share Link"
+                        >
+                          <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>Share</span>
+                        </button>
+                        <a
+                          href={`/register-contest/${c.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex-1 sm:flex-initial py-1.5 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 transition text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                          title="Preview Registration Page"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Preview</span>
+                        </a>
+                      </div>
                     </div>
                   </div>
                 );
@@ -1025,39 +1042,48 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       {activeSubTab === 'contestants' && (
         <div className="space-y-4">
           {/* Controls Bar */}
-          <div className="flex flex-col sm:flex-row gap-3">
-            {/* Contest dropdown filter */}
-            <div className="w-full sm:w-64">
+          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+            {/* Contest Filter dropdown */}
+            <div className="w-full sm:w-60">
               <select
                 value={selectedContestFilter}
                 onChange={e => setSelectedContestFilter(e.target.value)}
-                className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                className="w-full px-3 py-2.5 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
               >
-                <option value="all">All Contests</option>
+                <option value="all">All Contests ({contestants.length})</option>
                 {contests.map(c => (
-                  <option key={c.id} value={c.id}>{c.title}</option>
+                  <option key={c.id} value={c.id}>
+                    {c.title}
+                  </option>
                 ))}
               </select>
             </div>
 
             {/* Search Input */}
             <div className="flex-1 relative">
-              <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
+              <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
               <input
                 type="text"
                 value={contestantSearch}
                 onChange={e => setContestantSearch(e.target.value)}
-                placeholder="Search contestants by name..."
-                className="w-full pl-9 pr-4 py-2 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                placeholder="Search contestants by name, username..."
+                className="w-full pl-10 pr-4 py-2.5 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500"
               />
             </div>
 
             {/* Add Contestant Button */}
             <button
               onClick={() => {
+                if (showContestantForm && isFormDirty) {
+                  const confirmLeave = window.confirm(
+                    'You have unsaved changes in the editor. Are you sure you want to discard your changes?'
+                  );
+                  if (!confirmLeave) return;
+                }
+                setIsFormDirty(false);
                 setEditingContestant(null);
                 setContestantForm({
-                  contestId: selectedContestFilter !== 'all' ? selectedContestFilter : (contests[0]?.id || ''),
+                  contestId: selectedContestFilter !== 'all' ? selectedContestFilter : contests[0]?.id || '',
                   name: '',
                   telegramId: '',
                   username: '',
@@ -1068,320 +1094,169 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                 });
                 setShowContestantForm(true);
               }}
-              className="py-2 px-3.5 rounded-xl font-bold text-xs bg-sky-500 hover:bg-sky-400 text-slate-950 transition flex items-center justify-center gap-1.5"
+              className="py-2.5 px-4 rounded-xl font-bold text-xs bg-sky-500 hover:bg-sky-400 text-slate-950 transition flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/10 cursor-pointer shrink-0"
             >
-              <Plus className="w-3.5 h-3.5 stroke-[3px]" />
-              Add Contestant
+              <Plus className="w-4 h-4 stroke-[3px]" />
+              <span>Add Contestant</span>
             </button>
           </div>
 
-          {/* Form Create / Edit Contestant */}
-          {showContestantForm && (
-            <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
-              <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-sky-400">
-                  {editingContestant ? `Edit Contestant: ${editingContestant.name}` : 'Add Contestant'}
-                </h4>
-                <button
-                  onClick={() => {
-                    setShowContestantForm(false);
-                    setEditingContestant(null);
-                  }}
-                  className="p-1 rounded bg-slate-800 text-slate-400 hover:text-white"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <form onSubmit={handleContestantSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Associated Contest */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Select Contest *</label>
-                  <select
-                    required
-                    value={contestantForm.contestId}
-                    onChange={e => setContestantForm(prev => ({ ...prev, contestId: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="" disabled>Select associated contest...</option>
-                    {contests.map(c => (
-                      <option key={c.id} value={c.id}>{c.title}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Name */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contestant Name *</label>
-                  <input
-                    type="text"
-                    required
-                    value={contestantForm.name}
-                    onChange={e => setContestantForm(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder="e.g. Ramesh Kumar"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Telegram ID */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Telegram User ID (Optional)</label>
-                  <input
-                    type="text"
-                    value={contestantForm.telegramId}
-                    onChange={e => setContestantForm(prev => ({ ...prev, telegramId: e.target.value }))}
-                    placeholder="e.g. 123456789"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Telegram Username */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Telegram Username (Optional)</label>
-                  <input
-                    type="text"
-                    value={contestantForm.username}
-                    onChange={e => setContestantForm(prev => ({ ...prev, username: e.target.value.startsWith('@') ? e.target.value : `@${e.target.value}` }))}
-                    placeholder="e.g. @ramesh_tg"
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Description */}
-                <div className="space-y-1.5 md:col-span-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contestant Biography / Entry Pitch</label>
-                  <textarea
-                    rows={2}
-                    value={contestantForm.description}
-                    onChange={e => setContestantForm(prev => ({ ...prev, description: e.target.value }))}
-                    placeholder="e.g. Professional content creator with 50K subscribers. Pitching for the creator fund."
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Initial Votes */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Votes Count</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={contestantForm.votesCount}
-                    onChange={e => setContestantForm(prev => ({ ...prev, votesCount: parseInt(e.target.value) || 0 }))}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
-
-                {/* Status */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contestant Entry Status</label>
-                  <select
-                    value={contestantForm.status}
-                    onChange={e => setContestantForm(prev => ({ ...prev, status: e.target.value as Contestant['status'] }))}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  >
-                    <option value="approved">Approved (Active in Contest)</option>
-                    <option value="pending">Pending Admin Approval</option>
-                    <option value="rejected">Rejected / Suspended</option>
-                  </select>
-                </div>
-
-                {/* Photograph URL */}
-                <div className="space-y-2 md:col-span-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                    <Image className="w-3.5 h-3.5" /> Contestant Profile Photograph
-                  </label>
-                  <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={e => handleImageUpload(e, 'contestant')}
-                      className="hidden"
-                      id="contestant-photo-uploader"
-                    />
-                    <label
-                      htmlFor="contestant-photo-uploader"
-                      className="cursor-pointer py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 font-bold flex items-center gap-1.5 transition"
-                    >
-                      Upload Photo File
-                    </label>
-                    <input
-                      type="text"
-                      value={contestantForm.imageUrl}
-                      onChange={e => setContestantForm(prev => ({ ...prev, imageUrl: e.target.value }))}
-                      placeholder="Or enter photograph image URL..."
-                      className="flex-1 px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500 w-full"
-                    />
-                  </div>
-                  {contestantForm.imageUrl && (
-                    <div className="w-16 h-16 rounded-full overflow-hidden border border-slate-800 mt-2 bg-slate-950 flex items-center justify-center">
-                      <img
-                        src={contestantForm.imageUrl}
-                        alt="Preview"
-                        className="w-full h-full object-cover"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          (e.target as HTMLElement).style.display = 'none';
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-
-                {/* Form Buttons */}
-                <div className="md:col-span-2 pt-3 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowContestantForm(false);
-                      setEditingContestant(null);
-                    }}
-                    className="py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-850 hover:bg-slate-800 text-slate-300 transition"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="py-2.5 px-5 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 text-slate-950 transition"
-                  >
-                    {editingContestant ? 'Save Contestant Info' : 'Approve Contestant Entry'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
-
-          {/* Contestants Grid / list */}
+          {/* Contestants Cards Grid */}
           {isLoading ? (
-            <div className="py-20 text-center text-xs text-slate-400 animate-pulse">Loading contestants list...</div>
+            <div className="py-16 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
+              <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
+              <span>Loading registered contestants...</span>
+            </div>
           ) : filteredContestants.length === 0 ? (
-            <div className="p-12 text-center rounded-2xl bg-slate-900/40 border border-slate-850/60 text-slate-500 text-xs">
-              <Users className="w-8 h-8 mx-auto text-slate-600 mb-2" />
-              No contestants registered under this filter.
+            <div className="p-8 sm:p-12 text-center rounded-2xl bg-slate-900/50 border border-slate-800 text-slate-500 text-xs space-y-2">
+              <Users className="w-8 h-8 mx-auto text-slate-600 mb-1" />
+              <p className="font-semibold text-slate-400">No contestants registered</p>
+              <p className="text-slate-500 text-[11px]">
+                No participants found matching your filter or search query.
+              </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {filteredContestants.map(cn => {
                 const cParent = contests.find(c => c.id === cn.contestId);
+                const uniqueVotingLink = `https://t.me/${config.botUsername || 'RoyShareWalletBot'}?start=vote_${
+                  cn.contestId
+                }_${cn.id}`;
 
                 return (
                   <div
                     key={cn.id}
-                    className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between gap-4 hover:border-slate-750 transition"
+                    className="p-4 sm:p-5 rounded-2xl bg-slate-900 border border-slate-800 shadow-md flex flex-col justify-between gap-4 hover:border-slate-700 transition w-full overflow-hidden"
                   >
-                    {/* Identity & stats info */}
-                    <div className="flex items-start gap-3">
-                      {cn.imageUrl ? (
-                        <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0">
-                          <img
-                            src={cn.imageUrl}
-                            alt="Contestant Avatar"
-                            className="w-full h-full object-cover"
-                            referrerPolicy="no-referrer"
-                          />
-                        </div>
-                      ) : (
-                        <div className="w-12 h-12 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-600 shrink-0">
-                          <User className="w-5 h-5" />
-                        </div>
-                      )}
+                    {/* Identity Info */}
+                    <div className="space-y-3 min-w-0">
+                      <div className="flex items-start gap-3.5 min-w-0">
+                        {cn.imageUrl ? (
+                          <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0">
+                            <img
+                              src={cn.imageUrl}
+                              alt="Contestant Avatar"
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-12 h-12 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-slate-600 shrink-0">
+                            <User className="w-5 h-5" />
+                          </div>
+                        )}
 
-                      <div className="space-y-1 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <h4 className="text-xs font-bold text-white">{cn.name}</h4>
-                          <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${
-                            cn.status === 'approved' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                            cn.status === 'pending' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
-                            'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                          }`}>
-                            {cn.status}
-                          </span>
-                        </div>
-                        {cn.username && <p className="text-[10px] text-sky-400 font-bold">{cn.username}</p>}
-                        <p className="text-[11px] text-slate-400 line-clamp-2">{cn.description || 'No entry biography provided.'}</p>
-
-                        <div className="pt-2 flex flex-col gap-1 text-[10px] text-slate-500">
-                          <span className="font-semibold text-slate-400 flex items-center gap-1">
-                            <Info className="w-3.5 h-3.5 text-slate-500" />
-                            Contest: {cParent ? cParent.title : 'Deleted Contest'}
-                          </span>
-                          {cn.telegramId && <span>Telegram ID: <code>{cn.telegramId}</code></span>}
-                        </div>
-
-                        {/* Unique Voting Link and Admin resend controls */}
-                        <div className="mt-3 p-3 rounded-xl bg-slate-950 border border-slate-850 flex flex-col gap-2">
-                          <div className="flex flex-col min-w-0">
-                            <span className="text-[9px] font-bold text-slate-550 uppercase tracking-wider block">Unique Voting Link</span>
-                            <span className="text-[11px] font-mono text-slate-350 truncate block selection:bg-sky-500/20">
-                              {`https://t.me/${config.botUsername || 'RoyShareWalletBot'}?start=vote_${cn.contestId}_${cn.id}`}
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="text-sm font-bold text-white truncate">{cn.name}</h4>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[8px] font-extrabold uppercase tracking-wider shrink-0 ${
+                                cn.status === 'approved'
+                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                  : cn.status === 'pending'
+                                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                  : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                              }`}
+                            >
+                              {cn.status}
                             </span>
                           </div>
-                          <div className="flex items-center gap-1.5 justify-end">
-                            <button
-                              onClick={() => handleCopyLink(`https://t.me/${config.botUsername || 'RoyShareWalletBot'}?start=vote_${cn.contestId}_${cn.id}`)}
-                              className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition text-[10px] font-bold flex items-center gap-1"
-                              title="Copy unique voting link"
-                            >
-                              <Link className="w-3 h-3 text-sky-400" />
-                              <span>Copy Link</span>
-                            </button>
-                            <button
-                              disabled={isResending === cn.id}
-                              onClick={() => handleResendVotingLink(cn)}
-                              className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white disabled:opacity-50 transition text-[10px] font-bold flex items-center gap-1"
-                              title="Resend link via Telegram Bot"
-                            >
-                              <Send className="w-3 h-3 text-emerald-450" />
-                              <span>{isResending === cn.id ? 'Sending...' : 'Resend via Bot'}</span>
-                            </button>
+
+                          {cn.username && <p className="text-[11px] text-sky-400 font-bold truncate">{cn.username}</p>}
+                          <p className="text-xs text-slate-400 line-clamp-2">{cn.description || 'No pitch provided.'}</p>
+
+                          <div className="pt-1 flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
+                            <span className="font-semibold text-slate-400 flex items-center gap-1">
+                              <Info className="w-3 h-3 text-slate-500" />
+                              Contest: {cParent ? cParent.title : 'Deleted Contest'}
+                            </span>
+                            {cn.telegramId && (
+                              <span className="bg-slate-950 px-1.5 py-0.5 rounded border border-slate-850">
+                                ID: <code className="text-slate-300">{cn.telegramId}</code>
+                              </span>
+                            )}
                           </div>
+                        </div>
+                      </div>
+
+                      {/* Unique Voting Link Box */}
+                      <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 w-full min-w-0">
+                        <div className="min-w-0 flex-1 w-full">
+                          <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block">
+                            Telegram Bot Unique Voting Link
+                          </span>
+                          <span className="text-[11px] font-mono text-sky-400 truncate block selection:bg-sky-500/20 w-full">
+                            {uniqueVotingLink}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0 w-full sm:w-auto justify-end">
+                          <button
+                            onClick={() => handleCopyLink(uniqueVotingLink)}
+                            className="flex-1 sm:flex-initial py-1.5 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 transition text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                            title="Copy Link"
+                          >
+                            <Link className="w-3.5 h-3.5 text-sky-400" />
+                            <span>Copy Link</span>
+                          </button>
+                          <button
+                            disabled={isResending === cn.id}
+                            onClick={() => handleResendVotingLink(cn)}
+                            className="flex-1 sm:flex-initial py-1.5 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 transition text-[11px] font-bold flex items-center justify-center gap-1 disabled:opacity-50 cursor-pointer"
+                            title="Resend link via Bot"
+                          >
+                            {isResending === cn.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                            ) : (
+                              <Send className="w-3.5 h-3.5 text-emerald-400" />
+                            )}
+                            <span>{isResending === cn.id ? 'Sending...' : 'Resend Link'}</span>
+                          </button>
                         </div>
                       </div>
                     </div>
 
-                    {/* Votes Adjustments and Controls Bar */}
-                    <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between">
-                      {/* Vote Count indicator */}
-                      <div className="bg-slate-950/80 px-3 py-1.5 rounded-xl border border-slate-850 flex items-center gap-2">
+                    {/* Votes Adjustments & Actions Bar */}
+                    <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+                      <div className="bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-850 flex items-center gap-2">
                         <span className="text-[10px] text-slate-500 font-bold uppercase">Votes:</span>
                         <span className="text-xs font-black font-mono text-sky-400">{cn.votesCount}</span>
                       </div>
 
-                      {/* Vote adjustment buttons */}
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
                         <button
                           onClick={() => adjustContestantVotes(cn, -1)}
-                          className="px-2 py-1 rounded bg-slate-950 hover:bg-slate-850 text-slate-400 text-[10px] font-mono font-bold border border-slate-800 transition"
+                          className="px-2 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 text-slate-300 text-[10px] font-mono font-bold border border-slate-800 transition cursor-pointer"
                           title="Subtract 1 Vote"
                         >
                           -1
                         </button>
                         <button
                           onClick={() => adjustContestantVotes(cn, 1)}
-                          className="px-2 py-1 rounded bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 text-[10px] font-mono font-bold border border-sky-500/20 transition"
+                          className="px-2 py-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 text-[10px] font-mono font-bold border border-sky-500/20 transition cursor-pointer"
                           title="Add 1 Vote"
                         >
                           +1
                         </button>
                         <button
                           onClick={() => adjustContestantVotes(cn, 10)}
-                          className="px-2 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-mono font-bold border border-emerald-500/20 transition"
+                          className="px-2 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-mono font-bold border border-emerald-500/20 transition cursor-pointer"
                           title="Add 10 Votes"
                         >
                           +10
                         </button>
 
-                        <span className="w-px h-4 bg-slate-800 mx-1" />
+                        <span className="w-px h-4 bg-slate-800 mx-0.5 hidden sm:inline" />
 
                         <button
                           onClick={() => openEditContestant(cn)}
-                          className="p-1.5 rounded bg-slate-950 hover:bg-slate-850 text-slate-300 border border-slate-800 transition"
+                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 transition cursor-pointer"
                           title="Edit Contestant details"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => handleContestantDelete(cn.id)}
-                          className="p-1.5 rounded bg-slate-950 hover:bg-rose-500/10 text-rose-400 border border-slate-800 hover:border-rose-500/20 transition"
+                          className="p-1.5 rounded-lg bg-slate-950 hover:bg-rose-500/10 text-rose-400 border border-slate-800 hover:border-rose-500/20 transition cursor-pointer"
                           title="Remove Contestant"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1399,43 +1274,44 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       {/* TAB 3: AUDIT VOTE LOGS */}
       {activeSubTab === 'logs' && (
         <div className="space-y-4">
-          {/* Logs search bar */}
           <div className="relative">
-            <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
+            <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
             <input
               type="text"
               value={logSearch}
               onChange={e => setLogSearch(e.target.value)}
-              placeholder="Search logs by voter, contestant, or contest..."
-              className="w-full pl-9 pr-4 py-2 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+              placeholder="Search audit logs by voter, contestant name, or Telegram ID..."
+              className="w-full pl-10 pr-4 py-2.5 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500"
             />
           </div>
 
-          {/* Audit Logs table */}
           {isLoading ? (
-            <div className="py-20 text-center text-xs text-slate-400 animate-pulse">Loading voting records logs...</div>
+            <div className="py-16 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
+              <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
+              <span>Loading audit logs...</span>
+            </div>
           ) : filteredLogs.length === 0 ? (
-            <div className="p-12 text-center rounded-2xl bg-slate-900/40 border border-slate-850/60 text-slate-500 text-xs">
-              <History className="w-8 h-8 mx-auto text-slate-600 mb-2" />
-              No voting log entries recorded.
+            <div className="p-8 sm:p-12 text-center rounded-2xl bg-slate-900/50 border border-slate-800 text-slate-500 text-xs space-y-2">
+              <History className="w-8 h-8 mx-auto text-slate-600 mb-1" />
+              <p className="font-semibold text-slate-400">No voting logs recorded</p>
             </div>
           ) : (
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 shadow-xl overflow-hidden w-full">
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full text-left border-collapse min-w-[600px]">
                   <thead>
-                    <tr className="bg-slate-950 border-b border-slate-800 text-[10px] text-slate-500 uppercase font-black tracking-wider">
+                    <tr className="bg-slate-950 border-b border-slate-800 text-[10px] text-slate-400 uppercase font-bold tracking-wider">
                       <th className="p-3.5 pl-5">Timestamp</th>
                       <th className="p-3.5">Contest Title</th>
                       <th className="p-3.5">Voted For</th>
-                      <th className="p-3.5">Voter Name / Telegram ID</th>
-                      <th className="p-3.5">Reward Paid</th>
+                      <th className="p-3.5">Voter Details</th>
+                      <th className="p-3.5 pr-5">Reward Earned</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-800 text-[11px] text-slate-300 font-medium">
+                  <tbody className="divide-y divide-slate-800/80 text-[11px] text-slate-300 font-medium">
                     {filteredLogs.map(l => (
-                      <tr key={l.id} className="hover:bg-slate-950/40 transition">
-                        <td className="p-3.5 pl-5 font-mono text-slate-500">
+                      <tr key={l.id} className="hover:bg-slate-850/50 transition">
+                        <td className="p-3.5 pl-5 font-mono text-slate-400 whitespace-nowrap">
                           {new Date(l.createdAt).toLocaleString()}
                         </td>
                         <td className="p-3.5 text-slate-200 font-bold">{l.contestTitle}</td>
@@ -1447,16 +1323,15 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                         <td className="p-3.5">
                           <div className="flex flex-col">
                             <span className="text-slate-200 font-bold">{l.voterName}</span>
-                            <span className="text-[9px] text-slate-500">
-                              ID: <code>{l.voterTelegramId}</code> {l.voterUsername && `(${l.voterUsername})`}
+                            <span className="text-[10px] text-slate-500">
+                              ID: <code className="text-slate-400">{l.voterTelegramId}</code>{' '}
+                              {l.voterUsername && `(${l.voterUsername})`}
                             </span>
                           </div>
                         </td>
-                        <td className="p-3.5">
+                        <td className="p-3.5 pr-5">
                           {l.rewardEarned && l.rewardEarned > 0 ? (
-                            <span className="text-emerald-400 font-bold font-mono">
-                              +₹{l.rewardEarned}
-                            </span>
+                            <span className="text-emerald-400 font-bold font-mono">+₹{l.rewardEarned}</span>
                           ) : (
                             <span className="text-slate-500 font-mono">₹0.00</span>
                           )}
@@ -1468,6 +1343,584 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* CONTEST MODAL / BOTTOM SHEET */}
+      {/* ========================================================= */}
+      {showContestForm && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in overflow-hidden">
+          <div className="w-full max-w-2xl max-h-[92vh] sm:max-h-[85vh] rounded-t-3xl sm:rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl flex flex-col overflow-hidden relative">
+            {/* Mobile Drag Handle */}
+            <div className="w-12 h-1.5 bg-slate-700/80 rounded-full mx-auto my-2.5 sm:hidden shrink-0" />
+
+            {/* Sticky Header */}
+            <div className="px-5 py-4 border-b border-slate-800 bg-slate-900/95 backdrop-blur-md flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                  <Edit2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-sky-400">
+                    {editingContest ? 'Edit Voting Contest' : 'New Voting Contest'}
+                  </h4>
+                  <p className="text-[10px] text-slate-400">Configure campaign dates, limits & cash rewards</p>
+                </div>
+                {isFormDirty && (
+                  <span className="ml-2 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                    Unsaved
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelContestForm}
+                  disabled={isSavingContest}
+                  className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                  title="Close Modal"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable Form Content */}
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+              <form id="contest-editor-form" onSubmit={handleContestSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Title */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contest Title *</label>
+                  <input
+                    type="text"
+                    required
+                    value={contestForm.title}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, title: e.target.value }));
+                    }}
+                    placeholder="e.g. Best Telegram Creator of July"
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Status */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status</label>
+                  <select
+                    value={contestForm.status}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, status: e.target.value as Contest['status'] }));
+                    }}
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="active">Active (Voting Open)</option>
+                    <option value="paused">Paused</option>
+                    <option value="upcoming">Upcoming</option>
+                    <option value="ended">Ended</option>
+                  </select>
+                </div>
+
+                {/* Description */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Description</label>
+                  <textarea
+                    rows={2}
+                    value={contestForm.description}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, description: e.target.value }));
+                    }}
+                    placeholder="Provide description of the contest, categories, and criteria..."
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Schedule Dates */}
+                <div className="space-y-3 md:col-span-2 p-3.5 rounded-xl bg-slate-950/60 border border-slate-850">
+                  <span className="text-[10px] font-extrabold text-sky-400 uppercase tracking-wider block">
+                    Campaign Timeline Schedule
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-400 uppercase">Registration Start Date</label>
+                      <input
+                        type="date"
+                        required
+                        value={contestForm.registrationStartDate}
+                        onChange={e => {
+                          setIsFormDirty(true);
+                          setContestForm(prev => ({ ...prev, registrationStartDate: e.target.value }));
+                        }}
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-400 uppercase">Registration End Date & Time</label>
+                      <input
+                        type="datetime-local"
+                        required
+                        value={contestForm.registrationEndDate}
+                        onChange={e => {
+                          setIsFormDirty(true);
+                          setContestForm(prev => ({ ...prev, registrationEndDate: e.target.value }));
+                        }}
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-slate-400 uppercase">Voting End Date & Time</label>
+                      <input
+                        type="datetime-local"
+                        required
+                        value={contestForm.votingEndDate}
+                        onChange={e => {
+                          setIsFormDirty(true);
+                          setContestForm(prev => ({ ...prev, votingEndDate: e.target.value }));
+                        }}
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Rules */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Eligibility Rules
+                  </label>
+                  <input
+                    type="text"
+                    value={contestForm.rules}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, rules: e.target.value }));
+                    }}
+                    placeholder="e.g. Accounts must be 5+ days old. 1 vote per user per 24 hours."
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Max votes per user */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Max Votes / User
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={contestForm.maxVotesPerUser}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, maxVotesPerUser: parseInt(e.target.value) || 1 }));
+                    }}
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Vote Interval Hours */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Vote Cooldown (Hours)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={contestForm.voteIntervalHours}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, voteIntervalHours: parseInt(e.target.value) || 0 }));
+                    }}
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Cash Rewards */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                    <Coins className="w-3.5 h-3.5 text-sky-400" />
+                    Voter Cash Bonus (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={contestForm.voterRewardAmount}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, voterRewardAmount: parseFloat(e.target.value) || 0 }));
+                    }}
+                    placeholder="0.00"
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                    <Award className="w-3.5 h-3.5 text-amber-400" />
+                    Winner Cash Reward (₹)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={contestForm.winnerRewardAmount}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, winnerRewardAmount: parseFloat(e.target.value) || 0 }));
+                    }}
+                    placeholder="0.00"
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Banner Cover Image */}
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                    <Image className="w-3.5 h-3.5" /> Banner Cover Image
+                  </label>
+                  <div className="flex flex-col sm:flex-row gap-2.5 items-start sm:items-center">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={e => handleImageUpload(e, 'contest')}
+                      className="hidden"
+                      id="contest-banner-uploader"
+                    />
+                    <label
+                      htmlFor="contest-banner-uploader"
+                      className="cursor-pointer py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-750 text-xs text-slate-200 border border-slate-700 font-bold flex items-center gap-1.5 transition shrink-0"
+                    >
+                      Upload File
+                    </label>
+                    <input
+                      type="text"
+                      value={contestForm.imageUrl}
+                      onChange={e => {
+                        setIsFormDirty(true);
+                        setContestForm(prev => ({ ...prev, imageUrl: e.target.value }));
+                      }}
+                      placeholder="Or paste cover image URL..."
+                      className="flex-1 px-3.5 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500 w-full"
+                    />
+                  </div>
+                  {contestForm.imageUrl && (
+                    <div className="w-full max-h-36 rounded-xl overflow-hidden border border-slate-800 mt-2 bg-slate-950 flex items-center justify-center">
+                      <img
+                        src={contestForm.imageUrl}
+                        alt="Preview"
+                        className="max-h-36 object-cover"
+                        referrerPolicy="no-referrer"
+                        onError={e => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </form>
+            </div>
+
+            {/* Sticky Footer */}
+            <div className="px-5 py-3.5 border-t border-slate-800 bg-slate-900/95 backdrop-blur-md flex items-center justify-between gap-3 shrink-0">
+              <div className="text-[11px] text-slate-400 hidden sm:block">
+                {isFormDirty ? (
+                  <span className="text-amber-400 font-medium flex items-center gap-1">
+                    ⚠️ You have unsaved changes
+                  </span>
+                ) : (
+                  <span className="text-slate-500">Ready to save</span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                <button
+                  type="button"
+                  onClick={handleCancelContestForm}
+                  disabled={isSavingContest}
+                  className="flex-1 sm:flex-initial py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-750 text-slate-300 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleContestSubmit()}
+                  disabled={isSavingContest}
+                  className="flex-1 sm:flex-initial py-2.5 px-5 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 transition flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/10 cursor-pointer"
+                >
+                  {isSavingContest ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4 stroke-[3px]" />
+                      <span>{editingContest ? 'Save Changes' : 'Launch Contest'}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* CONTESTANT MODAL / BOTTOM SHEET */}
+      {/* ========================================================= */}
+      {showContestantForm && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 animate-fade-in overflow-hidden">
+          <div className="w-full max-w-xl max-h-[92vh] sm:max-h-[85vh] rounded-t-3xl sm:rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl flex flex-col overflow-hidden relative">
+            {/* Mobile Drag Handle */}
+            <div className="w-12 h-1.5 bg-slate-700/80 rounded-full mx-auto my-2.5 sm:hidden shrink-0" />
+
+            {/* Sticky Header */}
+            <div className="px-5 py-4 border-b border-slate-800 bg-slate-900/95 backdrop-blur-md flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                  <User className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-sky-400">
+                    {editingContestant ? `Edit Contestant: ${editingContestant.name}` : 'Add New Contestant'}
+                  </h4>
+                  <p className="text-[10px] text-slate-400">Participant info & initial vote allocation</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelContestantForm}
+                  disabled={isSavingContestant}
+                  className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+                  title="Close Modal"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable Form Content */}
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+              <form id="contestant-editor-form" onSubmit={handleContestantSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Select Contest */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Select Contest *</label>
+                  <select
+                    required
+                    value={contestantForm.contestId}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestantForm(prev => ({ ...prev, contestId: e.target.value }));
+                    }}
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="" disabled>
+                      Select associated contest...
+                    </option>
+                    {contests.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Name */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contestant Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={contestantForm.name}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestantForm(prev => ({ ...prev, name: e.target.value }));
+                    }}
+                    placeholder="e.g. Ramesh Kumar"
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Telegram ID */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Telegram User ID
+                  </label>
+                  <input
+                    type="text"
+                    value={contestantForm.telegramId}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestantForm(prev => ({ ...prev, telegramId: e.target.value }));
+                    }}
+                    placeholder="e.g. 123456789"
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Telegram Username */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Telegram Username
+                  </label>
+                  <input
+                    type="text"
+                    value={contestantForm.username}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestantForm(prev => ({
+                        ...prev,
+                        username: e.target.value.startsWith('@') ? e.target.value : `@${e.target.value}`
+                      }));
+                    }}
+                    placeholder="e.g. @ramesh_tg"
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Initial Votes */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Votes Count</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={contestantForm.votesCount}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestantForm(prev => ({ ...prev, votesCount: parseInt(e.target.value) || 0 }));
+                    }}
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Entry Biography */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Biography / Pitch</label>
+                  <textarea
+                    rows={2}
+                    value={contestantForm.description}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestantForm(prev => ({ ...prev, description: e.target.value }));
+                    }}
+                    placeholder="e.g. Creator pitching for creator fund..."
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+
+                {/* Status */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Entry Status</label>
+                  <select
+                    value={contestantForm.status}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestantForm(prev => ({ ...prev, status: e.target.value as Contestant['status'] }));
+                    }}
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="approved">Approved (Active in Contest)</option>
+                    <option value="pending">Pending Admin Approval</option>
+                    <option value="rejected">Rejected / Suspended</option>
+                  </select>
+                </div>
+
+                {/* Photo Upload */}
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                    <Image className="w-3.5 h-3.5" /> Profile Photo
+                  </label>
+                  <div className="flex flex-col sm:flex-row gap-2.5 items-start sm:items-center">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={e => handleImageUpload(e, 'contestant')}
+                      className="hidden"
+                      id="contestant-photo-uploader"
+                    />
+                    <label
+                      htmlFor="contestant-photo-uploader"
+                      className="cursor-pointer py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-750 text-xs text-slate-200 border border-slate-700 font-bold flex items-center gap-1.5 transition shrink-0"
+                    >
+                      Upload File
+                    </label>
+                    <input
+                      type="text"
+                      value={contestantForm.imageUrl}
+                      onChange={e => {
+                        setIsFormDirty(true);
+                        setContestantForm(prev => ({ ...prev, imageUrl: e.target.value }));
+                      }}
+                      placeholder="Or paste profile image URL..."
+                      className="flex-1 px-3.5 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500 w-full"
+                    />
+                  </div>
+                  {contestantForm.imageUrl && (
+                    <div className="w-14 h-14 rounded-full overflow-hidden border border-slate-800 mt-2 bg-slate-950 flex items-center justify-center">
+                      <img
+                        src={contestantForm.imageUrl}
+                        alt="Preview"
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                        onError={e => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </form>
+            </div>
+
+            {/* Sticky Footer */}
+            <div className="px-5 py-3.5 border-t border-slate-800 bg-slate-900/95 backdrop-blur-md flex items-center justify-between gap-3 shrink-0">
+              <div className="text-[11px] text-slate-400 hidden sm:block">
+                {isFormDirty ? (
+                  <span className="text-amber-400 font-medium">⚠️ Unsaved changes</span>
+                ) : (
+                  <span className="text-slate-500">Ready</span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                <button
+                  type="button"
+                  onClick={handleCancelContestantForm}
+                  disabled={isSavingContestant}
+                  className="flex-1 sm:flex-initial py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-750 text-slate-300 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleContestantSubmit()}
+                  disabled={isSavingContestant}
+                  className="flex-1 sm:flex-initial py-2.5 px-5 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 transition flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/10 cursor-pointer"
+                >
+                  {isSavingContestant ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4 stroke-[3px]" />
+                      <span>{editingContestant ? 'Save Info' : 'Approve Contestant'}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

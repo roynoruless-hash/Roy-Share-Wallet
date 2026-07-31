@@ -105,21 +105,51 @@ async function runSchedulerCycle() {
           const q = query(contestantsRef, where('contestId', '==', contest.id));
           const contestantsSnap = await getDocs(q);
 
+          let generatedLinksCount = 0;
           for (const contestantDoc of contestantsSnap.docs) {
             const contestant = contestantDoc.data();
             // Send links to approved contestants
-            if (contestant.status === 'approved' && contestant.telegramId) {
+            if (contestant.status === 'approved') {
               const uniqueLink = `https://t.me/${botUsername}?start=vote_${contest.id}_${contestantDoc.id}`;
-              const messageText = `🏁 <b>Registration Closed! Voting has officially started!</b>\n\n` +
-                `🏆 Contest: <b>${contest.title}</b>\n` +
-                `👤 Contestant: <b>${contestant.name}</b>\n\n` +
-                `🗳 Here is your unique voting link. Share this link with your friends, groups, and channels to gather votes:\n` +
-                `👉 ${uniqueLink}\n\n` +
-                `Good luck! 🚀`;
+              const linkId = `vote_${contest.id}_${contestantDoc.id}`;
 
-              await sendTelegramMessage(token, contestant.telegramId, messageText);
+              // Store permanently in voteLinks collection
+              await setDoc(doc(db, 'voteLinks', linkId), {
+                id: linkId,
+                contestId: contest.id,
+                contestantId: contestantDoc.id,
+                voteLink: uniqueLink,
+                createdAt: new Date().toISOString(),
+              }, { merge: true });
+
+              // Save on contestant doc
+              await setDoc(doc(db, 'contestants', contestantDoc.id), {
+                voteLink: uniqueLink,
+              }, { merge: true });
+
+              generatedLinksCount++;
+
+              if (contestant.telegramId) {
+                const messageText = `🎉 <b>Voting Started!</b>\n\n` +
+                  `Hello ${contestant.name},\n\n` +
+                  `Your personal vote link is ready.\n\n` +
+                  `🔗 ${uniqueLink}\n\n` +
+                  `📢 Share this link with your friends.\n\n` +
+                  `Only verified users can vote.\n\n` +
+                  `Good Luck! 🏆`;
+
+                await sendTelegramMessage(token, contestant.telegramId, messageText);
+              }
             }
           }
+
+          // Add contest log
+          await setDoc(doc(db, 'contestLogs', `log_${contest.id}_voting_started`), {
+            contestId: contest.id,
+            action: 'VOTING_STARTED',
+            details: `Registration ended. Generated ${generatedLinksCount} vote links and notified contestants via Telegram.`,
+            timestamp: new Date().toISOString(),
+          }, { merge: true });
         }
         continue;
       }

@@ -138,7 +138,16 @@ export default function App() {
 
   // User activity listeners to keep session active
   useEffect(() => {
-    if (!isLoggedIn) return;
+    const handleExpiredEvent = () => {
+      handleLogout('Session expired or unauthorized. Please login again.');
+    };
+    window.addEventListener('admin-session-expired', handleExpiredEvent);
+
+    if (!isLoggedIn) {
+      return () => {
+        window.removeEventListener('admin-session-expired', handleExpiredEvent);
+      };
+    }
 
     let throttleTimer: NodeJS.Timeout | null = null;
     const handleUserActivity = () => {
@@ -157,6 +166,7 @@ export default function App() {
     window.addEventListener('touchstart', handleUserActivity);
 
     return () => {
+      window.removeEventListener('admin-session-expired', handleExpiredEvent);
       window.removeEventListener('mousemove', handleUserActivity);
       window.removeEventListener('keydown', handleUserActivity);
       window.removeEventListener('click', handleUserActivity);

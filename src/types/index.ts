@@ -334,6 +334,7 @@ export interface Contestant {
   votesCount: number;
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;
+  voteLink?: string;
 }
 
 export interface VoteLog {
@@ -347,5 +348,24 @@ export interface VoteLog {
   voterName: string;
   createdAt: string;
   rewardEarned?: number;
+  ipHash?: string;
+  deviceFingerprint?: string;
+  verificationStatus?: string;
+}
+
+export interface VoteLink {
+  id: string;
+  contestId: string;
+  contestantId: string;
+  voteLink: string;
+  createdAt: string;
+}
+
+export interface ContestLog {
+  id?: string;
+  contestId: string;
+  action: string;
+  details: string;
+  timestamp: string;
 }
 

@@ -124,6 +124,7 @@ export async function getContestants(contestId?: string): Promise<Contestant[]> 
         votesCount: Number(data.votesCount) || 0,
         status: data.status || 'approved',
         createdAt: data.createdAt || new Date().toISOString(),
+        voteLink: data.voteLink || '',
       });
     });
     // Sort by votesCount desc, then name asc
@@ -141,7 +142,7 @@ export async function getContestants(contestId?: string): Promise<Contestant[]> 
 export async function saveContestant(contestant: Partial<Contestant> & { id?: string; contestId: string }): Promise<string> {
   const contestantId = contestant.id || 'CNT' + Math.random().toString(36).substring(2, 9).toUpperCase();
   const contestantRef = doc(db, 'contestants', contestantId);
-  const dataToSave = {
+  const dataToSave: any = {
     contestId: contestant.contestId,
     contestTitle: contestant.contestTitle || '',
     name: contestant.name || '',
@@ -153,8 +154,87 @@ export async function saveContestant(contestant: Partial<Contestant> & { id?: st
     status: contestant.status || 'approved',
     createdAt: contestant.createdAt || new Date().toISOString(),
   };
+  if (contestant.voteLink !== undefined) {
+    dataToSave.voteLink = contestant.voteLink;
+  }
   await setDoc(contestantRef, dataToSave, { merge: true });
   return contestantId;
+}
+
+/**
+ * Save or get a vote link in Firestore 'voteLinks' collection permanently
+ */
+export async function saveVoteLink(data: {
+  contestId: string;
+  contestantId: string;
+  voteLink: string;
+}): Promise<void> {
+  const linkId = `vote_${data.contestId}_${data.contestantId}`;
+  const linkRef = doc(db, 'voteLinks', linkId);
+  await setDoc(linkRef, {
+    id: linkId,
+    contestId: data.contestId,
+    contestantId: data.contestantId,
+    voteLink: data.voteLink,
+    createdAt: new Date().toISOString(),
+  }, { merge: true });
+
+  const contestantRef = doc(db, 'contestants', data.contestantId);
+  await setDoc(contestantRef, { voteLink: data.voteLink }, { merge: true });
+}
+
+/**
+ * Fetch vote links from Firestore
+ */
+export async function getVoteLinks(contestId?: string): Promise<any[]> {
+  try {
+    const ref = collection(db, 'voteLinks');
+    const q = contestId ? query(ref, where('contestId', '==', contestId)) : ref;
+    const snap = await getDocs(q);
+    const links: any[] = [];
+    snap.forEach((d) => links.push(d.data()));
+    return links;
+  } catch (err) {
+    console.error('Error fetching vote links:', err);
+    return [];
+  }
+}
+
+/**
+ * Add a log to 'contestLogs' collection
+ */
+export async function addContestLog(log: {
+  contestId: string;
+  action: string;
+  details: string;
+}): Promise<void> {
+  try {
+    const logsRef = collection(db, 'contestLogs');
+    await addDoc(logsRef, {
+      ...log,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('Error adding contest log:', err);
+  }
+}
+
+/**
+ * Fetch contest logs from Firestore
+ */
+export async function getContestLogs(contestId?: string): Promise<any[]> {
+  try {
+    const ref = collection(db, 'contestLogs');
+    const q = contestId ? query(ref, where('contestId', '==', contestId)) : ref;
+    const snap = await getDocs(q);
+    const logs: any[] = [];
+    snap.forEach((d) => logs.push(d.data()));
+    logs.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+    return logs;
+  } catch (err) {
+    console.error('Error fetching contest logs:', err);
+    return [];
+  }
 }
 
 /**
@@ -209,8 +289,10 @@ export async function submitVote(params: {
   voterName: string;
   voterUsername?: string;
   botToken?: string;
+  ipHash?: string;
+  deviceFingerprint?: string;
 }): Promise<{ success: boolean; error?: string; rewardEarned?: number }> {
-  const { contestId, contestantId, voterTelegramId, voterName, voterUsername, botToken } = params;
+  const { contestId, contestantId, voterTelegramId, voterName, voterUsername, botToken, ipHash, deviceFingerprint } = params;
 
   if (!contestId || !contestantId || !voterTelegramId) {
     return { success: false, error: 'Missing contest, contestant, or voter Telegram ID.' };
@@ -228,7 +310,7 @@ export async function submitVote(params: {
 
     const contest = contestSnap.data() as Contest;
     if (contest.status !== 'active') {
-      return { success: false, error: `This contest is currently ${contest.status}.` };
+      return { success: false, error: '🔒 This voting contest has ended or is currently inactive.' };
     }
 
     const now = new Date();
@@ -239,7 +321,7 @@ export async function submitVote(params: {
       return { success: false, error: 'Voting has not started yet. Registration is still open.' };
     }
     if (now > voteEndDate) {
-      return { success: false, error: 'Voting has already ended for this contest.' };
+      return { success: false, error: '🔒 This voting contest has ended or is currently inactive.' };
     }
 
     // Read the contestant
@@ -262,6 +344,12 @@ export async function submitVote(params: {
     const userVotesSnap = await getDocs(userVotesQuery);
     const previousVotes: VoteLog[] = [];
     userVotesSnap.forEach((d) => previousVotes.push(d.data() as VoteLog));
+
+    // Check duplicate vote for same contestant (Requirement 8: One Telegram account = One vote per contestant)
+    const votedForThisContestant = previousVotes.some((v) => v.contestantId === contestantId);
+    if (votedForThisContestant) {
+      return { success: false, error: 'You have already voted for this contestant.' };
+    }
 
     const totalPreviousVotes = previousVotes.length;
     const maxVotes = contest.maxVotesPerUser || 1;
@@ -290,6 +378,7 @@ export async function submitVote(params: {
 
     const rewardAmount = Number(contest.voterRewardAmount) || 0;
     let rewardGiven = 0;
+    let updatedVotesCount = (contestant.votesCount || 0) + 1;
 
     // Execute firestore transaction to record vote, update vote count, and optionally credit voter's wallet
     await runTransaction(db, async (transaction) => {
@@ -300,13 +389,14 @@ export async function submitVote(params: {
       }
       const freshContestant = innerContestantSnap.data() as Contestant;
       const currentVotes = Number(freshContestant.votesCount) || 0;
+      updatedVotesCount = currentVotes + 1;
 
       // Update contestant votes count
       transaction.update(contestantRef, {
-        votesCount: currentVotes + 1,
+        votesCount: updatedVotesCount,
       });
 
-      // Write vote log
+      // Write complete vote log (Requirement 9)
       const logId = 'VOT' + Math.random().toString(36).substring(2, 9).toUpperCase();
       const voteLogRef = doc(db, 'voteLogs', logId);
       transaction.set(voteLogRef, {
@@ -320,6 +410,9 @@ export async function submitVote(params: {
         voterName: voterName || 'User',
         createdAt: now.toISOString(),
         rewardEarned: rewardAmount,
+        ipHash: ipHash || 'tg_internal',
+        deviceFingerprint: deviceFingerprint || 'tg_mobile_app',
+        verificationStatus: 'verified',
       });
 
       // If voterRewardAmount > 0, find and credit the user's wallet
@@ -366,20 +459,22 @@ export async function submitVote(params: {
       }
     });
 
-    // Send direct notify in background if successful & reward earned & botToken available
-    if (rewardGiven > 0 && botToken) {
-      const notifyText =
-        `🎉 <b>Vote Logged & Rewarded!</b>\n\n` +
-        `You voted for <b>${contestant.name}</b> in the <b>${contest.title}</b> contest!\n\n` +
-        `💰 <b>Reward Earned:</b> +₹${rewardGiven}\n` +
-        `Balance updated in your wallet. Thank you for voting!`;
+    // Notify contestant instantly via Telegram (Requirement 11)
+    if (contestant.telegramId && botToken) {
+      const contestantNotifyText =
+        `🎉 <b>New Vote Received!</b>\n\n` +
+        `👤 <b>Voter:</b> ${voterName}\n` +
+        `🗳 <b>Total Votes:</b> ${updatedVotesCount}`;
 
-      // Inline import prevention or call API
-      fetch('/api/admin/send-message', {
+      fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: botToken, chatId: voterTelegramId, text: notifyText }),
-      }).catch(() => {});
+        body: JSON.stringify({
+          chat_id: contestant.telegramId,
+          text: contestantNotifyText,
+          parse_mode: 'HTML',
+        }),
+      }).catch((err) => console.error('Error notifying contestant:', err));
     }
 
     return { success: true, rewardEarned: rewardGiven };

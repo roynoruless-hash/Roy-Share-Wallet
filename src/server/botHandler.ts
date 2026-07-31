@@ -163,6 +163,92 @@ function buildForceJoinText(channels: TelegramChannelGroupRecord[], isReverifica
 }
 
 /**
+ * Send Contestant Details Card with Profile Photo, Name, Username, Bio, Vote Count, and Vote Button
+ */
+async function sendContestantVoteCard(token: string, chatId: string, contestId: string, contestantId: string) {
+  const contests = await getContests();
+  const contest = contests.find((c) => c.id === contestId);
+
+  const now = new Date();
+  if (!contest || contest.status !== 'active' || now > new Date(contest.votingEndDate)) {
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: '🔒 <b>This voting contest has ended or is currently inactive.</b>',
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
+  const contestants = await getContestants(contestId);
+  const contestant = contestants.find((cn) => cn.id === contestantId);
+
+  if (!contestant || contestant.status !== 'approved') {
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: '❌ <b>Contestant not found or not approved.</b>',
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
+  const rewardNotice =
+    contest.voterRewardAmount && contest.voterRewardAmount > 0
+      ? `\n💰 <b>Voter Reward:</b> ₹${contest.voterRewardAmount} per vote!`
+      : '';
+
+  let cardText =
+    `🏆 <b>Voting Contest:</b> ${contest.title}\n\n` +
+    `👤 <b>Contestant Details:</b>\n` +
+    `• <b>Name:</b> ${contestant.name}\n`;
+
+  if (contestant.username) {
+    const formattedUser = contestant.username.startsWith('@') ? contestant.username : `@${contestant.username}`;
+    cardText += `• <b>Username:</b> ${formattedUser}\n`;
+  }
+  if (contestant.description) {
+    cardText += `• <b>Bio:</b> <i>${contestant.description}</i>\n`;
+  }
+  cardText +=
+    `• <b>Current Vote Count:</b> ${contestant.votesCount || 0} votes${rewardNotice}\n\n` +
+    `Click the button below to cast your verified vote!`;
+
+  const inline_keyboard = [
+    [
+      {
+        text: `🗳 Vote for ${contestant.name}`,
+        callback_data: `vote_cast:${contestId}:${contestantId}`,
+      },
+    ],
+  ];
+
+  if (contestant.imageUrl && (contestant.imageUrl.startsWith('http://') || contestant.imageUrl.startsWith('https://'))) {
+    const photoRes = await sendTelegramApi(token, 'sendPhoto', {
+      chat_id: chatId,
+      photo: contestant.imageUrl,
+      caption: cardText,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard },
+    });
+
+    if (!photoRes || photoRes.ok === false) {
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: cardText,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard },
+      });
+    }
+  } else {
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: cardText,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard },
+    });
+  }
+}
+
+/**
  * Fetch bot admin configuration dynamically from Firestore settings/config
  */
 async function getAdminConfig(): Promise<Record<string, any> | null> {
@@ -463,19 +549,26 @@ export async function processTelegramUpdate(token: string, update: any) {
         });
 
         if (existingUser) {
-          // Show main menu for registered user
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `👋 <b>Welcome back, ${existingUser.firstName}!</b>\n\n👛 <b>Wallet Balance:</b> ₹${existingUser.walletBalance || 0}`,
-            parse_mode: 'HTML',
-            reply_markup: {
-              keyboard: [
-                [{ text: '👛 Wallet' }, { text: '💸 Withdraw' }],
-                [{ text: '🎁 Refer & Earn' }, { text: '☎ Contact Us' }],
-              ],
-              resize_keyboard: true,
-            },
-          });
+          const session = userSessions.get(chatId);
+          if (session?.pendingVote) {
+            const { contestId, contestantId } = session.pendingVote;
+            userSessions.delete(chatId);
+            await sendContestantVoteCard(token, chatId, contestId, contestantId);
+          } else {
+            // Show main menu for registered user
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: `👋 <b>Welcome back, ${existingUser.firstName}!</b>\n\n👛 <b>Wallet Balance:</b> ₹${existingUser.walletBalance || 0}`,
+              parse_mode: 'HTML',
+              reply_markup: {
+                keyboard: [
+                  [{ text: '👛 Wallet' }, { text: '💸 Withdraw' }],
+                  [{ text: '🎁 Refer & Earn' }, { text: '☎ Contact Us' }],
+                ],
+                resize_keyboard: true,
+              },
+            });
+          }
         } else {
           // Onboarding registration flow for unregistered user
           const currentSess = userSessions.get(chatId);
@@ -488,7 +581,7 @@ export async function processTelegramUpdate(token: string, update: any) {
 
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
-            text: 'Let\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
+            text: `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration to submit your vote.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
             parse_mode: 'HTML',
           });
         }
@@ -907,69 +1000,67 @@ export async function processTelegramUpdate(token: string, update: any) {
       const voterName = (voterUser.first_name || 'User') + (voterUser.last_name ? ' ' + voterUser.last_name : '');
       const voterUsername = voterUser.username ? '@' + voterUser.username : '';
 
+      // Verify channel/group membership
+      const existingUser = await getUserByTelegramId(chatId);
+      const verifyRes = await verifyUserSmartJoin(token, chatId, existingUser);
+
+      if (!verifyRes.verified) {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: '⚠️ Please join required channels/groups first!',
+          show_alert: true,
+        });
+
+        const session = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
+        session.pendingVote = { contestId, contestantId };
+        userSessions.set(chatId, session);
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: buildForceJoinText(verifyRes.missingItems, existingUser !== null),
+          parse_mode: 'HTML',
+          reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
+        });
+        return;
+      }
+
       const voteRes = await submitVote({
         contestId,
         contestantId,
         voterTelegramId: chatId,
         voterName,
         voterUsername,
-        botToken: token
+        botToken: token,
       });
 
       if (voteRes.success) {
+        const rewardText =
+          voteRes.rewardEarned && voteRes.rewardEarned > 0
+            ? `\n💰 <b>You earned a ₹${voteRes.rewardEarned} wallet bonus!</b>`
+            : '';
+
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
-          text: voteRes.rewardEarned && voteRes.rewardEarned > 0 
-            ? `✅ Vote Casted! You earned a ₹${voteRes.rewardEarned} wallet bonus!` 
-            : `✅ Your vote was successfully recorded!`,
-          show_alert: true
+          text: `✅ Vote Submitted Successfully!`,
+          show_alert: true,
         });
 
-        // Refresh the contest view
-        const contests = await getContests();
-        const contest = contests.find(c => c.id === contestId);
-        if (contest) {
-          const contestants = await getContestants(contestId);
-          const approvedContestants = contestants.filter(cn => cn.status === 'approved');
-
-          let viewText = `🏆 <b>${contest.title}</b>\n\n`;
-          if (contest.description) viewText += `${contest.description}\n\n`;
-          if (contest.rules) viewText += `📋 <b>Rules:</b> ${contest.rules}\n\n`;
-
-          viewText += `👥 <b>Contestants List:</b>\n\n`;
-          const inline_keyboard: any[][] = [];
-
-          approvedContestants.forEach((cn, index) => {
-            viewText += `${index + 1}. <b>${cn.name}</b>\n`;
-            if (cn.username) viewText += `🔗 Username: ${cn.username}\n`;
-            viewText += `🗳 <b>Votes Count:</b> ${cn.votesCount || 0} votes\n`;
-            if (cn.description) viewText += `📝 Bio: <i>${cn.description}</i>\n`;
-            viewText += `\n`;
-
-            inline_keyboard.push([{
-              text: `🗳 Vote for ${cn.name}`,
-              callback_data: `vote_cast:${contestId}:${cn.id}`
-            }]);
-          });
-
-          inline_keyboard.push([{
-            text: '⬅ Back to Contests',
-            callback_data: 'vote_list_contests'
-          }]);
-
-          await sendTelegramApi(token, 'editMessageText', {
-            chat_id: chatId,
-            message_id: cb.message?.message_id,
-            text: viewText,
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard }
-          });
-        }
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `✅ <b>Vote Submitted Successfully!</b>${rewardText}`,
+          parse_mode: 'HTML',
+        });
       } else {
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
-          text: `❌ ${voteRes.error || 'Failed to submit vote.'}`,
-          show_alert: true
+          text: `${voteRes.error || 'Failed to submit vote.'}`,
+          show_alert: true,
+        });
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `${voteRes.error || 'Failed to submit vote.'}`,
+          parse_mode: 'HTML',
         });
       }
       return;
@@ -1011,22 +1102,29 @@ export async function processTelegramUpdate(token: string, update: any) {
     return;
   }
 
-  // Pre-process: Parse referral parameter from /start command for unregistered users
+  // Pre-process: Parse referral or vote parameter from /start command for unregistered users
   if (!existingUser && (text === '/start' || text.startsWith('/start'))) {
-    let refParam = '';
+    let startParam = '';
     const parts = text.split(/\s+/);
     if (parts.length > 1 && parts[1]) {
-      refParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
+      startParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
     } else {
       const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
       if (match && match[1] && match[1].toLowerCase() !== '/start') {
-        refParam = match[1].trim();
+        startParam = match[1].trim();
       }
     }
 
     let referrerUid: string | undefined = undefined;
-    if (refParam) {
-      const referrer = await getUserByUid(refParam);
+    let pendingVote: { contestId: string; contestantId: string } | undefined = undefined;
+
+    if (startParam.startsWith('vote_')) {
+      const vParts = startParam.split('_');
+      if (vParts[1] && vParts[2]) {
+        pendingVote = { contestId: vParts[1], contestantId: vParts[2] };
+      }
+    } else if (startParam) {
+      const referrer = await getUserByUid(startParam);
       if (referrer && String(referrer.telegramId) !== String(chatId)) {
         referrerUid = String(referrer.uid);
       }
@@ -1034,10 +1132,12 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     const existingSess = userSessions.get(chatId);
     const finalReferrerUid = referrerUid || existingSess?.referrerUid;
+    const finalPendingVote = pendingVote || existingSess?.pendingVote;
 
     userSessions.set(chatId, {
       step: 'FORCE_JOIN',
       referrerUid: finalReferrerUid,
+      pendingVote: finalPendingVote,
     });
   }
 
@@ -1169,47 +1269,31 @@ export async function processTelegramUpdate(token: string, update: any) {
       const contestId = voteParts[1];
       const contestantId = voteParts[2];
 
-      if (existingUser) {
-        // Automatically submit vote for existing user!
-        const voterName = (existingUser.firstName || 'User') + (existingUser.username ? ' (@' + existingUser.username + ')' : '');
-        const voterUsername = existingUser.username ? '@' + existingUser.username : '';
+      const contests = await getContests();
+      const contest = contests.find((c) => c.id === contestId);
+      const now = new Date();
 
-        const voteRes = await submitVote({
-          contestId,
-          contestantId,
-          voterTelegramId: chatId,
-          voterName,
-          voterUsername,
-          botToken: token
+      if (!contest || contest.status !== 'active' || now > new Date(contest.votingEndDate)) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: '🔒 <b>This voting contest has ended or is currently inactive.</b>',
+          parse_mode: 'HTML',
         });
+        return;
+      }
 
-        if (voteRes.success) {
-          const rewardText = voteRes.rewardEarned && voteRes.rewardEarned > 0 
-            ? `\n💰 <b>You earned a ₹${voteRes.rewardEarned} wallet bonus!</b>` 
-            : '';
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `✅ <b>Vote Successfully Cast!</b>\n\nYour vote has been recorded.${rewardText}\n\nThank you for participating!`,
-            parse_mode: 'HTML'
-          });
-        } else {
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `❌ <b>Voting Failed</b>\n\nCould not record your vote: <b>${voteRes.error || 'Unknown error'}</b>`,
-            parse_mode: 'HTML'
-          });
-        }
+      if (existingUser) {
+        await sendContestantVoteCard(token, chatId, contestId, contestantId);
         return;
       } else {
-        // For unregistered users: Save the vote intent in their userSession so we can auto-trigger it after they finish onboarding!
         const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
         session.pendingVote = { contestId, contestantId };
         userSessions.set(chatId, session);
-        
+
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
-          text: `👋 <b>Welcome to Roy Share Wallet!</b>\n\nTo complete your vote, please complete a quick mobile number verification.\n\nPress /start to begin onboarding!`,
-          parse_mode: 'HTML'
+          text: `👋 <b>Welcome to Roy Share Wallet!</b>\n\nTo complete your vote, please complete a quick registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
+          parse_mode: 'HTML',
         });
         return;
       }
@@ -1898,23 +1982,24 @@ export async function processTelegramUpdate(token: string, update: any) {
         voterTelegramId: chatId,
         voterName,
         voterUsername,
-        botToken: token
+        botToken: token,
       });
 
       if (voteRes.success) {
-        const rewardText = voteRes.rewardEarned && voteRes.rewardEarned > 0 
-          ? `\n💰 <b>You earned a ₹${voteRes.rewardEarned} wallet bonus!</b>` 
-          : '';
+        const rewardText =
+          voteRes.rewardEarned && voteRes.rewardEarned > 0
+            ? `\n💰 <b>You earned a ₹${voteRes.rewardEarned} wallet bonus!</b>`
+            : '';
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
-          text: `✅ <b>Vote Cast Automatically!</b>\n\nYour vote has been recorded.${rewardText}\n\nThank you for participating!`,
-          parse_mode: 'HTML'
+          text: `✅ <b>Vote Submitted Successfully!</b>${rewardText}\n\nThank you for participating!`,
+          parse_mode: 'HTML',
         });
       } else {
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
-          text: `⚠️ <b>Could not cast vote automatically:</b>\n${voteRes.error || 'Unknown error'}`,
-          parse_mode: 'HTML'
+          text: `${voteRes.error || 'Could not record vote.'}`,
+          parse_mode: 'HTML',
         });
       }
     }
