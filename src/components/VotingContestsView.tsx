@@ -20,7 +20,10 @@ import {
   Eye,
   AlertTriangle,
   ChevronRight,
-  Info
+  Info,
+  Link,
+  Share2,
+  Send
 } from 'lucide-react';
 import { Contest, Contestant, VoteLog, AdminConfig } from '../types';
 import {
@@ -47,6 +50,60 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
   // Active Tab within Voting System
   const [activeSubTab, setActiveSubTab] = useState<'contests' | 'contestants' | 'logs'>('contests');
+
+  const [isResending, setIsResending] = useState<string | null>(null);
+
+  const handleCopyLink = (link: string) => {
+    navigator.clipboard.writeText(link);
+    showToast('Link copied to clipboard successfully!', 'success');
+  };
+
+  const handleShareLink = (title: string, link: string) => {
+    if (navigator.share) {
+      navigator.share({
+        title: title,
+        text: `Register for the voting contest "${title}" here!`,
+        url: link
+      }).catch(() => {
+        navigator.clipboard.writeText(link);
+        showToast('Link copied to clipboard!', 'success');
+      });
+    } else {
+      navigator.clipboard.writeText(link);
+      showToast('Link copied to clipboard!', 'success');
+    }
+  };
+
+  const handleResendVotingLink = async (contestant: Contestant) => {
+    if (!contestant.telegramId) {
+      showToast('This contestant has no Telegram ID registered.', 'error');
+      return;
+    }
+    
+    setIsResending(contestant.id);
+    try {
+      const response = await fetch('/api/admin/contestants/resend-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contestantId: contestant.id,
+          contestId: contestant.contestId,
+        }),
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        showToast(data.message || 'Voting link sent successfully!', 'success');
+      } else {
+        showToast(data.error || 'Failed to send voting link.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Error sending voting link:', err);
+      showToast('Network error while sending voting link.', 'error');
+    } finally {
+      setIsResending(null);
+    }
+  };
 
   // Form states - Contests
   const [showContestForm, setShowContestForm] = useState(false);
@@ -718,6 +775,42 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                             Total Votes: {totalVotes}
                           </span>
                         </div>
+
+                        {/* Contest Link and Action buttons */}
+                        <div className="mt-3 p-3 rounded-xl bg-slate-950 border border-slate-850 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 max-w-xl">
+                          <div className="flex flex-col min-w-0 flex-1">
+                            <span className="text-[9px] font-bold text-slate-550 uppercase tracking-wider block">Registration Link</span>
+                            <span className="text-xs font-mono text-slate-350 truncate block selection:bg-sky-500/20">{`${window.location.origin}/register-contest/${c.id}`}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              onClick={() => handleCopyLink(`${window.location.origin}/register-contest/${c.id}`)}
+                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition text-[10px] font-bold flex items-center gap-1"
+                              title="Copy Link to Clipboard"
+                            >
+                              <Link className="w-3.5 h-3.5 text-sky-400" />
+                              <span className="hidden sm:inline">Copy</span>
+                            </button>
+                            <button
+                              onClick={() => handleShareLink(c.title, `${window.location.origin}/register-contest/${c.id}`)}
+                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition text-[10px] font-bold flex items-center gap-1"
+                              title="Share Contest Link"
+                            >
+                              <Share2 className="w-3.5 h-3.5 text-indigo-450" />
+                              <span className="hidden sm:inline">Share</span>
+                            </button>
+                            <a
+                              href={`/register-contest/${c.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition text-[10px] font-bold flex items-center gap-1"
+                              title="Preview Registration Page"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                              <span className="hidden sm:inline">Preview</span>
+                            </a>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
@@ -1055,6 +1148,35 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                             Contest: {cParent ? cParent.title : 'Deleted Contest'}
                           </span>
                           {cn.telegramId && <span>Telegram ID: <code>{cn.telegramId}</code></span>}
+                        </div>
+
+                        {/* Unique Voting Link and Admin resend controls */}
+                        <div className="mt-3 p-3 rounded-xl bg-slate-950 border border-slate-850 flex flex-col gap-2">
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-[9px] font-bold text-slate-550 uppercase tracking-wider block">Unique Voting Link</span>
+                            <span className="text-[11px] font-mono text-slate-350 truncate block selection:bg-sky-500/20">
+                              {`https://t.me/${config.botUsername || 'RoyShareWalletBot'}?start=vote_${cn.contestId}_${cn.id}`}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <button
+                              onClick={() => handleCopyLink(`https://t.me/${config.botUsername || 'RoyShareWalletBot'}?start=vote_${cn.contestId}_${cn.id}`)}
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition text-[10px] font-bold flex items-center gap-1"
+                              title="Copy unique voting link"
+                            >
+                              <Link className="w-3 h-3 text-sky-400" />
+                              <span>Copy Link</span>
+                            </button>
+                            <button
+                              disabled={isResending === cn.id}
+                              onClick={() => handleResendVotingLink(cn)}
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white disabled:opacity-50 transition text-[10px] font-bold flex items-center gap-1"
+                              title="Resend link via Telegram Bot"
+                            >
+                              <Send className="w-3 h-3 text-emerald-450" />
+                              <span>{isResending === cn.id ? 'Sending...' : 'Resend via Bot'}</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>

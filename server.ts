@@ -959,7 +959,7 @@ async function startServer() {
   // ==========================================
 
   // Helper to load settings/config and decrypt sensitive fields
-  async function getDecryptedConfig() {
+  async function getDecryptedConfig(): Promise<any> {
     try {
       const configDoc = await getDoc(doc(db, 'settings', 'config'));
       if (configDoc.exists()) {
@@ -1352,6 +1352,69 @@ async function startServer() {
       }, { merge: true });
 
       return res.json({ success: true, message: 'Configuration saved successfully.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Resend Contestant Voting Link (Protected)
+  app.post('/api/admin/contestants/resend-link', requireAdminSession, async (req, res) => {
+    try {
+      const { contestantId, contestId } = req.body;
+      if (!contestantId || !contestId) {
+        return res.status(400).json({ success: false, error: 'contestantId and contestId are required.' });
+      }
+
+      // Fetch contest
+      const contestDoc = await getDoc(doc(db, 'contests', contestId));
+      if (!contestDoc.exists()) {
+        return res.status(404).json({ success: false, error: 'Contest not found.' });
+      }
+      const contest = contestDoc.data();
+
+      // Fetch contestant
+      const contestantDoc = await getDoc(doc(db, 'contestants', contestantId));
+      if (!contestantDoc.exists()) {
+        return res.status(404).json({ success: false, error: 'Contestant not found.' });
+      }
+      const contestant = contestantDoc.data();
+
+      if (!contestant.telegramId) {
+        return res.status(400).json({ success: false, error: 'Contestant does not have a Telegram Chat ID registered.' });
+      }
+
+      // Get configuration
+      const config = await getDecryptedConfig();
+      if (!config || !config.botToken) {
+        return res.status(500).json({ success: false, error: 'Bot token configuration is missing or decrypted unsuccessfully.' });
+      }
+
+      const botUsername = config.botUsername || 'RoyShareWalletBot';
+      const uniqueLink = `https://t.me/${botUsername}?start=vote_${contestId}_${contestantId}`;
+
+      const messageText = `🏁 <b>Your Voting Link is active!</b>\n\n` +
+        `🏆 Contest: <b>${contest.title}</b>\n` +
+        `👤 Contestant: <b>${contestant.name}</b>\n\n` +
+        `Here is your unique voting link. Share this link with your friends, groups, and channels to gather votes:\n` +
+        `👉 ${uniqueLink}\n\n` +
+        `Good luck! 🚀`;
+
+      const response = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: contestant.telegramId,
+          text: messageText,
+          parse_mode: 'HTML',
+        }),
+      });
+
+      const resJson = await response.json();
+      if (resJson.ok) {
+        return res.json({ success: true, message: 'Unique voting link sent successfully via the Telegram Bot!' });
+      } else {
+        return res.status(500).json({ success: false, error: `Telegram Bot API Error: ${resJson.description || 'Unknown'}` });
+      }
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }

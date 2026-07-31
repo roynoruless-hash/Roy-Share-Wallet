@@ -24,6 +24,7 @@ import { ReferralVerifyView } from './components/ReferralVerifyView';
 import { ClaimRewardView } from './components/ClaimRewardView';
 import { AdminLoginView } from './components/AdminLoginView';
 import { VotingContestsView } from './components/VotingContestsView';
+import { ContestRegistrationView } from './components/ContestRegistrationView';
 import { Toast, ToastMessage } from './components/Toast';
 import { Loader2 } from 'lucide-react';
 
@@ -403,6 +404,7 @@ export default function App() {
     window.location.pathname.startsWith('/referral-verify') ||
     (new URLSearchParams(window.location.search).has('token') && !isClaimRewardRoute);
   const isFeedbackRoute = window.location.pathname.startsWith('/feedback');
+  const isContestRegistrationRoute = window.location.pathname.startsWith('/register-contest');
 
   if (isClaimRewardRoute) {
     return <ClaimRewardView botUsername={config.botUsername || 'RoyShareWalletBot'} />;
@@ -416,6 +418,12 @@ export default function App() {
     const pathParts = window.location.pathname.split('/');
     const campaignId = pathParts[2] || '';
     return <FeedbackUserFlowView campaignId={campaignId} botUsername={config.botUsername || 'RoyShareWalletBot'} />;
+  }
+
+  if (isContestRegistrationRoute) {
+    const pathParts = window.location.pathname.split('/');
+    const rContestId = pathParts[2] || '';
+    return <ContestRegistrationView contestId={rContestId} botUsername={config.botUsername || 'RoyShareWalletBot'} />;
   }
 
   if (isLoading) {
