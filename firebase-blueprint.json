@@ -143,6 +143,25 @@
         "lastUsedAt": { "type": "string" }
       },
       "required": ["fingerprint", "uids"]
+    },
+    "withdrawals": {
+      "title": "Withdrawal Requests",
+      "description": "User withdrawal payout requests and approval history",
+      "type": "object",
+      "properties": {
+        "withdrawalId": { "type": "string" },
+        "userId": { "type": "string" },
+        "uid": { "type": "string" },
+        "telegramId": { "type": "string" },
+        "userName": { "type": "string" },
+        "amount": { "type": "number" },
+        "upiId": { "type": "string" },
+        "status": { "type": "string" },
+        "rejectReason": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "processedAt": { "type": "string" }
+      },
+      "required": ["withdrawalId", "uid", "amount", "upiId", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -173,6 +192,10 @@
     "/deviceFingerprints/{fpId}": {
       "schema": "deviceFingerprints",
       "description": "Anti self-referral device fingerprint log"
+    },
+    "/withdrawals/{withdrawalId}": {
+      "schema": "withdrawals",
+      "description": "User withdrawal requests and payout audit records"
     }
   }
 }

@@ -160,3 +160,18 @@ export interface DeviceFingerprintRecord {
   lastUsedAt: string;
 }
 
+export interface WithdrawalRecord {
+  id?: string;
+  withdrawalId: string;
+  userId?: string;
+  uid: string;
+  telegramId: string;
+  userName?: string;
+  amount: number;
+  upiId: string;
+  status: 'pending' | 'completed' | 'rejected';
+  rejectReason?: string;
+  createdAt: string;
+  processedAt?: string;
+}
+

@@ -3,6 +3,7 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { processTelegramUpdate } from './src/server/botHandler';
 import { getReferralTokenInfo, processReferralVerification } from './src/server/referralVerification';
+import { approveWithdrawal, rejectWithdrawal } from './src/server/withdrawalHandler';
 
 async function startServer() {
   const app = express();
@@ -296,6 +297,35 @@ async function startServer() {
       return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ success: false, reason: 'SERVER_ERROR', message: err.message });
+    }
+  });
+
+  // 7. ADMIN WITHDRAWAL APPROVAL & REJECTION ENDPOINTS
+  app.post('/api/admin/withdrawals/approve', async (req, res) => {
+    try {
+      const { token, withdrawalId } = req.body;
+      const result = await approveWithdrawal(token, withdrawalId);
+      if (result.success) {
+        return res.json(result);
+      } else {
+        return res.status(400).json(result);
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/admin/withdrawals/reject', async (req, res) => {
+    try {
+      const { token, withdrawalId, reason } = req.body;
+      const result = await rejectWithdrawal(token, withdrawalId, reason);
+      if (result.success) {
+        return res.json(result);
+      } else {
+        return res.status(400).json(result);
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
     }
   });
 

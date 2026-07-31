@@ -2,12 +2,14 @@ import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction 
 import { db } from '../services/firebase';
 
 interface UserSession {
-  step: 'FORCE_JOIN' | 'WAITING_NAME' | 'WAITING_MOBILE' | 'WAITING_CONTACT';
+  step: 'FORCE_JOIN' | 'WAITING_NAME' | 'WAITING_MOBILE' | 'WAITING_CONTACT' | 'WITHDRAW_AMOUNT' | 'WITHDRAW_UPI' | 'WITHDRAW_CONFIRM';
   fullName?: string;
   mobile?: string;
   channelVerified?: boolean;
   groupVerified?: boolean;
   referrerUid?: string;
+  withdrawAmount?: number;
+  withdrawUpi?: string;
 }
 
 // In-memory session state store for onboarding users
@@ -227,8 +229,198 @@ export async function processTelegramUpdate(token: string, update: any) {
           show_alert: true,
         });
       }
+      return;
     }
-    return;
+
+    // WITHDRAWAL FLOW CALLBACK QUERIES
+    if (data === 'withdraw_continue') {
+      const adminConfig = await getAdminConfig();
+      if (adminConfig?.enableWithdraw === false) {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: '❌ Withdrawals are currently disabled by Admin.',
+          show_alert: true,
+        });
+        return;
+      }
+
+      const existingUser = await getUserByTelegramId(chatId);
+      if (!existingUser) {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: '❌ Account not found. Please register first.',
+          show_alert: true,
+        });
+        return;
+      }
+
+      const minW = adminConfig?.minWithdrawal ?? 100;
+      const maxW = adminConfig?.maxWithdrawal ?? 10000;
+      const walletBal = Number(existingUser.walletBalance) || 0;
+
+      if (walletBal < minW) {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: `❌ Insufficient Balance! Minimum withdrawal is ₹${minW}. Your balance is ₹${walletBal}.`,
+          show_alert: true,
+        });
+        return;
+      }
+
+      userSessions.set(chatId, { step: 'WITHDRAW_AMOUNT' });
+
+      await sendTelegramApi(token, 'answerCallbackQuery', {
+        callback_query_id: cbId,
+        text: 'Enter withdrawal amount',
+        show_alert: false,
+      });
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `💸 <b>Enter Withdrawal Amount</b>\n\n` +
+          `💰 <b>Available Balance:</b> ₹${walletBal}\n` +
+          `📉 <b>Minimum:</b> ₹${minW} | 📈 <b>Maximum:</b> ₹${maxW}\n\n` +
+          `Please enter the withdrawal amount in Rupees (e.g. <code>500</code>):`,
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    if (data === 'withdraw_confirm') {
+      const session = userSessions.get(chatId);
+      if (!session || session.step !== 'WITHDRAW_CONFIRM' || !session.withdrawAmount || !session.withdrawUpi) {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: '❌ Withdrawal session expired. Please tap 💸 Withdraw again.',
+          show_alert: true,
+        });
+        return;
+      }
+
+      const adminConfig = await getAdminConfig();
+      const amount = session.withdrawAmount;
+      const upiId = session.withdrawUpi;
+
+      try {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('telegramId', '==', String(chatId)));
+        const qSnap = await getDocs(q);
+
+        if (qSnap.empty) {
+          throw new Error('User record not found.');
+        }
+
+        const userDocRef = qSnap.docs[0].ref;
+        const userDocId = qSnap.docs[0].id;
+        const freshUserData = qSnap.docs[0].data();
+        const currentBal = Number(freshUserData.walletBalance) || 0;
+
+        if (currentBal < amount) {
+          userSessions.delete(chatId);
+          await sendTelegramApi(token, 'answerCallbackQuery', {
+            callback_query_id: cbId,
+            text: '❌ Insufficient balance for this withdrawal.',
+            show_alert: true,
+          });
+          return;
+        }
+
+        const newBalance = currentBal - amount;
+        const withdrawalId = `WDR_${Date.now().toString().slice(-6)}_${Math.floor(1000 + Math.random() * 9000)}`;
+
+        // Deduct balance from user wallet
+        await runTransaction(db, async (transaction) => {
+          transaction.update(userDocRef, {
+            walletBalance: newBalance,
+          });
+        });
+
+        // Add document to withdrawals collection
+        await addDoc(collection(db, 'withdrawals'), {
+          withdrawalId,
+          userId: userDocId,
+          uid: freshUserData.uid,
+          telegramId: String(chatId),
+          userName: freshUserData.firstName || 'User',
+          amount: amount,
+          upiId: upiId,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+        });
+
+        // Add record to transactions collection
+        await addDoc(collection(db, 'transactions'), {
+          userId: userDocId,
+          uid: freshUserData.uid,
+          type: 'withdrawal',
+          amount: amount,
+          balanceAfter: newBalance,
+          reason: `Withdrawal Request #${withdrawalId} to ${upiId}`,
+          createdAt: new Date().toISOString(),
+        });
+
+        // Clear session
+        userSessions.delete(chatId);
+
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: '✅ Withdrawal request submitted!',
+          show_alert: false,
+        });
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `🎉 <b>Withdrawal Request Submitted!</b>\n\n` +
+            `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
+            `💵 <b>Amount:</b> ₹${amount}\n` +
+            `💳 <b>UPI ID:</b> <code>${upiId}</code>\n` +
+            `⏱ <b>Processing Time:</b> ${adminConfig?.processingTimeNotice || '24 Hours'}\n` +
+            `💰 <b>New Balance:</b> ₹${newBalance}\n` +
+            `⌛ <b>Status:</b> Pending Approval\n\n` +
+            `Your request has been submitted to admin for verification. You will be notified once processed!`,
+          parse_mode: 'HTML',
+        });
+
+        // Notify Admin via Telegram if adminTelegramId or adminChatId is configured
+        const adminChat = adminConfig?.adminTelegramId || adminConfig?.adminChatId;
+        if (adminChat) {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: adminChat,
+            text: `🔔 <b>New Pending Withdrawal Request!</b>\n\n` +
+              `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
+              `👤 <b>User:</b> ${freshUserData.firstName} (UID: <code>${freshUserData.uid}</code>)\n` +
+              `💵 <b>Amount:</b> ₹${amount}\n` +
+              `💳 <b>UPI ID:</b> <code>${upiId}</code>\n` +
+              `📱 <b>Mobile:</b> <code>${freshUserData.mobile}</code>`,
+            parse_mode: 'HTML',
+          });
+        }
+      } catch (err: any) {
+        console.error('Error confirming withdrawal:', err);
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: `❌ Error submitting withdrawal: ${err.message}`,
+          show_alert: true,
+        });
+      }
+      return;
+    }
+
+    if (data === 'withdraw_cancel') {
+      userSessions.delete(chatId);
+      await sendTelegramApi(token, 'answerCallbackQuery', {
+        callback_query_id: cbId,
+        text: 'Withdrawal cancelled.',
+        show_alert: false,
+      });
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `❌ <b>Withdrawal Cancelled</b>\n\nYour withdrawal request has been cancelled. Your wallet balance remains unchanged.`,
+        parse_mode: 'HTML',
+      });
+      return;
+    }
   }
 
   // 3. HANDLE MESSAGES (STRICTLY PRIVATE CHAT ONLY)
@@ -375,6 +567,130 @@ export async function processTelegramUpdate(token: string, update: any) {
   if (existingUser) {
     const adminConfig = await getAdminConfig();
 
+    // Check if user is in an active withdrawal input session
+    const activeSession = userSessions.get(chatId);
+    if (activeSession && (activeSession.step === 'WITHDRAW_AMOUNT' || activeSession.step === 'WITHDRAW_UPI')) {
+      if (text === '/cancel') {
+        userSessions.delete(chatId);
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: '❌ <b>Withdrawal Cancelled</b>\n\nYour withdrawal session has been cancelled.',
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      if (activeSession.step === 'WITHDRAW_AMOUNT') {
+        const minW = adminConfig?.minWithdrawal ?? 100;
+        const maxW = adminConfig?.maxWithdrawal ?? 10000;
+        const walletBal = Number(existingUser.walletBalance) || 0;
+
+        const cleanText = text.trim();
+        const amt = Number(cleanText);
+
+        if (isNaN(amt) || amt <= 0 || !/^\d+(\.\d{1,2})?$/.test(cleanText)) {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `❌ <b>Invalid Amount Format</b>\n\nPlease enter a valid numeric amount (e.g. <code>500</code>):`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+
+        if (amt < minW) {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `❌ <b>Amount Too Low</b>\n\n` +
+              `Minimum withdrawal limit is <b>₹${minW}</b>.\n` +
+              `Please enter an amount equal to or greater than ₹${minW}:`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+
+        if (amt > maxW) {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `❌ <b>Amount Exceeds Maximum Limit</b>\n\n` +
+              `Maximum withdrawal limit is <b>₹${maxW}</b>.\n` +
+              `Please enter an amount equal to or less than ₹${maxW}:`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+
+        if (amt > walletBal) {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `❌ <b>Insufficient Wallet Balance</b>\n\n` +
+              `Your current wallet balance is <b>₹${walletBal}</b>.\n` +
+              `Please enter an amount within your wallet balance:`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+
+        activeSession.withdrawAmount = amt;
+        activeSession.step = 'WITHDRAW_UPI';
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `✅ <b>Withdrawal Amount:</b> ₹${amt}\n\n` +
+            `<b>Step 2/2:</b> Please enter your <b>UPI ID</b> to receive payment (e.g. <code>example@upi</code> or <code>9876543210@paytm</code>):`,
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      if (activeSession.step === 'WITHDRAW_UPI') {
+        const upi = text.trim();
+        const upiRegex = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
+
+        if (!upiRegex.test(upi)) {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `❌ <b>Invalid UPI ID Format</b>\n\n` +
+              `Please enter a valid UPI address (e.g. <code>name@upi</code> or <code>9876543210@paytm</code>):`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+
+        activeSession.withdrawUpi = upi;
+        activeSession.step = 'WITHDRAW_CONFIRM';
+
+        const walletBal = Number(existingUser.walletBalance) || 0;
+        const amt = activeSession.withdrawAmount || 0;
+        const remaining = walletBal - amt;
+        const notice = adminConfig?.processingTimeNotice || '24 Hours';
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `📋 <b>Withdrawal Summary</b>\n\n` +
+            `💵 <b>Amount:</b> ₹${amt}\n` +
+            `💳 <b>UPI ID:</b> <code>${upi}</code>\n` +
+            `⏱ <b>Processing Time:</b> ${notice}\n` +
+            `💰 <b>Remaining Balance:</b> ₹${remaining}\n\n` +
+            `Please review the details above and tap <b>Confirm</b> to submit:`,
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Confirm', callback_data: 'withdraw_confirm' },
+                { text: '❌ Cancel', callback_data: 'withdraw_cancel' },
+              ],
+            ],
+          },
+        });
+        return;
+      }
+    }
+
+    // Reset active withdrawal session if user clicks a main menu button
+    if (text === '👛 Wallet' || text === '💸 Withdraw' || text === '🎁 Refer & Earn' || text === '☎ Contact Us') {
+      userSessions.delete(chatId);
+    }
+
     if (text === '👛 Wallet') {
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
@@ -397,6 +713,13 @@ export async function processTelegramUpdate(token: string, update: any) {
           `📈 <b>Maximum Withdrawal:</b> ₹${adminConfig?.maxWithdrawal ?? 10000}\n\n` +
           `ℹ <b>Notice:</b> ${adminConfig?.processingTimeNotice || 'Withdrawal requests are processed within 24 hours.'}`,
         parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '💸 Continue Withdrawal', callback_data: 'withdraw_continue' },
+            ],
+          ],
+        },
       });
       return;
     }
