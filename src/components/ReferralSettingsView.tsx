@@ -36,7 +36,8 @@ import {
   PlusCircle,
   HelpCircle,
   RotateCcw,
-  Sparkles
+  Sparkles,
+  Copy
 } from 'lucide-react';
 import { AdminConfig, ReferralMilestone, MilestoneClaimRecord } from '../types';
 import { collection, query, where, orderBy, limit, getDocs, doc, setDoc, updateDoc } from 'firebase/firestore';
@@ -333,7 +334,7 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
   };
 
   const handleDeleteMilestone = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this milestone reward rule?')) return;
+    if (!confirm('Delete this milestone?')) return;
     try {
       await deleteMilestoneFromDb(id);
       triggerToast('Milestone reward rule deleted', 'success');
@@ -341,6 +342,23 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
       fetchStats();
     } catch (err: any) {
       triggerToast('Deletion failed: ' + err.message, 'error');
+    }
+  };
+
+  const handleDuplicateMilestone = async (m: ReferralMilestone) => {
+    try {
+      const payload: Partial<ReferralMilestone> = {
+        requiredReferrals: m.requiredReferrals,
+        rewardAmount: m.rewardAmount,
+        rewardType: m.rewardType,
+        active: m.active,
+      };
+      await saveMilestoneToDb(payload);
+      triggerToast('Milestone cloned successfully', 'success');
+      fetchMilestones();
+      fetchStats();
+    } catch (err: any) {
+      triggerToast('Cloning failed: ' + err.message, 'error');
     }
   };
 
@@ -1048,31 +1066,9 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
               <tbody className="divide-y divide-slate-800/60 bg-slate-900/30">
                 {milestones.map((m, index) => (
                   <tr key={m.id} className="hover:bg-slate-800/20 text-slate-300">
-                    {/* Order & Move Buttons */}
+                    {/* Order */}
                     <td className="py-3 px-4 font-mono font-bold text-slate-400">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-extrabold text-sky-400">#{index + 1}</span>
-                        <div className="flex flex-col">
-                          <button
-                            type="button"
-                            onClick={() => handleMoveMilestone(index, 'up')}
-                            disabled={index === 0}
-                            className="text-slate-500 hover:text-white disabled:opacity-25"
-                            title="⬆ Move Up"
-                          >
-                            <ChevronUp className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleMoveMilestone(index, 'down')}
-                            disabled={index === milestones.length - 1}
-                            className="text-slate-500 hover:text-white disabled:opacity-25"
-                            title="⬇ Move Down"
-                          >
-                            <ChevronDown className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
+                      <span className="text-xs font-extrabold text-sky-400">#{index + 1}</span>
                     </td>
 
                     {/* Required Referrals */}
@@ -1101,7 +1097,7 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
                           ? 'bg-emerald-950/80 border-emerald-500/30 text-emerald-400'
                           : 'bg-slate-950 border-slate-800 text-slate-500'
                       }`}>
-                        {m.active ? 'Active ON' : 'Inactive OFF'}
+                        {m.active ? 'Active' : 'Inactive'}
                       </span>
                     </td>
 
@@ -1123,6 +1119,32 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
                           title="🗑 Delete Milestone"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDuplicateMilestone(m)}
+                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 text-amber-400 hover:text-amber-300 transition"
+                          title="📋 Duplicate Milestone"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveMilestone(index, 'up')}
+                          disabled={index === 0}
+                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white transition disabled:opacity-25"
+                          title="⬆ Move Up"
+                        >
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveMilestone(index, 'down')}
+                          disabled={index === milestones.length - 1}
+                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white transition disabled:opacity-25"
+                          title="⬇ Move Down"
+                        >
+                          <ChevronDown className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </td>
