@@ -143,13 +143,30 @@ export const ReferralMilestonesView: React.FC<ReferralMilestonesViewProps> = ({
 
   // Delete Milestone
   const handleDeleteMilestone = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this milestone? Existing claim logs will remain.')) return;
+    if (!window.confirm('Delete this milestone?')) return;
     try {
       await deleteMilestoneFromDb(id);
       showToast('Milestone deleted', 'success');
       await loadData();
     } catch (err: any) {
       showToast('Failed to delete milestone: ' + err.message, 'error');
+    }
+  };
+
+  // Duplicate Milestone
+  const handleDuplicateMilestone = async (m: ReferralMilestone) => {
+    try {
+      const payload: Partial<ReferralMilestone> = {
+        requiredReferrals: m.requiredReferrals,
+        rewardAmount: m.rewardAmount,
+        rewardType: m.rewardType as any,
+        active: m.active,
+      };
+      await saveMilestoneToDb(payload);
+      showToast('Milestone cloned successfully', 'success');
+      await loadData();
+    } catch (err: any) {
+      showToast('Cloning failed: ' + err.message, 'error');
     }
   };
 
@@ -521,81 +538,97 @@ export const ReferralMilestonesView: React.FC<ReferralMilestonesViewProps> = ({
           ) : (
             <div className="bg-slate-900/60 border border-slate-800/60 rounded-2xl overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full text-left border-collapse min-w-[700px]">
                   <thead>
                     <tr className="bg-slate-950 text-[10px] font-black text-slate-400 uppercase tracking-wider border-b border-slate-800/80">
-                      <th className="py-3 px-4">Order</th>
-                      <th className="py-3 px-4">Required Referrals</th>
-                      <th className="py-3 px-4">Reward Value</th>
-                      <th className="py-3 px-4">Reward Wallet Type</th>
-                      <th className="py-3 px-4">Active State</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
+                      <th className="py-3 px-4 w-[10%]">Order</th>
+                      <th className="py-3 px-4 w-[20%]">Required Referrals</th>
+                      <th className="py-3 px-4 w-[15%]">Reward</th>
+                      <th className="py-3 px-4 w-[15%]">Reward Type</th>
+                      <th className="py-3 px-4 w-[15%]">Status</th>
+                      <th className="py-3 px-4 text-right w-[25%] min-w-[180px]">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 text-xs font-semibold">
                     {milestones.map((m, index) => (
                       <tr key={m.id} className="hover:bg-slate-900/30">
+                        {/* Order */}
                         <td className="py-3.5 px-4 text-slate-400">
-                          <div className="flex items-center gap-1">
-                            <span className="font-bold">#{index + 1}</span>
-                            <div className="flex flex-col">
-                              <button
-                                onClick={() => handleMoveMilestone(index, 'up')}
-                                disabled={index === 0}
-                                className="text-slate-500 hover:text-white disabled:opacity-20"
-                              >
-                                <ChevronUp className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleMoveMilestone(index, 'down')}
-                                disabled={index === milestones.length - 1}
-                                className="text-slate-500 hover:text-white disabled:opacity-20"
-                              >
-                                <ChevronDown className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
+                          <span className="text-xs font-extrabold text-sky-400">#{index + 1}</span>
                         </td>
+
+                        {/* Required Referrals */}
                         <td className="py-3.5 px-4 text-white">
-                          <span className="bg-slate-950 px-2 py-1 border border-slate-800 rounded-lg font-black text-blue-400">
+                          <span className="bg-slate-950 px-2.5 py-1 border border-slate-800 rounded-lg font-black text-blue-400 font-mono text-[11px]">
                             {m.requiredReferrals} Referrals
                           </span>
                         </td>
-                        <td className="py-3.5 px-4 font-black text-slate-200">
+
+                        {/* Reward */}
+                        <td className="py-3.5 px-4 font-black text-slate-200 font-mono text-sm">
                           ₹{m.rewardAmount}
                         </td>
-                        <td className="py-3.5 px-4 uppercase text-slate-400">
-                          <span className="px-2 py-0.5 rounded-md bg-slate-950 text-[10px] font-black text-slate-400 border border-slate-800">
-                            {m.rewardType}
+
+                        {/* Reward Type */}
+                        <td className="py-3.5 px-4 uppercase text-slate-400 font-bold">
+                          <span className="px-2 py-0.5 rounded-md bg-slate-950 text-[10px] border border-slate-850 font-mono">
+                            {m.rewardType || 'wallet'}
                           </span>
                         </td>
+
+                        {/* Status */}
                         <td className="py-3.5 px-4">
-                          <button
-                            onClick={() => handleToggleActive(m)}
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase border transition ${
-                              m.active
-                                ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-400'
-                                : 'bg-slate-950 border-slate-800 text-slate-500'
-                            }`}
-                          >
-                            {m.active ? '✅ Active' : '❌ Disabled'}
-                          </button>
+                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                            m.active ? 'text-emerald-400 bg-emerald-950/40' : 'text-rose-400 bg-rose-950/40'
+                          }`}>
+                            {m.active ? '🟢 Active' : '🔴 Disabled'}
+                          </span>
                         </td>
+
+                        {/* Actions */}
                         <td className="py-3.5 px-4 text-right">
-                          <div className="flex justify-end gap-1.5">
+                          <div className="flex items-center justify-end gap-1 flex-nowrap whitespace-nowrap">
                             <button
+                              type="button"
                               onClick={() => startEdit(m)}
-                              className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white transition"
-                              title="Edit"
+                              className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 hover:border-slate-700 transition"
+                              title="✏️ Edit"
                             >
-                              <Edit2 className="w-3.5 h-3.5" />
+                              ✏️
                             </button>
                             <button
+                              type="button"
                               onClick={() => handleDeleteMilestone(m.id)}
-                              className="p-1.5 rounded-lg bg-slate-950 border border-slate-850 hover:bg-rose-950 hover:text-rose-400 text-slate-400 transition"
-                              title="Delete"
+                              className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-rose-950/40 hover:border-rose-800 transition"
+                              title="🗑 Delete"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              🗑
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDuplicateMilestone(m)}
+                              className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 hover:border-slate-700 transition"
+                              title="📄 Duplicate"
+                            >
+                              📄
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveMilestone(index, 'up')}
+                              disabled={index === 0}
+                              className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 hover:border-slate-700 transition disabled:opacity-20 disabled:hover:bg-slate-950 disabled:hover:border-slate-800"
+                              title="⬆ Move Up"
+                            >
+                              ⬆
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveMilestone(index, 'down')}
+                              disabled={index === milestones.length - 1}
+                              className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 hover:border-slate-700 transition disabled:opacity-20 disabled:hover:bg-slate-950 disabled:hover:border-slate-800"
+                              title="⬇ Move Down"
+                            >
+                              ⬇
                             </button>
                           </div>
                         </td>

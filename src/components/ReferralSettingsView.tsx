@@ -1051,16 +1051,16 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
             No progressive milestones configured. Add a level above to incentivize users.
           </div>
         ) : (
-          <div className="border border-slate-800 rounded-xl overflow-hidden">
-            <table className="w-full text-left text-xs">
+          <div className="border border-slate-800 rounded-xl overflow-hidden overflow-x-auto">
+            <table className="w-full text-left text-xs min-w-[700px]">
               <thead>
                 <tr className="border-b border-slate-800 bg-slate-950 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
-                  <th className="py-3 px-4">Order</th>
-                  <th className="py-3 px-4">Required Referrals</th>
-                  <th className="py-3 px-4">Reward Value</th>
-                  <th className="py-3 px-4">Reward Type</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                  <th className="py-3 px-4 w-[10%]">Order</th>
+                  <th className="py-3 px-4 w-[20%]">Required Referrals</th>
+                  <th className="py-3 px-4 w-[15%]">Reward</th>
+                  <th className="py-3 px-4 w-[15%]">Reward Type</th>
+                  <th className="py-3 px-4 w-[15%]">Status</th>
+                  <th className="py-3 px-4 text-right w-[25%] min-w-[180px]">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 bg-slate-900/30">
@@ -1078,73 +1078,71 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
                       </span>
                     </td>
 
-                    {/* Reward Payout */}
+                    {/* Reward */}
                     <td className="py-3 px-4 font-extrabold text-slate-100 text-sm font-mono">
                       ₹{m.rewardAmount}
                     </td>
 
-                    {/* Type */}
+                    {/* Reward Type */}
                     <td className="py-3 px-4 uppercase text-slate-400 font-bold">
                       <span className="px-2 py-0.5 rounded-md bg-slate-950 text-[10px] border border-slate-850 font-mono">
                         {m.rewardType || 'wallet'}
                       </span>
                     </td>
 
-                    {/* Active State toggle status */}
+                    {/* Status */}
                     <td className="py-3 px-4">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase border ${
-                        m.active
-                          ? 'bg-emerald-950/80 border-emerald-500/30 text-emerald-400'
-                          : 'bg-slate-950 border-slate-800 text-slate-500'
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                        m.active ? 'text-emerald-400 bg-emerald-950/40' : 'text-rose-400 bg-rose-950/40'
                       }`}>
-                        {m.active ? 'Active' : 'Inactive'}
+                        {m.active ? '🟢 Active' : '🔴 Disabled'}
                       </span>
                     </td>
 
                     {/* Actions */}
                     <td className="py-3 px-4 text-right">
-                      <div className="flex justify-end gap-1.5">
+                      <div className="flex items-center justify-end gap-1 flex-nowrap whitespace-nowrap">
                         <button
                           type="button"
                           onClick={() => startMilestoneEdit(m)}
-                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 text-sky-400 hover:text-sky-300 transition"
-                          title="✏️ Edit Milestone"
+                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 hover:border-slate-700 transition"
+                          title="✏️ Edit"
                         >
-                          <Edit2 className="w-3.5 h-3.5" />
+                          ✏️
                         </button>
                         <button
                           type="button"
                           onClick={() => handleDeleteMilestone(m.id)}
-                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-rose-950 hover:text-rose-400 text-slate-400 transition"
-                          title="🗑 Delete Milestone"
+                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-rose-950/40 hover:border-rose-800 transition"
+                          title="🗑 Delete"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          🗑
                         </button>
                         <button
                           type="button"
                           onClick={() => handleDuplicateMilestone(m)}
-                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 text-amber-400 hover:text-amber-300 transition"
-                          title="📋 Duplicate Milestone"
+                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 hover:border-slate-700 transition"
+                          title="📄 Duplicate"
                         >
-                          <Copy className="w-3.5 h-3.5" />
+                          📄
                         </button>
                         <button
                           type="button"
                           onClick={() => handleMoveMilestone(index, 'up')}
                           disabled={index === 0}
-                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white transition disabled:opacity-25"
+                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 hover:border-slate-700 transition disabled:opacity-20 disabled:hover:bg-slate-950 disabled:hover:border-slate-800"
                           title="⬆ Move Up"
                         >
-                          <ChevronUp className="w-3.5 h-3.5" />
+                          ⬆
                         </button>
                         <button
                           type="button"
                           onClick={() => handleMoveMilestone(index, 'down')}
                           disabled={index === milestones.length - 1}
-                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white transition disabled:opacity-25"
+                          className="p-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:bg-slate-800 hover:border-slate-700 transition disabled:opacity-20 disabled:hover:bg-slate-950 disabled:hover:border-slate-800"
                           title="⬇ Move Down"
                         >
-                          <ChevronDown className="w-3.5 h-3.5" />
+                          ⬇
                         </button>
                       </div>
                     </td>
