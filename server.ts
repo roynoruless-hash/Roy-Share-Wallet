@@ -10,13 +10,42 @@ import { doc, setDoc, collection, query, where, getDocs, getDoc, addDoc, deleteD
 import { db } from './src/services/firebase';
 import crypto from 'crypto';
 import { encrypt, decrypt } from './src/utils/encryption';
+import { execSync } from 'child_process';
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+
+  // Print startup version & build information
+  let gitCommit = 'dev-main';
+  try {
+    gitCommit = execSync('git rev-parse --short HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (e) {
+    gitCommit = '3cb5a04'; // Default stable fallback commit reference
+  }
+  const appVersion = '1.0.24';
+  const buildTime = '2026-07-31T05:22:54-07:00';
+
+  console.log('===================================================');
+  console.log(`🤖 Roy Share Wallet - Version ${appVersion}`);
+  console.log(`📅 Build Time: ${buildTime}`);
+  console.log(`🌿 Git Commit: ${gitCommit}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log('===================================================');
 
   // Parse JSON payloads
   app.use(express.json());
+
+  // Global Request Logger Middleware
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      const bodyLog = req.method === 'POST' ? JSON.stringify(req.body) : 'N/A';
+      console.log(`[Request] ${req.method} ${req.url} - Status: ${res.statusCode} - Duration: ${duration}ms - Body: ${bodyLog}`);
+    });
+    next();
+  });
 
   // Helper to reply via Telegram API
   async function sendTelegramMessage(token: string, chatId: number | string, text: string) {
@@ -455,6 +484,134 @@ async function startServer() {
   });
 
   // ==========================================
+  // HEALTH & DEBUG ENDPOINTS
+  // ==========================================
+
+  // GET /api/health - Returns system status, version, build info, environment, and connectivity checks
+  app.get('/api/health', async (req, res) => {
+    console.log('[Health] Checking service health status...');
+    try {
+      let firestoreConnected = false;
+      let telegramConfigLoaded = false;
+      let botUsername = '';
+
+      try {
+        console.log('[Health] Fetching configuration from Firestore settings/config...');
+        const decryptedConfig = await getDecryptedConfig() as any;
+        firestoreConnected = true;
+        if (decryptedConfig && decryptedConfig.botToken) {
+          telegramConfigLoaded = true;
+          botUsername = decryptedConfig.botUsername || '';
+          console.log('[Health] Telegram configuration is successfully loaded and decrypted.');
+        } else {
+          console.warn('[Health] Telegram configuration is not yet set up or botToken is empty.');
+        }
+      } catch (dbErr: any) {
+        console.error('[Health] Firestore connection or config decryption check failed with exception:', dbErr);
+        console.error('[Health] Stack Trace:', dbErr.stack);
+      }
+
+      return res.json({
+        status: 'Server Running',
+        version: '1.0.24',
+        buildTime: '2026-07-31T05:22:54-07:00',
+        environment: process.env.NODE_ENV || 'development',
+        telegramConfigLoaded,
+        firestoreConnected,
+        botUsername,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err: any) {
+      console.error('[Health] General Exception inside health check endpoint:', err);
+      console.error('[Health] Stack Trace:', err.stack);
+      return res.status(500).json({
+        status: 'Error',
+        error: err.message,
+        stack: err.stack
+      });
+    }
+  });
+
+  // GET /api/debug/routes - Returns all registered Express routes for diagnostic purposes
+  app.get('/api/debug/routes', (req, res) => {
+    console.log('[Debug Routes] Retrieving list of all registered Express routes...');
+    try {
+      const routes: { method: string; path: string }[] = [];
+      
+      // Print routes registered on the express app router stack
+      app._router.stack.forEach((layer: any) => {
+        if (layer.route) {
+          const path = layer.route.path;
+          const methods = Object.keys(layer.route.methods).map(m => m.toUpperCase());
+          methods.forEach(method => {
+            routes.push({ method, path });
+          });
+        }
+      });
+
+      console.log(`[Debug Routes] Successfully retrieved ${routes.length} routes.`);
+      return res.json({ success: true, count: routes.length, routes });
+    } catch (err: any) {
+      console.error('[Debug Routes] Exception while listing routes:', err);
+      console.error('[Debug Routes] Stack Trace:', err.stack);
+      return res.status(500).json({ success: false, error: err.message, stack: err.stack });
+    }
+  });
+
+  // GET /api/debug/send-test - Sends a direct test Telegram message to the configured Admin Chat ID
+  app.get('/api/debug/send-test', async (req, res) => {
+    console.log('[Debug Send-Test] Initiating message ping directly to configured Admin Chat ID...');
+    try {
+      console.log('[Debug Send-Test] Loading and decrypting settings/config...');
+      const decryptedConfig = await getDecryptedConfig() as any;
+      
+      if (!decryptedConfig) {
+        console.error('[Debug Send-Test] Decrypted configuration was not found or is empty.');
+        return res.status(400).json({ success: false, error: 'Decrypted configuration could not be loaded from Firestore.' });
+      }
+
+      const { botToken, adminChatId } = decryptedConfig;
+      console.log('[Debug Send-Test] Configuration fetched.', { hasBotToken: !!botToken, hasAdminChatId: !!adminChatId });
+
+      if (!botToken || !adminChatId) {
+        console.error('[Debug Send-Test] Missing Telegram Bot Token or Admin Chat ID configuration.');
+        return res.status(400).json({
+          success: false,
+          error: 'Telegram Bot Token or Admin Chat ID is not configured in settings/config.',
+          config: { hasBotToken: !!botToken, hasAdminChatId: !!adminChatId }
+        });
+      }
+
+      const text = `🧪 <b>Roy Share Debug Ping Message</b>\n\nSent at: <code>${new Date().toISOString()}</code>\nStatus: <b>OK</b>\nVersion: <b>1.0.24</b>`;
+      console.log(`[Debug Send-Test] Dispatching message via Telegram sendMessage API to Admin Chat ID: ${adminChatId}`);
+      
+      const tgRes = await sendTelegramMessage(botToken, adminChatId, text);
+      console.log('[Debug Send-Test] Telegram API Response received:', JSON.stringify(tgRes));
+
+      if (tgRes && tgRes.ok) {
+        console.log(`[Debug Send-Test] Ping message successfully delivered to Telegram. Message ID: ${tgRes.result?.message_id}`);
+        return res.json({
+          success: true,
+          message: 'Direct Telegram message dispatched successfully.',
+          telegramResponse: tgRes
+        });
+      } else {
+        const description = tgRes?.description || 'Unknown Telegram API error';
+        console.error(`[Debug Send-Test] Telegram API returned failure: ${description}`);
+        return res.status(400).json({
+          success: false,
+          error: `Telegram sendMessage failed: ${description}`,
+          telegramResponse: tgRes
+        });
+      }
+    } catch (err: any) {
+      console.error('[Debug Send-Test] Direct send-test exception occurred:', err);
+      console.error('[Debug Send-Test] Stack Trace:', err.stack);
+      return res.status(500).json({ success: false, error: err.message, stack: err.stack });
+    }
+  });
+
+  // ==========================================
   // FEEDBACK CAMPAIGN PUBLIC FLOW ENDPOINTS
   // ==========================================
 
@@ -504,13 +661,18 @@ async function startServer() {
       const { mobile, campaignId } = req.body;
       const cleanMobile = String(mobile || '').replace(/\D/g, '');
 
+      console.log(`[Feedback OTP] New OTP request received:`, { mobile, campaignId, cleanMobile });
+
       if (!cleanMobile || !campaignId) {
+        console.warn(`[Feedback OTP] Missing mobile or campaignId in request.`);
         return res.status(400).json({ success: false, error: 'Mobile number and Campaign ID are required.' });
       }
 
       // 1. Check campaign status
+      console.log(`[Feedback OTP] Fetching feedback campaign document for campaignId: ${campaignId}`);
       const campDoc = await getDoc(doc(db, 'feedbackCampaigns', campaignId));
       if (!campDoc.exists()) {
+        console.warn(`[Feedback OTP] Campaign not found in Firestore for campaignId: ${campaignId}`);
         return res.status(404).json({ success: false, error: 'Feedback Campaign not found.' });
       }
       const campData = campDoc.data();
@@ -518,13 +680,17 @@ async function startServer() {
       const isExpired = campData.endDate && now > campData.endDate;
       const isNotStarted = campData.startDate && now < campData.startDate;
       if (!campData.active || isExpired || isNotStarted) {
+        console.warn(`[Feedback OTP] Campaign is inactive/expired:`, { active: campData.active, isExpired, isNotStarted });
         return res.status(400).json({ success: false, error: 'This feedback campaign is inactive or expired.' });
       }
+      console.log(`[Feedback OTP] Campaign found and is active:`, campData.name);
 
       // 2. Check if mobile registered in Roy Share Wallet
+      console.log(`[Feedback OTP] Querying Firestore 'users' for mobile: ${cleanMobile}`);
       const usersQ = query(collection(db, 'users'), where('mobile', '==', cleanMobile));
       const uSnap = await getDocs(usersQ);
       if (uSnap.empty) {
+        console.warn(`[Feedback OTP] Mobile number ${cleanMobile} is not registered in Firestore 'users' collection.`);
         return res.status(400).json({ success: false, error: 'This mobile number is not registered with Roy Share Wallet.' });
       }
 
@@ -535,12 +701,31 @@ async function startServer() {
       const telegramId = userData.telegramId;
       const telegramUsername = userData.username || '';
 
+      console.log(`[Feedback OTP] User found matching mobile:`, {
+        uid: userUid,
+        name: userName,
+        telegramId,
+        telegramUsername,
+        status: userData.status,
+        banned: userData.banned
+      });
+
       if (userData.status === 'banned' || userData.banned === true) {
+        console.warn(`[Feedback OTP] User ${userUid} is banned/suspended.`);
         return res.status(400).json({ success: false, error: 'Your account has been suspended.' });
+      }
+
+      if (!telegramId) {
+        console.error(`[Feedback OTP] User ${userUid} does not have a telegramId in Firestore! cannot deliver OTP message.`);
+        return res.status(400).json({
+          success: false,
+          error: 'Your Telegram account is not linked. Please open the bot and complete registration.'
+        });
       }
 
       // 3. Security Check: One feedback per campaign per UID.
       // 4. Duplicate mobile rejected.
+      console.log(`[Feedback OTP] Verifying if feedback was already submitted for campaign ${campaignId} by uid ${userUid} or mobile ${cleanMobile}`);
       const reviewsQ = query(
         collection(db, 'feedbackReviews'),
         where('campaignId', '==', campaignId)
@@ -552,12 +737,15 @@ async function startServer() {
       });
 
       if (alreadySubmitted) {
+        console.warn(`[Feedback OTP] User has already submitted feedback for campaign ${campaignId}`);
         return res.status(400).json({ success: false, error: 'You have already submitted feedback for this campaign.' });
       }
 
       // 5. Generate 6-digit numeric OTP
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins validity
+
+      console.log(`[Feedback OTP] Generated OTP: ${otp} (expires in 5 minutes). Saving to Firestore...`);
 
       // Save OTP to Firestore feedbackOtps
       await setDoc(doc(db, 'feedbackOtps', cleanMobile), {
@@ -569,22 +757,47 @@ async function startServer() {
         expiresAt,
         createdAt: new Date().toISOString()
       });
+      console.log(`[Feedback OTP] OTP saved successfully in Firestore feedbackOtps/${cleanMobile}`);
 
-      // 6. Get Telegram bot token from settings/config
-      const configDoc = await getDoc(doc(db, 'settings', 'config'));
-      const botToken = configDoc.exists() ? configDoc.data()?.botToken : null;
+      // 6. Get decrypted Telegram bot token from settings/config
+      console.log(`[Feedback OTP] Fetching decrypted configuration...`);
+      const decryptedConfig = await getDecryptedConfig() as any;
+      const botToken = decryptedConfig?.botToken;
 
       if (!botToken) {
-        return res.status(500).json({ success: false, error: 'Admin Bot token not configured.' });
+        console.error(`[Feedback OTP] Admin Bot token is not configured or could not be decrypted.`);
+        return res.status(500).json({ success: false, error: 'Admin Bot token is not configured.' });
       }
+
+      // Before sending, verify user has started the bot & confirm in logs
+      console.log(`Confirming in logs: Sending OTP to Telegram ID: ${telegramId}`);
 
       // Send Bot OTP Message
       const text = `🔐 <b>Your Feedback OTP</b>\n\nYour OTP is: <b>${otp}</b>\n\nValid for 5 minutes.`;
-      await sendTelegramMessage(botToken, telegramId, text);
+      const tgRes = await sendTelegramMessage(botToken, telegramId, text);
 
-      return res.json({ success: true, message: 'OTP has been sent to your Telegram Bot successfully.' });
+      // Log: Mobile Number, User UID, User telegramId, Chat ID used for sending, Telegram API Response
+      console.log(`[Feedback OTP] Log Details:`, {
+        'Mobile Number': cleanMobile,
+        'User UID': userUid,
+        'User telegramId': telegramId,
+        'Chat ID used for sending': telegramId,
+        'Telegram API Response': tgRes
+      });
+
+      if (tgRes && tgRes.ok) {
+        console.log(`[Feedback OTP] Message sent successfully to Telegram ID: ${telegramId}. Message ID: ${tgRes.result?.message_id}`);
+        return res.json({ success: true, message: 'OTP has been sent to your Telegram Bot successfully.' });
+      } else {
+        const description = tgRes?.description || 'Unknown Telegram API error';
+        console.error(`[Feedback OTP] Telegram API failed to send message to Telegram ID ${telegramId}. Error description: ${description}`);
+        return res.status(400).json({
+          success: false,
+          error: `Telegram delivery failed: ${description}. Please open your Telegram Bot @${decryptedConfig?.botUsername || 'bot'} and press Start first.`
+        });
+      }
     } catch (err: any) {
-      console.error('send-otp error:', err);
+      console.error('[Feedback OTP] send-otp exception:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -1140,16 +1353,32 @@ async function startServer() {
     }
   });
 
+  // API fallback handler: Ensure any request starting with /api that doesn't match an actual registered Express route
+  // is returned as a 404 JSON response instead of falling through to serve the static frontend index.html
+  app.all('/api/*', (req, res) => {
+    console.warn(`[API Fallback] Unmatched API request: ${req.method} ${req.url}`);
+    return res.status(404).json({
+      success: false,
+      error: `API endpoint not found: ${req.method} ${req.url}`
+    });
+  });
+
   // Serve Vite in dev or static files in production
-  const isProduction = process.env.NODE_ENV === 'production' || !!process.env.RENDER;
+  const isProduction = 
+    process.env.NODE_ENV === 'production' || 
+    !!process.env.RENDER || 
+    (typeof __filename !== 'undefined' && __filename.endsWith('.cjs')) || 
+    !(process.argv[1] && (process.argv[1].endsWith('.ts') || process.argv[1].endsWith('.tsx')));
 
   if (!isProduction) {
+    console.log('[Server Startup] Mounting Vite middleware (Development Mode)');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
+    console.log('[Server Startup] Serving static frontend files from /dist (Production Mode)');
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
