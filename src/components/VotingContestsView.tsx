@@ -23,7 +23,8 @@ import {
   Info,
   Link,
   Share2,
-  Send
+  Send,
+  Loader2
 } from 'lucide-react';
 import { Contest, Contestant, VoteLog, AdminConfig } from '../types';
 import {
@@ -108,6 +109,8 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   // Form states - Contests
   const [showContestForm, setShowContestForm] = useState(false);
   const [editingContest, setEditingContest] = useState<Contest | null>(null);
+  const [isSavingContest, setIsSavingContest] = useState(false);
+  const [isFormDirty, setIsFormDirty] = useState(false);
   const [contestForm, setContestForm] = useState({
     title: '',
     description: '',
@@ -122,6 +125,69 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     winnerRewardAmount: 0,
     status: 'active' as Contest['status']
   });
+
+  // Warn on page reload/navigation if form is dirty
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (showContestForm && isFormDirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [showContestForm, isFormDirty]);
+
+  // Safely cancel contest form
+  const handleCancelContestForm = () => {
+    if (isSavingContest) return;
+    if (isFormDirty) {
+      const confirmLeave = window.confirm('You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?');
+      if (!confirmLeave) return;
+    }
+    setIsFormDirty(false);
+    setShowContestForm(false);
+    setEditingContest(null);
+  };
+
+  // Safely change active subtab
+  const handleSubTabChange = (tab: 'contests' | 'contestants' | 'logs') => {
+    if (showContestForm && isFormDirty) {
+      const confirmLeave = window.confirm('You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?');
+      if (!confirmLeave) return;
+    }
+    setIsFormDirty(false);
+    setShowContestForm(false);
+    setEditingContest(null);
+    setActiveSubTab(tab);
+  };
+
+  // Safely start new contest form
+  const handleNewContestClick = () => {
+    if (showContestForm && isFormDirty) {
+      const confirmLeave = window.confirm('You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?');
+      if (!confirmLeave) return;
+    }
+    setIsFormDirty(false);
+    setEditingContest(null);
+    setContestForm({
+      title: '',
+      description: '',
+      imageUrl: '',
+      registrationStartDate: new Date().toISOString().split('T')[0],
+      registrationEndDate: new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0] + 'T23:59',
+      votingEndDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0] + 'T23:59',
+      rules: '',
+      maxVotesPerUser: 1,
+      voteIntervalHours: 0,
+      voterRewardAmount: 0,
+      winnerRewardAmount: 0,
+      status: 'active'
+    });
+    setShowContestForm(true);
+  };
 
   // Form states - Contestants
   const [showContestantForm, setShowContestantForm] = useState(false);
@@ -172,12 +238,16 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   }, []);
 
   // Handle Contest Save
-  const handleContestSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleContestSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (isSavingContest) return;
+
     if (!contestForm.title.trim()) {
       showToast('Contest Title is required', 'error');
       return;
     }
+
+    setIsSavingContest(true);
 
     try {
       const savedId = await saveContest({
@@ -198,12 +268,15 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       });
 
       showToast(editingContest ? 'Contest updated successfully!' : 'Contest created successfully!', 'success');
+      setIsFormDirty(false);
       setShowContestForm(false);
       setEditingContest(null);
       reloadAllData();
     } catch (err) {
       console.error(err);
       showToast('Failed to save contest', 'error');
+    } finally {
+      setIsSavingContest(false);
     }
   };
 
@@ -304,6 +377,11 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
   // Open Edit Contest Form
   const openEditContest = (contest: Contest) => {
+    if (showContestForm && isFormDirty) {
+      const confirmLeave = window.confirm('You have unsaved changes in the Voting Contest editor. Are you sure you want to discard your changes?');
+      if (!confirmLeave) return;
+    }
+    setIsFormDirty(false);
     setEditingContest(contest);
     setContestForm({
       title: contest.title,
@@ -352,6 +430,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     reader.onload = () => {
       if (typeof reader.result === 'string') {
         if (type === 'contest') {
+          setIsFormDirty(true);
           setContestForm(prev => ({ ...prev, imageUrl: reader.result as string }));
         } else {
           setContestantForm(prev => ({ ...prev, imageUrl: reader.result as string }));
@@ -401,25 +480,8 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
           <button
-            onClick={() => {
-              setEditingContest(null);
-              setContestForm({
-                title: '',
-                description: '',
-                imageUrl: '',
-                registrationStartDate: new Date().toISOString().split('T')[0],
-                registrationEndDate: new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0] + 'T23:59',
-                votingEndDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0] + 'T23:59',
-                rules: '',
-                maxVotesPerUser: 1,
-                voteIntervalHours: 0,
-                voterRewardAmount: 0,
-                winnerRewardAmount: 0,
-                status: 'active'
-              });
-              setShowContestForm(true);
-            }}
-            className="flex-1 sm:flex-initial py-2 px-3.5 rounded-xl font-bold text-xs bg-sky-500 hover:bg-sky-400 text-slate-950 transition flex items-center justify-center gap-1.5"
+            onClick={handleNewContestClick}
+            className="flex-1 sm:flex-initial py-2 px-3.5 rounded-xl font-bold text-xs bg-sky-500 hover:bg-sky-400 text-slate-950 transition flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5 stroke-[3px]" />
             New Contest
@@ -430,7 +492,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       {/* Primary Sub-Navigation Tabs */}
       <div className="flex border-b border-slate-800 gap-1.5">
         <button
-          onClick={() => setActiveSubTab('contests')}
+          onClick={() => handleSubTabChange('contests')}
           className={`px-4 py-3 text-xs font-bold tracking-wide uppercase transition relative flex items-center gap-1.5 ${
             activeSubTab === 'contests' ? 'text-sky-400' : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -440,7 +502,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
           {activeSubTab === 'contests' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-500" />}
         </button>
         <button
-          onClick={() => setActiveSubTab('contestants')}
+          onClick={() => handleSubTabChange('contestants')}
           className={`px-4 py-3 text-xs font-bold tracking-wide uppercase transition relative flex items-center gap-1.5 ${
             activeSubTab === 'contestants' ? 'text-sky-400' : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -450,7 +512,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
           {activeSubTab === 'contestants' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-sky-500" />}
         </button>
         <button
-          onClick={() => setActiveSubTab('logs')}
+          onClick={() => handleSubTabChange('logs')}
           className={`px-4 py-3 text-xs font-bold tracking-wide uppercase transition relative flex items-center gap-1.5 ${
             activeSubTab === 'logs' ? 'text-sky-400' : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -480,23 +542,62 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
           {/* Create / Edit Contest Dialog */}
           {showContestForm && (
-            <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
-              <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-sky-400">
-                  {editingContest ? 'Edit Voting Contest' : 'Configure New Voting Contest'}
-                </h4>
-                <button
-                  onClick={() => {
-                    setShowContestForm(false);
-                    setEditingContest(null);
-                  }}
-                  className="p-1 rounded bg-slate-800 text-slate-400 hover:text-white"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+            <div className="rounded-2xl bg-slate-900/80 border border-slate-800 shadow-2xl relative overflow-hidden backdrop-blur-sm">
+              {/* Sticky Top Action Bar */}
+              <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur-md p-4 border-b border-slate-800 rounded-t-2xl flex flex-wrap items-center justify-between gap-3 shadow-md">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
+                    <Edit2 className="w-3.5 h-3.5" />
+                    {editingContest ? 'Edit Voting Contest' : 'Configure New Voting Contest'}
+                  </h4>
+                  {isFormDirty && (
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                      Unsaved Changes
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCancelContestForm}
+                    disabled={isSavingContest}
+                    className="py-1.5 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-750 text-slate-300 transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleContestSubmit()}
+                    disabled={isSavingContest}
+                    className="py-1.5 px-4 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 transition flex items-center gap-1.5 shadow-lg shadow-sky-500/10 cursor-pointer"
+                  >
+                    {isSavingContest ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5 stroke-[3px]" />
+                        {editingContest ? 'Save Changes' : 'Launch Contest'}
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelContestForm}
+                    disabled={isSavingContest}
+                    className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer ml-1"
+                    title="Close form"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
-              <form onSubmit={handleContestSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <form onSubmit={handleContestSubmit} className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Title */}
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contest Title *</label>
@@ -504,7 +605,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                     type="text"
                     required
                     value={contestForm.title}
-                    onChange={e => setContestForm(prev => ({ ...prev, title: e.target.value }))}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, title: e.target.value }));
+                    }}
                     placeholder="e.g. Best Telegram Creator of July"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                   />
@@ -515,7 +619,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Default Status</label>
                   <select
                     value={contestForm.status}
-                    onChange={e => setContestForm(prev => ({ ...prev, status: e.target.value as Contest['status'] }))}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, status: e.target.value as Contest['status'] }));
+                    }}
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                   >
                     <option value="active">Active (Voting Open)</option>
@@ -531,7 +638,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                   <textarea
                     rows={2}
                     value={contestForm.description}
-                    onChange={e => setContestForm(prev => ({ ...prev, description: e.target.value }))}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, description: e.target.value }));
+                    }}
                     placeholder="Provide description of the contest, categories, and criteria..."
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                   />
@@ -546,7 +656,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                         type="date"
                         required
                         value={contestForm.registrationStartDate}
-                        onChange={e => setContestForm(prev => ({ ...prev, registrationStartDate: e.target.value }))}
+                        onChange={e => {
+                          setIsFormDirty(true);
+                          setContestForm(prev => ({ ...prev, registrationStartDate: e.target.value }));
+                        }}
                         className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                       />
                     </div>
@@ -557,7 +670,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                         type="datetime-local"
                         required
                         value={contestForm.registrationEndDate}
-                        onChange={e => setContestForm(prev => ({ ...prev, registrationEndDate: e.target.value }))}
+                        onChange={e => {
+                          setIsFormDirty(true);
+                          setContestForm(prev => ({ ...prev, registrationEndDate: e.target.value }));
+                        }}
                         className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                       />
                     </div>
@@ -568,7 +684,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                         type="datetime-local"
                         required
                         value={contestForm.votingEndDate}
-                        onChange={e => setContestForm(prev => ({ ...prev, votingEndDate: e.target.value }))}
+                        onChange={e => {
+                          setIsFormDirty(true);
+                          setContestForm(prev => ({ ...prev, votingEndDate: e.target.value }));
+                        }}
                         className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                       />
                     </div>
@@ -581,7 +700,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                   <input
                     type="text"
                     value={contestForm.rules}
-                    onChange={e => setContestForm(prev => ({ ...prev, rules: e.target.value }))}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, rules: e.target.value }));
+                    }}
                     placeholder="e.g. Only Indian Mobile verified users can vote. Accounts must be 5+ days old."
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                   />
@@ -594,7 +716,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                     type="number"
                     min="1"
                     value={contestForm.maxVotesPerUser}
-                    onChange={e => setContestForm(prev => ({ ...prev, maxVotesPerUser: parseInt(e.target.value) || 1 }))}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, maxVotesPerUser: parseInt(e.target.value) || 1 }));
+                    }}
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                   />
                 </div>
@@ -605,7 +730,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                     type="number"
                     min="0"
                     value={contestForm.voteIntervalHours}
-                    onChange={e => setContestForm(prev => ({ ...prev, voteIntervalHours: parseInt(e.target.value) || 0 }))}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, voteIntervalHours: parseInt(e.target.value) || 0 }));
+                    }}
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                   />
                 </div>
@@ -621,7 +749,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                     min="0"
                     step="0.01"
                     value={contestForm.voterRewardAmount}
-                    onChange={e => setContestForm(prev => ({ ...prev, voterRewardAmount: parseFloat(e.target.value) || 0 }))}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, voterRewardAmount: parseFloat(e.target.value) || 0 }));
+                    }}
                     placeholder="0.00"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                   />
@@ -637,7 +768,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                     min="0"
                     step="0.01"
                     value={contestForm.winnerRewardAmount}
-                    onChange={e => setContestForm(prev => ({ ...prev, winnerRewardAmount: parseFloat(e.target.value) || 0 }))}
+                    onChange={e => {
+                      setIsFormDirty(true);
+                      setContestForm(prev => ({ ...prev, winnerRewardAmount: parseFloat(e.target.value) || 0 }));
+                    }}
                     placeholder="0.00"
                     className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                   />
@@ -665,7 +799,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                     <input
                       type="text"
                       value={contestForm.imageUrl}
-                      onChange={e => setContestForm(prev => ({ ...prev, imageUrl: e.target.value }))}
+                      onChange={e => {
+                        setIsFormDirty(true);
+                        setContestForm(prev => ({ ...prev, imageUrl: e.target.value }));
+                      }}
                       placeholder="Or enter image URL here..."
                       className="flex-1 px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500 w-full"
                     />
@@ -685,24 +822,44 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                   )}
                 </div>
 
-                {/* Submit */}
-                <div className="md:col-span-2 pt-3 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowContestForm(false);
-                      setEditingContest(null);
-                    }}
-                    className="py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-850 hover:bg-slate-800 text-slate-300 transition"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="py-2.5 px-5 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 text-slate-950 transition"
-                  >
-                    {editingContest ? 'Update Contest Settings' : 'Launch Contest Campaign'}
-                  </button>
+                {/* Bottom Submit */}
+                <div className="md:col-span-2 pt-4 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                  <div className="text-[11px] text-slate-400">
+                    {isFormDirty ? (
+                      <span className="text-amber-400 font-medium flex items-center gap-1">
+                        ⚠️ You have unsaved changes
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">All changes saved</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCancelContestForm}
+                      disabled={isSavingContest}
+                      className="py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-850 hover:bg-slate-800 text-slate-300 transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingContest}
+                      className="py-2.5 px-5 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-sky-500/10"
+                    >
+                      {isSavingContest ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-3.5 h-3.5 stroke-[3px]" />
+                          {editingContest ? 'Update Contest Settings' : 'Launch Contest Campaign'}
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </form>
             </div>
