@@ -114,7 +114,9 @@ export type TabType =
   | 'support'
   | 'security'
   | 'logs'
-  | 'diagnostics';
+  | 'diagnostics'
+  | 'feedback_campaigns'
+  | 'feedback_reviews';
 
 export interface BotUser {
   id: string;
@@ -253,5 +255,41 @@ export interface MilestoneClaimRecord {
   location?: { latitude: number; longitude: number } | null;
   claimTime: string;
   verifiedAt?: string;
+}
+
+export interface FeedbackCampaign {
+  id: string;
+  name: string;
+  bonusAmount: number;
+  startDate: string;
+  endDate: string;
+  maxBonusLimit: number;
+  active: boolean;
+  thankYouMessage: string;
+  rejectMessage: string;
+  createdAt: string;
+  publicLink: string;
+}
+
+export interface FeedbackReview {
+  id: string;
+  campaignId: string;
+  campaignName: string;
+  uid: string;
+  name: string;
+  mobile: string;
+  telegramId: string;
+  telegramUsername: string;
+  rating: number;
+  category: 'wallet' | 'referral' | 'withdraw' | 'ui' | 'speed' | 'support';
+  title: string;
+  message?: string;
+  screenshotUrl?: string; // stores base64 data url or standard url
+  status: 'pending' | 'approved' | 'rejected';
+  rewardAmount: number;
+  rejectReason?: string;
+  approveReason?: string;
+  submittedAt: string;
+  processedAt?: string;
 }
 

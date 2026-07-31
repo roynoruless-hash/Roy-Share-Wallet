@@ -12,6 +12,9 @@ import { WithdrawalSettingsView } from './components/WithdrawalSettingsView';
 import { ReferralSettingsView } from './components/ReferralSettingsView';
 import { SupportSettingsView } from './components/SupportSettingsView';
 import { ReferralMilestonesView } from './components/ReferralMilestonesView';
+import { FeedbackCampaignsView } from './components/FeedbackCampaignsView';
+import { FeedbackReviewsView } from './components/FeedbackReviewsView';
+import { FeedbackUserFlowView } from './components/FeedbackUserFlowView';
 import { SecurityView } from './components/SecurityView';
 import { DiagnosticsView } from './components/DiagnosticsView';
 import { LogsView } from './components/LogsView';
@@ -255,6 +258,10 @@ export default function App() {
         return 'Referral Settings';
       case 'milestones':
         return 'Referral Milestones';
+      case 'feedback_campaigns':
+        return '⭐ Feedback Campaigns';
+      case 'feedback_reviews':
+        return 'Feedback Reviews';
       case 'support':
         return 'Support Settings';
       case 'security':
@@ -273,6 +280,7 @@ export default function App() {
   const isReferralVerifyRoute =
     window.location.pathname.startsWith('/referral-verify') ||
     (new URLSearchParams(window.location.search).has('token') && !isClaimRewardRoute);
+  const isFeedbackRoute = window.location.pathname.startsWith('/feedback');
 
   if (isClaimRewardRoute) {
     return <ClaimRewardView botUsername={config.botUsername || 'RoyShareWalletBot'} />;
@@ -280,6 +288,12 @@ export default function App() {
 
   if (isReferralVerifyRoute) {
     return <ReferralVerifyView botUsername={config.botUsername || 'RoyShareWalletBot'} />;
+  }
+
+  if (isFeedbackRoute) {
+    const pathParts = window.location.pathname.split('/');
+    const campaignId = pathParts[2] || '';
+    return <FeedbackUserFlowView campaignId={campaignId} botUsername={config.botUsername || 'RoyShareWalletBot'} />;
   }
 
   if (isLoading) {
@@ -397,6 +411,20 @@ export default function App() {
 
           {activeTab === 'milestones' && (
             <ReferralMilestonesView
+              config={config}
+              showToast={showToast}
+            />
+          )}
+
+          {activeTab === 'feedback_campaigns' && (
+            <FeedbackCampaignsView
+              config={config}
+              showToast={showToast}
+            />
+          )}
+
+          {activeTab === 'feedback_reviews' && (
+            <FeedbackReviewsView
               config={config}
               showToast={showToast}
             />

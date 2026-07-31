@@ -5,7 +5,8 @@ import { processTelegramUpdate } from './src/server/botHandler';
 import { getReferralTokenInfo, processReferralVerification } from './src/server/referralVerification';
 import { getMilestoneTokenInfo, processMilestoneClaim } from './src/server/milestoneVerification';
 import { approveWithdrawal, rejectWithdrawal } from './src/server/withdrawalHandler';
-import { doc, setDoc } from 'firebase/firestore';
+import { approveFeedbackReview, rejectFeedbackReview } from './src/server/feedbackHandler';
+import { doc, setDoc, collection, query, where, getDocs, getDoc, addDoc, deleteDoc } from 'firebase/firestore';
 import { db } from './src/services/firebase';
 
 async function startServer() {
@@ -445,6 +446,289 @@ async function startServer() {
         return res.json({ success: true, message: 'Message sent successfully.' });
       } else {
         return res.status(400).json({ success: false, error: tgData.description || 'Telegram API error' });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ==========================================
+  // FEEDBACK CAMPAIGN PUBLIC FLOW ENDPOINTS
+  // ==========================================
+
+  // Fetch campaign info publicly
+  app.get('/api/feedback/campaign-info', async (req, res) => {
+    try {
+      const campaignId = req.query.campaignId as string;
+      if (!campaignId) {
+        return res.status(400).json({ success: false, error: 'Campaign ID is required' });
+      }
+
+      const campDoc = await getDoc(doc(db, 'feedbackCampaigns', campaignId));
+      if (!campDoc.exists()) {
+        return res.status(404).json({ success: false, error: 'Feedback Campaign not found.' });
+      }
+
+      const data = campDoc.data();
+      const now = new Date().toISOString();
+
+      // Expired campaign blocked
+      const isExpired = data.endDate && now > data.endDate;
+      const isNotStarted = data.startDate && now < data.startDate;
+
+      return res.json({
+        success: true,
+        campaign: {
+          id: campDoc.id,
+          name: data.name,
+          bonusAmount: Number(data.bonusAmount) || 0,
+          startDate: data.startDate,
+          endDate: data.endDate,
+          active: data.active && !isExpired && !isNotStarted,
+          isExpired,
+          isNotStarted,
+          thankYouMessage: data.thankYouMessage,
+          rejectMessage: data.rejectMessage,
+        }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Request OTP via Telegram Bot
+  app.post('/api/feedback/send-otp', async (req, res) => {
+    try {
+      const { mobile, campaignId } = req.body;
+      const cleanMobile = String(mobile || '').replace(/\D/g, '');
+
+      if (!cleanMobile || !campaignId) {
+        return res.status(400).json({ success: false, error: 'Mobile number and Campaign ID are required.' });
+      }
+
+      // 1. Check campaign status
+      const campDoc = await getDoc(doc(db, 'feedbackCampaigns', campaignId));
+      if (!campDoc.exists()) {
+        return res.status(404).json({ success: false, error: 'Feedback Campaign not found.' });
+      }
+      const campData = campDoc.data();
+      const now = new Date().toISOString();
+      const isExpired = campData.endDate && now > campData.endDate;
+      const isNotStarted = campData.startDate && now < campData.startDate;
+      if (!campData.active || isExpired || isNotStarted) {
+        return res.status(400).json({ success: false, error: 'This feedback campaign is inactive or expired.' });
+      }
+
+      // 2. Check if mobile registered in Roy Share Wallet
+      const usersQ = query(collection(db, 'users'), where('mobile', '==', cleanMobile));
+      const uSnap = await getDocs(usersQ);
+      if (uSnap.empty) {
+        return res.status(400).json({ success: false, error: 'This mobile number is not registered with Roy Share Wallet.' });
+      }
+
+      const userDoc = uSnap.docs[0];
+      const userData = userDoc.data();
+      const userUid = userData.uid;
+      const userName = userData.firstName || 'User';
+      const telegramId = userData.telegramId;
+      const telegramUsername = userData.username || '';
+
+      if (userData.status === 'banned' || userData.banned === true) {
+        return res.status(400).json({ success: false, error: 'Your account has been suspended.' });
+      }
+
+      // 3. Security Check: One feedback per campaign per UID.
+      // 4. Duplicate mobile rejected.
+      const reviewsQ = query(
+        collection(db, 'feedbackReviews'),
+        where('campaignId', '==', campaignId)
+      );
+      const revSnap = await getDocs(reviewsQ);
+      const alreadySubmitted = revSnap.docs.some(doc => {
+        const d = doc.data();
+        return d.uid === userUid || d.mobile === cleanMobile;
+      });
+
+      if (alreadySubmitted) {
+        return res.status(400).json({ success: false, error: 'You have already submitted feedback for this campaign.' });
+      }
+
+      // 5. Generate 6-digit numeric OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins validity
+
+      // Save OTP to Firestore feedbackOtps
+      await setDoc(doc(db, 'feedbackOtps', cleanMobile), {
+        otp,
+        telegramId,
+        uid: userUid,
+        name: userName,
+        telegramUsername,
+        expiresAt,
+        createdAt: new Date().toISOString()
+      });
+
+      // 6. Get Telegram bot token from settings/config
+      const configDoc = await getDoc(doc(db, 'settings', 'config'));
+      const botToken = configDoc.exists() ? configDoc.data()?.botToken : null;
+
+      if (!botToken) {
+        return res.status(500).json({ success: false, error: 'Admin Bot token not configured.' });
+      }
+
+      // Send Bot OTP Message
+      const text = `🔐 <b>Your Feedback OTP</b>\n\nYour OTP is: <b>${otp}</b>\n\nValid for 5 minutes.`;
+      await sendTelegramMessage(botToken, telegramId, text);
+
+      return res.json({ success: true, message: 'OTP has been sent to your Telegram Bot successfully.' });
+    } catch (err: any) {
+      console.error('send-otp error:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Verify OTP Code
+  app.post('/api/feedback/verify-otp', async (req, res) => {
+    try {
+      const { mobile, otp } = req.body;
+      const cleanMobile = String(mobile || '').replace(/\D/g, '');
+
+      if (!cleanMobile || !otp) {
+        return res.status(400).json({ success: false, error: 'Mobile number and OTP are required.' });
+      }
+
+      const otpDoc = await getDoc(doc(db, 'feedbackOtps', cleanMobile));
+      if (!otpDoc.exists()) {
+        return res.status(400).json({ success: false, error: 'OTP request not found. Please request again.' });
+      }
+
+      const data = otpDoc.data();
+      if (Date.now() > data.expiresAt) {
+        return res.status(400).json({ success: false, error: 'OTP has expired. Please request a new one.' });
+      }
+
+      if (data.otp !== String(otp).trim()) {
+        return res.status(400).json({ success: false, error: 'Invalid OTP. Please try again.' });
+      }
+
+      // Retrieve user details
+      const userDetails = {
+        uid: data.uid,
+        name: data.name,
+        telegramId: data.telegramId,
+        telegramUsername: data.telegramUsername || '',
+        mobile: cleanMobile
+      };
+
+      // Delete OTP on successful verification
+      await deleteDoc(doc(db, 'feedbackOtps', cleanMobile));
+
+      return res.json({ success: true, user: userDetails });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Submit Feedback Review
+  app.post('/api/feedback/submit', async (req, res) => {
+    try {
+      const {
+        campaignId,
+        uid,
+        name,
+        mobile,
+        telegramId,
+        telegramUsername,
+        rating,
+        category,
+        title,
+        message,
+        screenshotUrl
+      } = req.body;
+
+      if (!campaignId || !uid || !mobile || !rating || !category || !title) {
+        return res.status(400).json({ success: false, error: 'All fields including Rating, Category, Title, and user info are required.' });
+      }
+
+      // Check campaign
+      const campDoc = await getDoc(doc(db, 'feedbackCampaigns', campaignId));
+      if (!campDoc.exists()) {
+        return res.status(404).json({ success: false, error: 'Feedback Campaign not found.' });
+      }
+      const campData = campDoc.data();
+      const now = new Date().toISOString();
+      const isExpired = campData.endDate && now > campData.endDate;
+      const isNotStarted = campData.startDate && now < campData.startDate;
+      if (!campData.active || isExpired || isNotStarted) {
+        return res.status(400).json({ success: false, error: 'This feedback campaign is expired or inactive.' });
+      }
+
+      // Duplicate checks
+      const reviewsQ = query(
+        collection(db, 'feedbackReviews'),
+        where('campaignId', '==', campaignId)
+      );
+      const revSnap = await getDocs(reviewsQ);
+      const alreadySubmitted = revSnap.docs.some(doc => {
+        const d = doc.data();
+        return d.uid === uid || d.mobile === mobile;
+      });
+
+      if (alreadySubmitted) {
+        return res.status(400).json({ success: false, error: 'You have already submitted feedback for this campaign.' });
+      }
+
+      // Create feedback review
+      const newReviewRef = doc(collection(db, 'feedbackReviews'));
+      await setDoc(newReviewRef, {
+        id: newReviewRef.id,
+        campaignId,
+        campaignName: campData.name || 'Feedback Campaign',
+        uid,
+        name,
+        mobile,
+        telegramId,
+        telegramUsername: telegramUsername || '',
+        rating: Number(rating),
+        category,
+        title,
+        message: message || '',
+        screenshotUrl: screenshotUrl || '',
+        status: 'pending',
+        rewardAmount: Number(campData.bonusAmount) || 0,
+        submittedAt: new Date().toISOString()
+      });
+
+      return res.json({ success: true, message: 'Feedback Submitted Successfully. Your feedback is under review.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Admin Feedback Approval Endpoint
+  app.post('/api/admin/feedback/approve', async (req, res) => {
+    try {
+      const { token, reviewId, customAmount, reason } = req.body;
+      const result = await approveFeedbackReview(token, reviewId, customAmount, reason);
+      if (result.success) {
+        return res.json(result);
+      } else {
+        return res.status(400).json(result);
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Admin Feedback Rejection Endpoint
+  app.post('/api/admin/feedback/reject', async (req, res) => {
+    try {
+      const { token, reviewId, reason } = req.body;
+      const result = await rejectFeedbackReview(token, reviewId, reason);
+      if (result.success) {
+        return res.json(result);
+      } else {
+        return res.status(400).json(result);
       }
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });

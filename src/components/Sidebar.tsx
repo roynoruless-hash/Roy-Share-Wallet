@@ -18,6 +18,8 @@ import {
   Zap,
   LogOut,
   Award,
+  MessageSquare,
+  Star,
 } from 'lucide-react';
 import { TabType } from '../types';
 
@@ -127,6 +129,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'wallet' as TabType, label: 'Wallet Settings', icon: Wallet },
     { id: 'withdrawal' as TabType, label: 'Withdrawal Settings', icon: ArrowDownRight },
     { id: 'referral' as TabType, label: 'Referral Settings', icon: Share2 },
+    { id: 'milestones' as TabType, label: 'Referral Milestones', icon: Award, badge: 'New' },
+    { id: 'feedback_campaigns' as TabType, label: '⭐ Feedback Campaigns', icon: MessageSquare },
+    { id: 'feedback_reviews' as TabType, label: 'Feedback Reviews', icon: Star },
     { id: 'support' as TabType, label: 'Support Settings', icon: Headphones },
     { id: 'security' as TabType, label: 'System Settings', icon: ShieldAlert },
     { id: 'diagnostics' as TabType, label: 'Diagnostics', icon: Activity, badge: 'Live' },
