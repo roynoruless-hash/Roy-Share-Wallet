@@ -20,6 +20,7 @@ import {
   Award,
   MessageSquare,
   Star,
+  ThumbsUp,
 } from 'lucide-react';
 import { TabType } from '../types';
 
@@ -135,6 +136,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'milestones' as TabType, label: 'Referral Milestones', icon: Award, badge: 'New' },
     { id: 'feedback_campaigns' as TabType, label: '⭐ Feedback Campaigns', icon: MessageSquare },
     { id: 'feedback_reviews' as TabType, label: 'Feedback Reviews', icon: Star },
+    { id: 'voting_contests' as TabType, label: '🏆 Voting Contests', icon: ThumbsUp, badge: 'Contest' },
     { id: 'support' as TabType, label: 'Support Settings', icon: Headphones },
     { id: 'security' as TabType, label: 'System Settings', icon: ShieldAlert },
     { id: 'diagnostics' as TabType, label: 'Diagnostics', icon: Activity, badge: 'Live' },

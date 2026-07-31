@@ -118,7 +118,8 @@ export type TabType =
   | 'logs'
   | 'diagnostics'
   | 'feedback_campaigns'
-  | 'feedback_reviews';
+  | 'feedback_reviews'
+  | 'voting_contests';
 
 export interface BotUser {
   id: string;
@@ -300,5 +301,48 @@ export interface FeedbackReview {
   approveReason?: string;
   submittedAt: string;
   processedAt?: string;
+}
+
+export interface Contest {
+  id: string;
+  title: string;
+  description: string;
+  imageUrl?: string;
+  startDate: string;
+  endDate: string;
+  status: 'upcoming' | 'active' | 'completed' | 'paused';
+  createdAt: string;
+  rules?: string;
+  maxVotesPerUser?: number; // e.g., 1 (default) or more
+  voteIntervalHours?: number; // e.g., 24 for daily, 0 or undefined for one-time
+  voterRewardAmount?: number; // wallet bonus for voting
+  winnerRewardAmount?: number; // description or cash reward
+}
+
+export interface Contestant {
+  id: string;
+  contestId: string;
+  contestTitle?: string;
+  name: string;
+  telegramId?: string;
+  username?: string;
+  description?: string;
+  imageUrl?: string; // base64 or photo url
+  votesCount: number;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+}
+
+export interface VoteLog {
+  id: string;
+  contestId: string;
+  contestTitle: string;
+  contestantId: string;
+  contestantName: string;
+  voterTelegramId: string;
+  voterUsername?: string;
+  voterName: string;
+  createdAt: string;
+  rewardEarned?: number;
 }
 

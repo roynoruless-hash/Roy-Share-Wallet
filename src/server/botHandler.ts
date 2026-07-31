@@ -1,6 +1,7 @@
 import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction, setDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
+import { getContests, getContestants, submitVote } from '../services/contestService';
 
 interface UserSession {
   step: 'FORCE_JOIN' | 'WAITING_NAME' | 'WAITING_MOBILE' | 'WAITING_CONTACT' | 'WITHDRAW_METHOD_SELECT' | 'WITHDRAW_AMOUNT' | 'WITHDRAW_DETAILS' | 'WITHDRAW_CONFIRM';
@@ -794,6 +795,184 @@ export async function processTelegramUpdate(token: string, update: any) {
       });
       return;
     }
+
+    // VOTING CONTESTS CALLBACK QUERIES
+    if (data === 'vote_list_contests') {
+      await sendTelegramApi(token, 'answerCallbackQuery', {
+        callback_query_id: cbId,
+        text: 'Loading contests...',
+        show_alert: false,
+      });
+
+      const contests = await getContests();
+      const activeContests = contests.filter(c => c.status === 'active' || c.status === 'paused');
+
+      let listText = `🏆 <b>Active Voting Contests</b>\n\nSelect a contest from below to view contestants and cast your vote!\n\n`;
+      const inline_keyboard: any[][] = [];
+
+      activeContests.forEach(c => {
+        listText += `🔹 <b>${c.title}</b>\n`;
+        if (c.description) listText += `${c.description}\n`;
+        listText += `📅 <b>Ends:</b> ${c.endDate}\n`;
+        if (c.voterRewardAmount && c.voterRewardAmount > 0) {
+          listText += `💰 <b>Voter Bonus:</b> ₹${c.voterRewardAmount} per vote!\n`;
+        }
+        listText += `\n`;
+
+        inline_keyboard.push([{
+          text: `🏆 View: ${c.title}`,
+          callback_data: `contest_view:${c.id}`
+        }]);
+      });
+
+      await sendTelegramApi(token, 'editMessageText', {
+        chat_id: chatId,
+        message_id: cb.message?.message_id,
+        text: listText,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard }
+      });
+      return;
+    }
+
+    if (data && data.startsWith('contest_view:')) {
+      const contestId = data.split(':')[1];
+      await sendTelegramApi(token, 'answerCallbackQuery', {
+        callback_query_id: cbId,
+        text: 'Loading contestants...',
+        show_alert: false,
+      });
+
+      const contests = await getContests();
+      const contest = contests.find(c => c.id === contestId);
+
+      if (!contest) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: '❌ <b>Contest not found</b>',
+          parse_mode: 'HTML'
+        });
+        return;
+      }
+
+      const contestants = await getContestants(contestId);
+      const approvedContestants = contestants.filter(cn => cn.status === 'approved');
+
+      let viewText = `🏆 <b>${contest.title}</b>\n\n`;
+      if (contest.description) viewText += `${contest.description}\n\n`;
+      if (contest.rules) viewText += `📋 <b>Rules:</b> ${contest.rules}\n\n`;
+
+      viewText += `👥 <b>Contestants List:</b>\n\n`;
+      const inline_keyboard: any[][] = [];
+
+      if (approvedContestants.length === 0) {
+        viewText += `No contestants registered for this contest yet.`;
+      } else {
+        approvedContestants.forEach((cn, index) => {
+          viewText += `${index + 1}. <b>${cn.name}</b>\n`;
+          if (cn.username) viewText += `🔗 Username: ${cn.username}\n`;
+          viewText += `🗳 <b>Votes Count:</b> ${cn.votesCount || 0} votes\n`;
+          if (cn.description) viewText += `📝 Bio: <i>${cn.description}</i>\n`;
+          viewText += `\n`;
+
+          inline_keyboard.push([{
+            text: `🗳 Vote for ${cn.name}`,
+            callback_data: `vote_cast:${contestId}:${cn.id}`
+          }]);
+        });
+      }
+
+      inline_keyboard.push([{
+        text: '⬅ Back to Contests',
+        callback_data: 'vote_list_contests'
+      }]);
+
+      await sendTelegramApi(token, 'editMessageText', {
+        chat_id: chatId,
+        message_id: cb.message?.message_id,
+        text: viewText,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard }
+      });
+      return;
+    }
+
+    if (data && data.startsWith('vote_cast:')) {
+      const parts = data.split(':');
+      const contestId = parts[1];
+      const contestantId = parts[2];
+
+      const voterUser = cb.from || {};
+      const voterName = (voterUser.first_name || 'User') + (voterUser.last_name ? ' ' + voterUser.last_name : '');
+      const voterUsername = voterUser.username ? '@' + voterUser.username : '';
+
+      const voteRes = await submitVote({
+        contestId,
+        contestantId,
+        voterTelegramId: chatId,
+        voterName,
+        voterUsername,
+        botToken: token
+      });
+
+      if (voteRes.success) {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: voteRes.rewardEarned && voteRes.rewardEarned > 0 
+            ? `✅ Vote Casted! You earned a ₹${voteRes.rewardEarned} wallet bonus!` 
+            : `✅ Your vote was successfully recorded!`,
+          show_alert: true
+        });
+
+        // Refresh the contest view
+        const contests = await getContests();
+        const contest = contests.find(c => c.id === contestId);
+        if (contest) {
+          const contestants = await getContestants(contestId);
+          const approvedContestants = contestants.filter(cn => cn.status === 'approved');
+
+          let viewText = `🏆 <b>${contest.title}</b>\n\n`;
+          if (contest.description) viewText += `${contest.description}\n\n`;
+          if (contest.rules) viewText += `📋 <b>Rules:</b> ${contest.rules}\n\n`;
+
+          viewText += `👥 <b>Contestants List:</b>\n\n`;
+          const inline_keyboard: any[][] = [];
+
+          approvedContestants.forEach((cn, index) => {
+            viewText += `${index + 1}. <b>${cn.name}</b>\n`;
+            if (cn.username) viewText += `🔗 Username: ${cn.username}\n`;
+            viewText += `🗳 <b>Votes Count:</b> ${cn.votesCount || 0} votes\n`;
+            if (cn.description) viewText += `📝 Bio: <i>${cn.description}</i>\n`;
+            viewText += `\n`;
+
+            inline_keyboard.push([{
+              text: `🗳 Vote for ${cn.name}`,
+              callback_data: `vote_cast:${contestId}:${cn.id}`
+            }]);
+          });
+
+          inline_keyboard.push([{
+            text: '⬅ Back to Contests',
+            callback_data: 'vote_list_contests'
+          }]);
+
+          await sendTelegramApi(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message?.message_id,
+            text: viewText,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard }
+          });
+        }
+      } else {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: `❌ ${voteRes.error || 'Failed to submit vote.'}`,
+          show_alert: true
+        });
+      }
+      return;
+    }
   }
 
   // 3. HANDLE MESSAGES (STRICTLY PRIVATE CHAT ONLY)
@@ -1266,6 +1445,46 @@ export async function processTelegramUpdate(token: string, update: any) {
     // Reset active withdrawal session if user clicks a main menu button
     if (text === '👛 Wallet' || text === '💸 Withdraw' || text === '🎁 Refer & Earn' || text === '☎ Contact Us') {
       userSessions.delete(chatId);
+    }
+
+    if (text === '/contests' || text === '/vote' || text === '🏆 Contests' || text.startsWith('/contests') || text.startsWith('/vote')) {
+      const contests = await getContests();
+      const activeContests = contests.filter(c => c.status === 'active' || c.status === 'paused');
+
+      if (activeContests.length === 0) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `🏆 <b>Voting Contests</b>\n\nThere are currently no active voting contests. Stay tuned for upcoming campaigns!`,
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      let listText = `🏆 <b>Active Voting Contests</b>\n\nSelect a contest from below to view contestants and cast your vote!\n\n`;
+      const inline_keyboard: any[][] = [];
+
+      activeContests.forEach(c => {
+        listText += `🔹 <b>${c.title}</b>\n`;
+        if (c.description) listText += `${c.description}\n`;
+        listText += `📅 <b>Ends:</b> ${c.endDate}\n`;
+        if (c.voterRewardAmount && c.voterRewardAmount > 0) {
+          listText += `💰 <b>Voter Bonus:</b> ₹${c.voterRewardAmount} per vote!\n`;
+        }
+        listText += `\n`;
+
+        inline_keyboard.push([{
+          text: `🏆 View: ${c.title}`,
+          callback_data: `contest_view:${c.id}`
+        }]);
+      });
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: listText,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard }
+      });
+      return;
     }
 
     if (text === '👛 Wallet') {

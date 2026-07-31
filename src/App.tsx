@@ -23,6 +23,7 @@ import { TransactionsView } from './components/TransactionsView';
 import { ReferralVerifyView } from './components/ReferralVerifyView';
 import { ClaimRewardView } from './components/ClaimRewardView';
 import { AdminLoginView } from './components/AdminLoginView';
+import { VotingContestsView } from './components/VotingContestsView';
 import { Toast, ToastMessage } from './components/Toast';
 import { Loader2 } from 'lucide-react';
 
@@ -381,6 +382,8 @@ export default function App() {
         return '⭐ Feedback Campaigns';
       case 'feedback_reviews':
         return 'Feedback Reviews';
+      case 'voting_contests':
+        return '🏆 Voting Contest System';
       case 'support':
         return 'Support Settings';
       case 'security':
@@ -550,6 +553,13 @@ export default function App() {
 
           {activeTab === 'feedback_reviews' && (
             <FeedbackReviewsView
+              config={config}
+              showToast={showToast}
+            />
+          )}
+
+          {activeTab === 'voting_contests' && (
+            <VotingContestsView
               config={config}
               showToast={showToast}
             />
