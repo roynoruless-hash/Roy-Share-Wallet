@@ -1,6 +1,6 @@
 {
-  "name": "Roy Share Telegram Wallet Bot Admin",
-  "description": "Admin configuration system for Roy Share Telegram Wallet Bot including Telegram, Channel & Group, Wallet, Withdrawal, Referral, Support, Security settings, Diagnostics, and Logs.",
+  "name": "Roy Share Wallet",
+  "description": "Roy Share Wallet - Telegram Wallet & Rewards Platform",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
