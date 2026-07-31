@@ -80,6 +80,7 @@ export interface AdminConfig {
 
   // Metadata
   updatedAt?: string;
+  verificationVersion?: number;
 }
 
 export type LogType = 'registration' | 'withdrawal' | 'referral' | 'error' | 'activity';

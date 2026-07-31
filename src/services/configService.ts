@@ -70,6 +70,7 @@ export const DEFAULT_CONFIG: AdminConfig = {
 
   // Metadata
   updatedAt: new Date().toISOString(),
+  verificationVersion: 1,
 };
 
 const SETTINGS_COLLECTION = 'settings';
@@ -127,9 +128,10 @@ export function sanitizeFirestoreData<T>(obj: T): T {
           key.endsWith('Length') ||
           key.endsWith('Timeout') ||
           key.endsWith('Withdrawal') ||
-          key.endsWith('Referral')
+          key.endsWith('Referral') ||
+          key.endsWith('Version')
         ) {
-          cleaned[key] = 0;
+          cleaned[key] = 1;
         } else {
           cleaned[key] = '';
         }

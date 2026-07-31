@@ -455,7 +455,7 @@ export const ChannelGroupView: React.FC<ChannelGroupViewProps> = ({
         </div>
 
         {/* Global Settings & Toggles Bar */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-800/80">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-slate-800/80">
           {/* Force Join Enable */}
           <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
             <div>
@@ -490,6 +490,38 @@ export const ChannelGroupView: React.FC<ChannelGroupViewProps> = ({
             >
               {config.autoVerificationEnabled ? <ToggleRight className="w-8 h-8" /> : <ToggleLeft className="w-8 h-8" />}
             </button>
+          </div>
+
+          {/* Verification Version Card */}
+          <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+            <div className="flex-1 mr-2">
+              <p className="text-xs font-bold text-slate-200">Verification Version</p>
+              <p className="text-[11px] text-slate-400">Version requirement for force join checks.</p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min="1"
+                id="verification-version-input"
+                value={config.verificationVersion || 1}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value) || 1;
+                  updateConfig({ verificationVersion: val });
+                }}
+                className="w-12 px-1.5 py-1 rounded bg-slate-900 border border-slate-700 text-slate-200 text-xs text-center font-bold font-mono focus:border-sky-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                id="increment-version-btn"
+                onClick={() => {
+                  const current = config.verificationVersion || 1;
+                  updateConfig({ verificationVersion: current + 1 });
+                }}
+                className="p-1 px-2 rounded bg-sky-500/15 hover:bg-sky-500/30 text-sky-400 border border-sky-500/30 text-[11px] font-bold transition"
+              >
+                +1
+              </button>
+            </div>
           </div>
         </div>
 

@@ -8,12 +8,25 @@ import {
   query,
   orderBy,
   writeBatch,
+  increment,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { TelegramChannelItem } from '../types';
 import { formatTelegramUsername, testBotToken } from './telegramService';
 
 const CHANNELS_COLLECTION = 'telegramChannels';
+
+/**
+ * Auto-increment the global verificationVersion inside settings/config
+ */
+async function incrementVerificationVersion() {
+  try {
+    const configRef = doc(db, 'settings', 'config');
+    await setDoc(configRef, { verificationVersion: increment(1) }, { merge: true });
+  } catch (err) {
+    console.warn('Failed to increment verificationVersion:', err);
+  }
+}
 
 /**
  * Fetch all Telegram channels and groups from Firestore ordered by position
@@ -75,10 +88,12 @@ export async function saveTelegramChannel(
   if (item.id) {
     const docRef = doc(db, CHANNELS_COLLECTION, item.id);
     await setDoc(docRef, dataToSave, { merge: true });
+    await incrementVerificationVersion();
     return { id: item.id, ...dataToSave };
   } else {
     const colRef = collection(db, CHANNELS_COLLECTION);
     const docRef = await addDoc(colRef, dataToSave);
+    await incrementVerificationVersion();
     return { id: docRef.id, ...dataToSave };
   }
 }
@@ -90,6 +105,7 @@ export async function deleteTelegramChannel(id: string): Promise<void> {
   if (!id) return;
   const docRef = doc(db, CHANNELS_COLLECTION, id);
   await deleteDoc(docRef);
+  await incrementVerificationVersion();
 }
 
 /**

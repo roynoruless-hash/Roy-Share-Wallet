@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction, setDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
 
@@ -14,6 +14,12 @@ interface UserSession {
   withdrawUpi?: string;
   withdrawQrUrl?: string;
   withdrawRedeemDetails?: string;
+  // Verification Cache
+  verifiedChannels?: string[];
+  verifiedGroups?: string[];
+  lastVerificationTime?: string;
+  verificationVersion?: number;
+  lastJoinMessageSentTime?: number;
 }
 
 // In-memory session state store for onboarding users
@@ -120,11 +126,11 @@ function buildForceJoinKeyboard(channels: TelegramChannelGroupRecord[]) {
 /**
  * Build force join html message text
  */
-function buildForceJoinText(channels: TelegramChannelGroupRecord[], missingUsernames?: string[]) {
+function buildForceJoinText(channels: TelegramChannelGroupRecord[], isReverification = false) {
   let text = '';
 
-  if (missingUsernames && missingUsernames.length > 0) {
-    text = `❌ <b>Verification Incomplete!</b>\n\nPlease join the required channels and groups below:\n\n`;
+  if (isReverification) {
+    text = `⚠️ <b>Join Verification Required!</b>\n\nPlease join the required channels and groups below to continue using the bot:\n\n`;
   } else {
     text = `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nTo continue using this bot, please join our official channels and groups:\n\n`;
   }
@@ -136,9 +142,7 @@ function buildForceJoinText(channels: TelegramChannelGroupRecord[], missingUsern
     text += `<b>📢 Channels:</b>\n`;
     channelsList.forEach((c) => {
       const formatted = c.username.startsWith('@') ? c.username : `@${c.username}`;
-      const isMissing = missingUsernames?.includes(formatted) || missingUsernames?.includes(c.username);
-      const mark = isMissing ? '❌' : '•';
-      text += `${mark} ${c.displayName}: <b>${formatted}</b>\n`;
+      text += `❌ ${c.displayName}: <b>${formatted}</b>\n`;
     });
     text += `\n`;
   }
@@ -147,14 +151,12 @@ function buildForceJoinText(channels: TelegramChannelGroupRecord[], missingUsern
     text += `<b>👥 Groups:</b>\n`;
     groupsList.forEach((g) => {
       const formatted = g.username.startsWith('@') ? g.username : `@${g.username}`;
-      const isMissing = missingUsernames?.includes(formatted) || missingUsernames?.includes(g.username);
-      const mark = isMissing ? '❌' : '•';
-      text += `${mark} ${g.displayName}: <b>${formatted}</b>\n`;
+      text += `❌ ${g.displayName}: <b>${formatted}</b>\n`;
     });
     text += `\n`;
   }
 
-  text += `After joining all required chats, click <b>✅ Verify Join</b> below.`;
+  text += `After joining all required chats, click <b>✅ Verify Join</b> below or send any command again to verify.`;
   return text;
 }
 
@@ -291,6 +293,130 @@ async function checkChatMember(token: string, chatIdOrUsername: string, userId: 
 }
 
 /**
+ * Verify if the user is a member of all active required channels/groups
+ */
+async function verifyUserSmartJoin(
+  token: string,
+  chatId: string,
+  existingUser: any
+): Promise<{ verified: boolean; missingItems: TelegramChannelGroupRecord[] }> {
+  const adminConfig = await getAdminConfig();
+  const forceJoinEnabled = adminConfig?.forceJoinEnabled !== false;
+
+  if (!forceJoinEnabled) {
+    return { verified: true, missingItems: [] };
+  }
+
+  const activeItems = await getActiveChannelsAndGroups();
+  const requiredItems = activeItems.filter((i) => i.required !== false && i.active !== false);
+
+  if (requiredItems.length === 0) {
+    return { verified: true, missingItems: [] };
+  }
+
+  const targetVersion = adminConfig?.verificationVersion || 1;
+
+  // Fetch lists of already verified items
+  let verifiedChannels: string[] = [];
+  let verifiedGroups: string[] = [];
+  let userVersion = 0;
+
+  if (existingUser) {
+    verifiedChannels = Array.isArray(existingUser.verifiedChannels) ? existingUser.verifiedChannels : [];
+    verifiedGroups = Array.isArray(existingUser.verifiedGroups) ? existingUser.verifiedGroups : [];
+    userVersion = Number(existingUser.verificationVersion) || 0;
+  } else {
+    const session = userSessions.get(chatId);
+    if (session) {
+      verifiedChannels = Array.isArray(session.verifiedChannels) ? session.verifiedChannels : [];
+      verifiedGroups = Array.isArray(session.verifiedGroups) ? session.verifiedGroups : [];
+      userVersion = Number(session.verificationVersion) || 0;
+    }
+  }
+
+  // If user is already verified on the latest version, return verified: true
+  if (userVersion >= targetVersion) {
+    return { verified: true, missingItems: [] };
+  }
+
+  const missingItems: TelegramChannelGroupRecord[] = [];
+  let newlyVerifiedChannels = [...verifiedChannels];
+  let newlyVerifiedGroups = [...verifiedGroups];
+  let updated = false;
+
+  for (const item of requiredItems) {
+    const targetKey = item.chatId || item.username;
+    if (!targetKey) continue;
+
+    const listToCheck = item.type === 'channel' ? verifiedChannels : verifiedGroups;
+    const isAlreadyVerified = listToCheck.includes(targetKey);
+
+    if (isAlreadyVerified) {
+      continue;
+    }
+
+    const isMember = await checkChatMember(token, targetKey, chatId);
+    if (isMember) {
+      if (item.type === 'channel') {
+        newlyVerifiedChannels.push(targetKey);
+      } else {
+        newlyVerifiedGroups.push(targetKey);
+      }
+      updated = true;
+    } else {
+      missingItems.push(item);
+    }
+  }
+
+  // Save updated verification cache
+  if (missingItems.length === 0) {
+    if (existingUser) {
+      try {
+        const userRef = doc(db, 'users', existingUser.id);
+        await setDoc(userRef, {
+          verifiedChannels: newlyVerifiedChannels,
+          verifiedGroups: newlyVerifiedGroups,
+          verificationVersion: targetVersion,
+          lastVerificationTime: new Date().toISOString(),
+        }, { merge: true });
+      } catch (err) {
+        console.error('Failed to update user verification in Firestore:', err);
+      }
+    } else {
+      const session = userSessions.get(chatId);
+      if (session) {
+        session.verifiedChannels = newlyVerifiedChannels;
+        session.verifiedGroups = newlyVerifiedGroups;
+        session.verificationVersion = targetVersion;
+        session.lastVerificationTime = new Date().toISOString();
+      }
+    }
+    return { verified: true, missingItems: [] };
+  } else {
+    if (updated) {
+      if (existingUser) {
+        try {
+          const userRef = doc(db, 'users', existingUser.id);
+          await setDoc(userRef, {
+            verifiedChannels: newlyVerifiedChannels,
+            verifiedGroups: newlyVerifiedGroups,
+          }, { merge: true });
+        } catch (err) {
+          console.error('Failed to update user partial verification in Firestore:', err);
+        }
+      } else {
+        const session = userSessions.get(chatId);
+        if (session) {
+          session.verifiedChannels = newlyVerifiedChannels;
+          session.verifiedGroups = newlyVerifiedGroups;
+        }
+      }
+    }
+    return { verified: false, missingItems };
+  }
+}
+
+/**
  * Main Telegram Webhook Update Processor
  */
 export async function processTelegramUpdate(token: string, update: any) {
@@ -318,21 +444,10 @@ export async function processTelegramUpdate(token: string, update: any) {
     const data = cb.data;
 
     if (data === 'check_membership') {
-      const adminConfig = await getAdminConfig();
-      const autoVerificationEnabled = adminConfig?.autoVerificationEnabled !== false;
+      const existingUser = await getUserByTelegramId(chatId);
+      const verifyRes = await verifyUserSmartJoin(token, chatId, existingUser);
 
-      const activeItems = await getActiveChannelsAndGroups();
-      const requiredItems = activeItems.filter((i) => i.required !== false && i.active !== false);
-
-      if (requiredItems.length === 0) {
-        const currentSess = userSessions.get(chatId);
-        userSessions.set(chatId, {
-          step: 'WAITING_NAME',
-          channelVerified: true,
-          groupVerified: true,
-          referrerUid: currentSess?.referrerUid,
-        });
-
+      if (verifyRes.verified) {
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
           text: '✅ Membership Verified!',
@@ -341,60 +456,68 @@ export async function processTelegramUpdate(token: string, update: any) {
 
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
-          text: '✅ <b>Membership Verified!</b>\n\nLet\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
+          text: `✅ <b>Verification Successful!</b>`,
           parse_mode: 'HTML',
         });
-        return;
-      }
 
-      const missingItems: TelegramChannelGroupRecord[] = [];
+        if (existingUser) {
+          // Show main menu for registered user
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `👋 <b>Welcome back, ${existingUser.firstName}!</b>\n\n👛 <b>Wallet Balance:</b> ₹${existingUser.walletBalance || 0}`,
+            parse_mode: 'HTML',
+            reply_markup: {
+              keyboard: [
+                [{ text: '👛 Wallet' }, { text: '💸 Withdraw' }],
+                [{ text: '🎁 Refer & Earn' }, { text: '☎ Contact Us' }],
+              ],
+              resize_keyboard: true,
+            },
+          });
+        } else {
+          // Onboarding registration flow for unregistered user
+          const currentSess = userSessions.get(chatId);
+          userSessions.set(chatId, {
+            ...currentSess,
+            step: 'WAITING_NAME',
+            channelVerified: true,
+            groupVerified: true,
+          } as any);
 
-      if (autoVerificationEnabled) {
-        for (const item of requiredItems) {
-          const target = item.chatId || item.username;
-          const isMember = await checkChatMember(token, target, chatId);
-          if (!isMember) {
-            missingItems.push(item);
-          }
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: 'Let\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
+            parse_mode: 'HTML',
+          });
         }
-      }
-
-      if (missingItems.length === 0) {
-        const currentSess = userSessions.get(chatId);
-        userSessions.set(chatId, {
-          step: 'WAITING_NAME',
-          channelVerified: true,
-          groupVerified: true,
-          referrerUid: currentSess?.referrerUid,
-        });
-
-        await sendTelegramApi(token, 'answerCallbackQuery', {
-          callback_query_id: cbId,
-          text: '✅ Membership Verified!',
-          show_alert: false,
-        });
-
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: '✅ <b>Membership Verified!</b>\n\nLet\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
-          parse_mode: 'HTML',
-        });
       } else {
-        const missingUsernames = missingItems.map(
-          (i) => (i.username.startsWith('@') ? i.username : `@${i.username}`)
-        );
-
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
           text: `❌ Verification Failed! Please join required chats.`,
           show_alert: true,
         });
 
+        const now = Date.now();
+        if (existingUser) {
+          try {
+            await setDoc(doc(db, 'users', existingUser.id), {
+              lastJoinMessageSentTime: now,
+            }, { merge: true });
+          } catch (err) {
+            console.error('Failed to update user lastJoinMessageSentTime:', err);
+          }
+        } else {
+          const session = userSessions.get(chatId);
+          if (session) {
+            session.lastJoinMessageSentTime = now;
+          }
+        }
+
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
-          text: `❌ <b>Please join:</b>\n\n${missingUsernames.join('\n\n')}\n\nbefore continuing.`,
+          text: buildForceJoinText(verifyRes.missingItems, existingUser !== null),
           parse_mode: 'HTML',
-          reply_markup: buildForceJoinKeyboard(activeItems),
+          reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
         });
       }
       return;
@@ -706,6 +829,146 @@ export async function processTelegramUpdate(token: string, update: any) {
       parse_mode: 'HTML',
     });
     return;
+  }
+
+  // Pre-process: Parse referral parameter from /start command for unregistered users
+  if (!existingUser && (text === '/start' || text.startsWith('/start'))) {
+    let refParam = '';
+    const parts = text.split(/\s+/);
+    if (parts.length > 1 && parts[1]) {
+      refParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
+    } else {
+      const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
+      if (match && match[1] && match[1].toLowerCase() !== '/start') {
+        refParam = match[1].trim();
+      }
+    }
+
+    let referrerUid: string | undefined = undefined;
+    if (refParam) {
+      const referrer = await getUserByUid(refParam);
+      if (referrer && String(referrer.telegramId) !== String(chatId)) {
+        referrerUid = String(referrer.uid);
+      }
+    }
+
+    const existingSess = userSessions.get(chatId);
+    const finalReferrerUid = referrerUid || existingSess?.referrerUid;
+
+    userSessions.set(chatId, {
+      step: 'FORCE_JOIN',
+      referrerUid: finalReferrerUid,
+    });
+  }
+
+  // Check smart join verification status
+  const currentSess = userSessions.get(chatId);
+  const isOnboardingInput = currentSess && ['WAITING_NAME', 'WAITING_MOBILE', 'WAITING_CONTACT'].includes(currentSess.step);
+
+  if (!isOnboardingInput) {
+    const verifyRes = await verifyUserSmartJoin(token, chatId, existingUser);
+
+    if (!verifyRes.verified) {
+      // If verification failed:
+      // 1. Show the join message only once every 60 seconds.
+      // 2. During that time simply reply: "⚠️ Please complete the required join first."
+      const now = Date.now();
+      let lastSent = 0;
+      if (existingUser) {
+        lastSent = Number(existingUser.lastJoinMessageSentTime) || 0;
+      } else {
+        lastSent = Number(currentSess?.lastJoinMessageSentTime) || 0;
+      }
+
+      if (now - lastSent < 60 * 1000) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `⚠️ <b>Please complete the required join first.</b>`,
+          parse_mode: 'HTML',
+        });
+        return;
+      } else {
+        // Update lastSent time
+        if (existingUser) {
+          try {
+            await setDoc(doc(db, 'users', existingUser.id), {
+              lastJoinMessageSentTime: now,
+            }, { merge: true });
+          } catch (err) {
+            console.error('Failed to update user lastJoinMessageSentTime:', err);
+          }
+        } else {
+          let session = userSessions.get(chatId);
+          if (!session) {
+            session = { step: 'FORCE_JOIN' };
+            userSessions.set(chatId, session);
+          }
+          session.lastJoinMessageSentTime = now;
+        }
+
+        // Show smart force join keyboard containing only missing items
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: buildForceJoinText(verifyRes.missingItems, existingUser !== null),
+          parse_mode: 'HTML',
+          reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
+        });
+        return;
+      }
+    }
+
+    // If verification is successful:
+    // Check if they just transitioned from unverified to verified!
+    if (existingUser) {
+      const oldVersion = Number(existingUser.verificationVersion) || 0;
+      const adminConfig = await getAdminConfig();
+      const targetVersion = adminConfig?.verificationVersion || 1;
+
+      if (oldVersion < targetVersion) {
+        // Update the user's verification version so they are marked fully verified
+        try {
+          await setDoc(doc(db, 'users', existingUser.id), {
+            verificationVersion: targetVersion,
+            lastVerificationTime: new Date().toISOString(),
+          }, { merge: true });
+        } catch (err) {
+          console.error('Failed to update user verificationVersion on command transition:', err);
+        }
+
+        // Send success message
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `✅ <b>Verification Successful!</b>`,
+          parse_mode: 'HTML',
+        });
+      }
+    } else {
+      // Unregistered user is verified!
+      // If no session exists or they were at FORCE_JOIN, transition to WAITING_NAME
+      let session = userSessions.get(chatId);
+      if (!session || session.step === 'FORCE_JOIN') {
+        const finalReferrerUid = session?.referrerUid;
+        session = {
+          step: 'WAITING_NAME',
+          referrerUid: finalReferrerUid,
+          verifiedChannels: verifyRes.missingItems.length === 0 ? [] : undefined,
+        };
+        userSessions.set(chatId, session);
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `✅ <b>Verification Successful!</b>`,
+          parse_mode: 'HTML',
+        });
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+    }
   }
 
   // A. COMMAND: /start
@@ -1252,6 +1515,11 @@ export async function processTelegramUpdate(token: string, update: any) {
       totalReferrals: 0,
       successfulReferrals: 0,
       totalReferralEarnings: 0,
+      // Smart Join Verification fields
+      verifiedChannels: session.verifiedChannels || [],
+      verifiedGroups: session.verifiedGroups || [],
+      verificationVersion: session.verificationVersion || (adminConfig?.verificationVersion || 1),
+      lastVerificationTime: session.lastVerificationTime || new Date().toISOString(),
     };
 
     let newUserDocRef;
