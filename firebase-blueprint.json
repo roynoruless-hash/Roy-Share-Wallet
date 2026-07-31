@@ -72,9 +72,77 @@
         "referralRewardReceived": { "type": "boolean" },
         "totalReferrals": { "type": "number" },
         "successfulReferrals": { "type": "number" },
-        "totalReferralEarnings": { "type": "number" }
+        "totalReferralEarnings": { "type": "number" },
+        "status": { "type": "string" },
+        "banned": { "type": "boolean" },
+        "banReason": { "type": "string" },
+        "lastActive": { "type": "string" }
       },
       "required": ["uid", "telegramId", "firstName", "mobile", "walletBalance", "channelVerified", "groupVerified", "createdAt"]
+    },
+    "transactions": {
+      "title": "Wallet Transactions",
+      "description": "Ledger of credits, debits, referral rewards, and withdrawals",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "uid": { "type": "string" },
+        "type": { "type": "string" },
+        "amount": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "reason": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "type", "amount", "balanceAfter", "createdAt"]
+    },
+    "adminLogs": {
+      "title": "Admin Audit Logs",
+      "description": "Log of admin actions on users and system settings",
+      "type": "object",
+      "properties": {
+        "adminId": { "type": "string" },
+        "action": { "type": "string" },
+        "targetUid": { "type": "string" },
+        "targetTelegramId": { "type": "string" },
+        "amount": { "type": "number" },
+        "reason": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["adminId", "action", "targetUid", "timestamp"]
+    },
+    "referralTokens": {
+      "title": "Referral Verification Tokens",
+      "description": "Anti self-referral verification links and device fingerprints",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "referrerUid": { "type": "string" },
+        "referredUid": { "type": "string" },
+        "referredTelegramId": { "type": "string" },
+        "referredName": { "type": "string" },
+        "deviceFingerprint": { "type": "string" },
+        "ipAddress": { "type": "string" },
+        "userAgent": { "type": "string" },
+        "status": { "type": "string" },
+        "rejectReason": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "verifiedAt": { "type": "string" }
+      },
+      "required": ["token", "referrerUid", "referredUid", "status", "createdAt"]
+    },
+    "deviceFingerprints": {
+      "title": "Device Fingerprint Registry",
+      "description": "Known device fingerprints for anti-fraud tracking",
+      "type": "object",
+      "properties": {
+        "fingerprint": { "type": "string" },
+        "uids": { "type": "array" },
+        "telegramIds": { "type": "array" },
+        "referralTokens": { "type": "array" },
+        "count": { "type": "number" },
+        "lastUsedAt": { "type": "string" }
+      },
+      "required": ["fingerprint", "uids"]
     }
   },
   "firestore": {
@@ -89,6 +157,22 @@
     "/users/{userId}": {
       "schema": "users",
       "description": "User profile and wallet account"
+    },
+    "/transactions/{txId}": {
+      "schema": "transactions",
+      "description": "User wallet transaction record"
+    },
+    "/adminLogs/{logId}": {
+      "schema": "adminLogs",
+      "description": "Admin activity and audit log"
+    },
+    "/referralTokens/{tokenId}": {
+      "schema": "referralTokens",
+      "description": "Pending and verified referral verification tokens"
+    },
+    "/deviceFingerprints/{fpId}": {
+      "schema": "deviceFingerprints",
+      "description": "Anti self-referral device fingerprint log"
     }
   }
 }

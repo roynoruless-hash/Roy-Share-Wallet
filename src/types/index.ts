@@ -78,6 +78,7 @@ export interface DiagnosticItem {
 
 export type TabType =
   | 'dashboard'
+  | 'users'
   | 'telegram'
   | 'channel'
   | 'wallet'
@@ -87,3 +88,75 @@ export type TabType =
   | 'security'
   | 'logs'
   | 'diagnostics';
+
+export interface BotUser {
+  id: string;
+  uid: string;
+  telegramId: string;
+  username?: string;
+  firstName: string;
+  mobile: string;
+  walletBalance: number;
+  channelVerified: boolean;
+  groupVerified: boolean;
+  createdAt: string;
+  lastActive?: string;
+  referrerUid?: string;
+  referredBy?: string;
+  referralRewardReceived?: boolean;
+  totalReferrals?: number;
+  successfulReferrals?: number;
+  totalReferralEarnings?: number;
+  status?: 'active' | 'banned' | string;
+  banned?: boolean;
+  banReason?: string;
+}
+
+export interface WalletTransaction {
+  id: string;
+  userId?: string;
+  uid: string;
+  type: 'admin_credit' | 'admin_debit' | 'referral' | 'withdrawal' | 'registration_bonus' | string;
+  amount: number;
+  balanceAfter: number;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface AdminLog {
+  id: string;
+  adminId: string;
+  action: 'credit' | 'debit' | 'ban' | 'unban' | 'send_message' | 'referral_rejected' | 'referral_verified' | string;
+  targetUid: string;
+  targetTelegramId?: string;
+  amount?: number;
+  reason?: string;
+  timestamp: string;
+}
+
+export interface ReferralVerificationToken {
+  id?: string;
+  token: string;
+  referrerUid: string;
+  referredUid: string;
+  referredTelegramId: string;
+  referredName: string;
+  deviceFingerprint?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  status: 'pending' | 'verified' | 'rejected';
+  rejectReason?: string;
+  createdAt: string;
+  verifiedAt?: string;
+}
+
+export interface DeviceFingerprintRecord {
+  id?: string;
+  fingerprint: string;
+  uids: string[];
+  telegramIds: string[];
+  referralTokens?: string[];
+  count: number;
+  lastUsedAt: string;
+}
+

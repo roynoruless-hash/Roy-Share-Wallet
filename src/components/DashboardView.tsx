@@ -122,10 +122,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {statCards.map((card) => {
           const Icon = card.icon;
+          const isUserCard = card.title === 'Total Users' || card.title === 'Verified Users';
           return (
             <div
               key={card.title}
-              className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800/80 hover:border-slate-700/80 transition-all duration-200 shadow-lg relative group overflow-hidden"
+              onClick={() => {
+                if (isUserCard) setActiveTab('users');
+              }}
+              className={`p-5 rounded-2xl bg-slate-900/80 border border-slate-800/80 hover:border-slate-700/80 transition-all duration-200 shadow-lg relative group overflow-hidden ${
+                isUserCard ? 'cursor-pointer hover:bg-slate-800/60' : ''
+              }`}
             >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">

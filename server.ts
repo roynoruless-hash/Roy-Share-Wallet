@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { processTelegramUpdate } from './src/server/botHandler';
+import { getReferralTokenInfo, processReferralVerification } from './src/server/referralVerification';
 
 async function startServer() {
   const app = express();
@@ -236,6 +237,65 @@ async function startServer() {
         success: false,
         error: `Bot Test Error: ${err.message || 'Network exception'}`,
       });
+    }
+  });
+
+  // 5. ADMIN DIRECT TELEGRAM MESSAGE ENDPOINT
+  app.post('/api/admin/send-message', async (req, res) => {
+    try {
+      const { token, chatId, text } = req.body;
+      const cleanToken = token?.trim();
+
+      if (!cleanToken || !chatId || !text) {
+        return res.status(400).json({ success: false, error: 'Bot Token, Chat ID, and message text are required.' });
+      }
+
+      const tgRes = await sendTelegramMessage(cleanToken, chatId, text);
+      if (tgRes && tgRes.ok) {
+        return res.json({ success: true, messageId: tgRes.result?.message_id });
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: tgRes?.description || 'Failed to send message via Telegram API. Ensure user has started bot.',
+        });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Internal server error' });
+    }
+  });
+
+  // 6. ANTI SELF-REFERRAL VERIFICATION ENDPOINTS
+  app.get('/api/referral/token-info', async (req, res) => {
+    try {
+      const token = req.query.token as string;
+      const info = await getReferralTokenInfo(token);
+      if (info.success) {
+        return res.json(info);
+      } else {
+        return res.status(400).json(info);
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/referral/verify', async (req, res) => {
+    try {
+      const { token, deviceFingerprint, browserSignals } = req.body;
+      const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+      const userAgent = req.headers['user-agent'] || 'unknown';
+
+      const result = await processReferralVerification({
+        token,
+        deviceFingerprint,
+        clientIp,
+        userAgent,
+        browserSignals,
+      });
+
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, reason: 'SERVER_ERROR', message: err.message });
     }
   });
 

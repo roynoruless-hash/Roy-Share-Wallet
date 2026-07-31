@@ -151,9 +151,23 @@ async function checkChatMember(token: string, chatIdOrUsername: string, userId: 
 export async function processTelegramUpdate(token: string, update: any) {
   if (!token || !update) return;
 
-  // 1. HANDLE CALLBACK QUERIES (Inline Buttons like "Verify Join")
+  // 1. IGNORE EDITED MESSAGES, CHANNEL POSTS, AND NON-PRIVATE UPDATES
+  if (update.edited_message || update.channel_post || update.edited_channel_post || update.my_chat_member || update.chat_member) {
+    console.log('Ignored Group Update');
+    return;
+  }
+
+  // 2. HANDLE CALLBACK QUERIES (Inline Buttons like "Verify Join")
   if (update.callback_query) {
     const cb = update.callback_query;
+    const chatType = cb.message?.chat?.type;
+
+    // Reject callback queries from groups, supergroups, or channels
+    if (chatType !== 'private') {
+      console.log('Ignored Group Update');
+      return;
+    }
+
     const chatId = String(cb.message?.chat?.id || cb.from?.id);
     const cbId = cb.id;
     const data = cb.data;
@@ -217,9 +231,24 @@ export async function processTelegramUpdate(token: string, update: any) {
     return;
   }
 
-  // 2. HANDLE MESSAGES
-  const message = update.message || update.edited_message;
-  if (!message) return;
+  // 3. HANDLE MESSAGES (STRICTLY PRIVATE CHAT ONLY)
+  const message = update.message;
+  if (!message) {
+    console.log('Ignored Group Update');
+    return;
+  }
+
+  // Check Chat Type - MUST be 'private'
+  if (!message.chat || message.chat.type !== 'private') {
+    console.log('Ignored Group Update');
+    return;
+  }
+
+  // Ignore anonymous admin messages or bot messages
+  if (!message.from || message.from.is_bot || message.from.id === 1087968824) {
+    console.log('Ignored Group Update');
+    return;
+  }
 
   const chatId = String(message.chat.id);
   const text = message.text ? message.text.trim() : '';
@@ -227,6 +256,15 @@ export async function processTelegramUpdate(token: string, update: any) {
 
   // Query database to see if user is already registered
   const existingUser = await getUserByTelegramId(chatId);
+
+  if (existingUser && (existingUser.status === 'banned' || existingUser.banned === true)) {
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: `🚫 <b>Your account has been suspended.</b>\n\nContact Admin.`,
+      parse_mode: 'HTML',
+    });
+    return;
+  }
 
   // A. COMMAND: /start
   if (text === '/start' || text.startsWith('/start')) {
@@ -621,85 +659,59 @@ export async function processTelegramUpdate(token: string, update: any) {
       console.error('Failed to create user account in Firestore:', dbErr);
     }
 
-    // Process Referral Reward via Firestore Transaction
+    // Create pending referral token for Anti Self-Referral Verification
     if (newUserDocRef && session.referrerUid && session.referrerUid !== uid) {
       try {
-        const referrerQuery = query(collection(db, 'users'), where('uid', '==', String(session.referrerUid)));
-        const referrerSnap = await getDocs(referrerQuery);
+        const uniqueToken = 'ref_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+        
+        await addDoc(collection(db, 'referralTokens'), {
+          token: uniqueToken,
+          referrerUid: String(session.referrerUid),
+          referredUid: String(uid),
+          referredTelegramId: String(chatId),
+          referredName: newUserData.firstName,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+        });
 
-        if (!referrerSnap.empty) {
-          const referrerDocSnap = referrerSnap.docs[0];
-          const referrerRef = doc(db, 'users', referrerDocSnap.id);
+        // Determine domain URL for verification link
+        const hostUrl = process.env.APP_URL || 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app';
+        const verifyUrl = `${hostUrl.replace(/\/$/, '')}/referral-verify?token=${uniqueToken}`;
 
-          let updatedReferrerBalance = 0;
-          let referrerTelegramId = '';
+        // Send Anti Self-Referral Verification Link to User
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `🔗 <b>Referral Device Verification Required</b>\n\n` +
+            `To complete your referral and credit rewards, please verify your device by tapping the link below:\n\n` +
+            `<code>${verifyUrl}</code>\n\n` +
+            `<i>Note: Self-referrals and multiple accounts on the same device are strictly prohibited.</i>`,
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🛡️ Verify Referral Device', url: verifyUrl },
+              ],
+            ],
+          },
+        });
 
-          await runTransaction(db, async (transaction) => {
-            const freshReferrerSnap = await transaction.get(referrerRef);
-            if (!freshReferrerSnap.exists()) {
-              throw new Error('Referrer document does not exist.');
-            }
-
-            const refData = freshReferrerSnap.data();
-
-            // Self referral protection check
-            if (String(refData.telegramId) === String(chatId) || String(refData.uid) === uid) {
-              throw new Error('Self referral protection triggered.');
-            }
-
-            const currentBal = Number(refData.walletBalance) || 0;
-            const currentTotal = Number(refData.totalReferrals) || 0;
-            const currentSucc = Number(refData.successfulReferrals) || 0;
-            const currentEarnings = Number(refData.totalReferralEarnings) || 0;
-
-            updatedReferrerBalance = currentBal + referralReward;
-            referrerTelegramId = String(refData.telegramId || '');
-
-            transaction.update(referrerRef, {
-              walletBalance: updatedReferrerBalance,
-              totalReferrals: currentTotal + 1,
-              successfulReferrals: currentSucc + 1,
-              totalReferralEarnings: currentEarnings + referralReward,
-            });
-
-            const newUserRef = doc(db, 'users', newUserDocRef.id);
-            transaction.update(newUserRef, {
-              referralRewardReceived: true,
-              referredBy: refData.uid || session.referrerUid,
-            });
+        // Add log entry
+        try {
+          await addDoc(collection(db, 'logs'), {
+            type: 'referral_verification_sent',
+            message: `Pending referral token ${uniqueToken} created for referred UID #${uid} (Referrer: UID #${session.referrerUid}). Verification link sent.`,
+            timestamp: new Date().toISOString(),
+            details: {
+              token: uniqueToken,
+              referrerUid: session.referrerUid,
+              referredUid: uid,
+            },
           });
-
-          // Log referral event to logs collection
-          try {
-            await addDoc(collection(db, 'logs'), {
-              type: 'referral',
-              message: `Referral reward of ₹${referralReward} credited to UID #${session.referrerUid} for referring UID #${uid}.`,
-              timestamp: new Date().toISOString(),
-              details: {
-                referrerUid: session.referrerUid,
-                referredUid: uid,
-                reward: referralReward,
-              },
-            });
-          } catch (logErr) {
-            console.warn('Failed to add referral log entry:', logErr);
-          }
-
-          // Send notification to referrer on Telegram
-          if (referrerTelegramId && token) {
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: referrerTelegramId,
-              text: `🎉 <b>New Referral Joined!</b>\n\n` +
-                `<b>Name:</b> ${newUserData.firstName}\n` +
-                `<b>UID:</b> <code>${uid}</code>\n\n` +
-                `<b>Reward:</b> ₹${referralReward}\n\n` +
-                `<b>New Wallet Balance:</b> ₹${updatedReferrerBalance}`,
-              parse_mode: 'HTML',
-            });
-          }
+        } catch (logErr) {
+          console.warn('Failed to add referral token log:', logErr);
         }
       } catch (refErr) {
-        console.error('Error processing referral reward transaction:', refErr);
+        console.error('Error creating referral verification token:', refErr);
       }
     }
 

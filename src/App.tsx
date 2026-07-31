@@ -14,6 +14,8 @@ import { SupportSettingsView } from './components/SupportSettingsView';
 import { SecurityView } from './components/SecurityView';
 import { DiagnosticsView } from './components/DiagnosticsView';
 import { LogsView } from './components/LogsView';
+import { UserManagementView } from './components/UserManagementView';
+import { ReferralVerifyView } from './components/ReferralVerifyView';
 import { AdminLoginView } from './components/AdminLoginView';
 import { Toast, ToastMessage } from './components/Toast';
 import { Loader2 } from 'lucide-react';
@@ -249,6 +251,8 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard':
         return 'Dashboard Overview';
+      case 'users':
+        return 'User Management';
       case 'telegram':
         return 'Telegram Configuration';
       case 'channel':
@@ -271,6 +275,15 @@ export default function App() {
         return 'Dashboard';
     }
   };
+
+  // Check if URL is for Referral Verification
+  const isReferralVerifyRoute =
+    window.location.pathname.startsWith('/referral-verify') ||
+    new URLSearchParams(window.location.search).has('token');
+
+  if (isReferralVerifyRoute) {
+    return <ReferralVerifyView botUsername={config.botUsername || 'RoyShareWalletBot'} />;
+  }
 
   if (isLoading) {
     return (
@@ -330,6 +343,10 @@ export default function App() {
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
           {activeTab === 'dashboard' && (
             <DashboardView config={config} setActiveTab={setActiveTab} />
+          )}
+
+          {activeTab === 'users' && (
+            <UserManagementView config={config} showToast={showToast} />
           )}
 
           {activeTab === 'telegram' && (

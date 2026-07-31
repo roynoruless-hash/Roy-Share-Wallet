@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   LayoutDashboard,
+  Users,
   Send,
   Users2,
   Wallet,
@@ -113,6 +114,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Let's filter out duplicates so 'security' is shown cleanly as System Settings / Security
   const uniqueMenuItems = [
     { id: 'dashboard' as TabType, label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'users' as TabType, label: 'User Management', icon: Users, badge: 'Users' },
     { id: 'telegram' as TabType, label: 'Telegram Configuration', icon: Send, badge: 'Core' },
     { id: 'channel' as TabType, label: 'Channel & Group', icon: Users2 },
     { id: 'wallet' as TabType, label: 'Wallet Settings', icon: Wallet },
