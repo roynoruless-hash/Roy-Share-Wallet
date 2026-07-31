@@ -11,11 +11,13 @@ import { WalletSettingsView } from './components/WalletSettingsView';
 import { WithdrawalSettingsView } from './components/WithdrawalSettingsView';
 import { ReferralSettingsView } from './components/ReferralSettingsView';
 import { SupportSettingsView } from './components/SupportSettingsView';
+import { ReferralMilestonesView } from './components/ReferralMilestonesView';
 import { SecurityView } from './components/SecurityView';
 import { DiagnosticsView } from './components/DiagnosticsView';
 import { LogsView } from './components/LogsView';
 import { UserManagementView } from './components/UserManagementView';
 import { ReferralVerifyView } from './components/ReferralVerifyView';
+import { ClaimRewardView } from './components/ClaimRewardView';
 import { AdminLoginView } from './components/AdminLoginView';
 import { Toast, ToastMessage } from './components/Toast';
 import { Loader2 } from 'lucide-react';
@@ -199,18 +201,6 @@ export default function App() {
       return false;
     }
 
-    if (!config.mainChannelUsername.trim()) {
-      showToast('Validation Error: Main Channel Username cannot be empty.', 'error');
-      setActiveTab('channel');
-      return false;
-    }
-
-    if (!config.mainGroupUsername.trim()) {
-      showToast('Validation Error: Main Group Username cannot be empty.', 'error');
-      setActiveTab('channel');
-      return false;
-    }
-
     return true;
   };
 
@@ -263,6 +253,8 @@ export default function App() {
         return 'Withdrawal Settings';
       case 'referral':
         return 'Referral Settings';
+      case 'milestones':
+        return 'Referral Milestones';
       case 'support':
         return 'Support Settings';
       case 'security':
@@ -277,9 +269,14 @@ export default function App() {
   };
 
   // Check if URL is for Referral Verification
+  const isClaimRewardRoute = window.location.pathname.startsWith('/claim-reward');
   const isReferralVerifyRoute =
     window.location.pathname.startsWith('/referral-verify') ||
-    new URLSearchParams(window.location.search).has('token');
+    (new URLSearchParams(window.location.search).has('token') && !isClaimRewardRoute);
+
+  if (isClaimRewardRoute) {
+    return <ClaimRewardView botUsername={config.botUsername || 'RoyShareWalletBot'} />;
+  }
 
   if (isReferralVerifyRoute) {
     return <ReferralVerifyView botUsername={config.botUsername || 'RoyShareWalletBot'} />;
@@ -394,6 +391,13 @@ export default function App() {
               updateConfig={updateConfig}
               onSave={handleSaveConfiguration}
               isSaving={isSaving}
+            />
+          )}
+
+          {activeTab === 'milestones' && (
+            <ReferralMilestonesView
+              config={config}
+              showToast={showToast}
             />
           )}
 

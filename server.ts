@@ -3,6 +3,7 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { processTelegramUpdate } from './src/server/botHandler';
 import { getReferralTokenInfo, processReferralVerification } from './src/server/referralVerification';
+import { getMilestoneTokenInfo, processMilestoneClaim } from './src/server/milestoneVerification';
 import { approveWithdrawal, rejectWithdrawal } from './src/server/withdrawalHandler';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from './src/services/firebase';
@@ -311,6 +312,57 @@ async function startServer() {
         rawSignals: rawSignals || browserSignals,
         clientIp,
         userAgent,
+      });
+
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, reason: 'SERVER_ERROR', message: err.message });
+    }
+  });
+
+  // MILESTONE REWARD CLAIM ENDPOINTS
+  app.get('/api/milestones/claim-token-info', async (req, res) => {
+    try {
+      const token = req.query.token as string;
+      const info = await getMilestoneTokenInfo(token);
+      if (info.success) {
+        return res.json(info);
+      } else {
+        return res.status(400).json(info);
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/milestones/claim', async (req, res) => {
+    try {
+      const {
+        token,
+        deviceFingerprint,
+        localStorageId,
+        locationPermissionStatus,
+        locationCoords,
+        timezone,
+        platform,
+      } = req.body;
+
+      const clientIp =
+        ((req.headers['x-forwarded-for'] as string) || '').split(',')[0].trim() ||
+        req.socket.remoteAddress ||
+        '127.0.0.1';
+      const userAgent = req.headers['user-agent'] || 'unknown';
+
+      const result = await processMilestoneClaim({
+        token,
+        deviceFingerprint,
+        localStorageId,
+        locationPermissionStatus,
+        locationCoords,
+        timezone,
+        platform,
+        userAgent,
+        clientIp,
       });
 
       return res.json(result);

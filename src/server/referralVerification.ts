@@ -400,6 +400,7 @@ export async function processReferralVerification(params: VerifyReferralParams) 
     }
 
     let updatedReferrerBalance = 0;
+    let newReferralCount = 0;
 
     if (!referrerSnap.empty) {
       const referrerDocRef = doc(db, 'users', referrerSnap.docs[0].id);
@@ -417,12 +418,13 @@ export async function processReferralVerification(params: VerifyReferralParams) 
         const currentEarned = Number(refData.totalReferralEarnings || 0);
 
         updatedReferrerBalance = currentBal + rewardAmount;
+        newReferralCount = currentSucc + 1;
 
         // Credit referrer
         transaction.update(referrerDocRef, {
           walletBalance: updatedReferrerBalance,
           totalReferrals: currentTotal + 1,
-          successfulReferrals: currentSucc + 1,
+          successfulReferrals: newReferralCount,
           totalReferralEarnings: currentEarned + rewardAmount,
         });
 
@@ -542,6 +544,11 @@ export async function processReferralVerification(params: VerifyReferralParams) 
         );
       }
 
+      // Trigger milestone checks asynchronously
+      checkAndTriggerReferralMilestones(referrerUid, newReferralCount).catch((err) => {
+        console.error('Error in checkAndTriggerReferralMilestones trigger:', err);
+      });
+
       return {
         success: true,
         message: 'Referral device verified successfully! Reward credited.',
@@ -560,5 +567,124 @@ export async function processReferralVerification(params: VerifyReferralParams) 
       reason: 'SERVER_ERROR',
       message: err.message || 'Internal error processing verification',
     };
+  }
+}
+
+/**
+ * Check if the referrer has hit any milestones with their new referral count.
+ * Generates a claim token and notifies them on Telegram with a button.
+ */
+export async function checkAndTriggerReferralMilestones(referrerUid: string, newCount: number) {
+  try {
+    const milestonesSnap = await getDocs(
+      query(collection(db, 'referralMilestones'), where('active', '==', true))
+    );
+    if (milestonesSnap.empty) return;
+
+    const milestones: any[] = [];
+    milestonesSnap.forEach((doc) => {
+      milestones.push({ id: doc.id, ...doc.data() });
+    });
+
+    // Find any milestone where the user qualifies
+    const eligibleMilestones = milestones.filter(
+      (m) => Number(m.requiredReferrals) <= newCount
+    );
+
+    if (eligibleMilestones.length === 0) return;
+
+    const botToken = await getBotToken();
+    if (!botToken) return;
+
+    // Fetch user details to get their telegram ID
+    const userQuery = query(collection(db, 'users'), where('uid', '==', String(referrerUid)));
+    const userSnap = await getDocs(userQuery);
+    if (userSnap.empty) return;
+    const userData = userSnap.docs[0].data();
+    const telegramId = String(userData.telegramId || '');
+    if (!telegramId) return;
+
+    for (const milestone of eligibleMilestones) {
+      // Check if user already claimed or has a token for this milestone
+      const claimQuery = query(
+        collection(db, 'milestoneClaimRecords'),
+        where('uid', '==', String(referrerUid)),
+        where('milestoneId', '==', milestone.id)
+      );
+      const claimSnap = await getDocs(claimQuery);
+
+      const tokenQuery = query(
+        collection(db, 'milestoneTokens'),
+        where('uid', '==', String(referrerUid)),
+        where('milestoneId', '==', milestone.id),
+        where('used', '==', false)
+      );
+      const tokenSnap = await getDocs(tokenQuery);
+
+      // If they already claimed or have a pending active token, skip
+      if (!claimSnap.empty || !tokenSnap.empty) {
+        continue;
+      }
+
+      // Generate a secure one-time token
+      const secureToken = 'claim_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      const createdAt = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes
+
+      // Save token
+      await addDoc(collection(db, 'milestoneTokens'), {
+        token: secureToken,
+        uid: String(referrerUid),
+        telegramId: telegramId,
+        milestoneId: milestone.id,
+        requiredReferrals: Number(milestone.requiredReferrals),
+        rewardAmount: Number(milestone.rewardAmount),
+        rewardType: String(milestone.rewardType),
+        createdAt,
+        expiresAt,
+        used: false,
+      });
+
+      // Send Telegram notification with an inline keyboard button!
+      const botConfigDoc = await getDoc(doc(db, 'settings', 'config'));
+      let baseDomain = 'https://roy-share-wallet.onrender.com';
+      if (botConfigDoc.exists()) {
+        const bd = botConfigDoc.data().appBaseUrl || botConfigDoc.data().appUrl;
+        if (bd) baseDomain = bd.replace(/\/$/, '');
+      }
+
+      const claimUrl = `${baseDomain}/claim-reward?token=${secureToken}`;
+
+      const inlineKeyboard = {
+        inline_keyboard: [
+          [
+            {
+              text: '🎁 Claim Reward',
+              url: claimUrl,
+            },
+          ],
+        ],
+      };
+
+      const messageText = `🎉 <b>Congratulations!</b>\n\n` +
+        `You have completed\n` +
+        `✅ <b>${milestone.requiredReferrals} Valid Referrals</b>\n\n` +
+        `<b>Reward:</b>\n` +
+        `💰 <b>₹${milestone.rewardAmount}</b> (${milestone.rewardType.toUpperCase()})\n\n` +
+        `Press the button below to verify your device and claim your reward.`;
+
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: telegramId,
+          text: messageText,
+          parse_mode: 'HTML',
+          reply_markup: inlineKeyboard,
+        }),
+      });
+    }
+  } catch (err) {
+    console.error('Error in checkAndTriggerReferralMilestones:', err);
   }
 }

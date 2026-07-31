@@ -18,6 +18,145 @@ interface UserSession {
 // In-memory session state store for onboarding users
 const userSessions: Map<string, UserSession> = new Map();
 
+interface TelegramChannelGroupRecord {
+  id: string;
+  type: 'channel' | 'group';
+  username: string;
+  chatId?: string;
+  displayName: string;
+  required: boolean;
+  active: boolean;
+  position: number;
+}
+
+/**
+ * Fetch all active Telegram channels and groups from Firestore collection 'telegramChannels'
+ */
+async function getActiveChannelsAndGroups(): Promise<TelegramChannelGroupRecord[]> {
+  try {
+    const colRef = collection(db, 'telegramChannels');
+    const q = query(colRef, where('active', '==', true));
+    const snap = await getDocs(q);
+
+    if (!snap.empty) {
+      const items: TelegramChannelGroupRecord[] = [];
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        items.push({
+          id: docSnap.id,
+          type: d.type === 'group' ? 'group' : 'channel',
+          username: d.username ? String(d.username).trim() : '',
+          chatId: d.chatId ? String(d.chatId).trim() : '',
+          displayName: d.displayName ? String(d.displayName).trim() : (d.type === 'group' ? 'Group' : 'Channel'),
+          required: d.required !== false,
+          active: d.active !== false,
+          position: typeof d.position === 'number' ? d.position : 0,
+        });
+      });
+      items.sort((a, b) => a.position - b.position);
+      if (items.length > 0) {
+        return items;
+      }
+    }
+  } catch (err) {
+    console.warn('Error fetching telegramChannels collection:', err);
+  }
+
+  // Fallback to settings/config if collection is empty
+  const adminConfig = await getAdminConfig();
+  if (adminConfig && (adminConfig.mainChannelUsername || adminConfig.mainGroupUsername)) {
+    const fallbackList: TelegramChannelGroupRecord[] = [];
+    if (adminConfig.mainChannelUsername) {
+      fallbackList.push({
+        id: 'legacy_channel',
+        type: 'channel',
+        username: adminConfig.mainChannelUsername,
+        chatId: adminConfig.mainChannelUsername,
+        displayName: 'Main Channel',
+        required: true,
+        active: true,
+        position: 0,
+      });
+    }
+    if (adminConfig.mainGroupUsername) {
+      fallbackList.push({
+        id: 'legacy_group',
+        type: 'group',
+        username: adminConfig.mainGroupUsername,
+        chatId: adminConfig.mainGroupUsername,
+        displayName: 'Main Group',
+        required: true,
+        active: true,
+        position: 1,
+      });
+    }
+    return fallbackList;
+  }
+
+  return [];
+}
+
+/**
+ * Build force join inline keyboard buttons for active channels & groups
+ */
+function buildForceJoinKeyboard(channels: TelegramChannelGroupRecord[]) {
+  const inline_keyboard: any[][] = [];
+
+  channels.forEach((item) => {
+    const cleanUser = item.username.replace(/^@/, '');
+    const icon = item.type === 'channel' ? '📢' : '👥';
+    const label = `${icon} Join ${item.displayName || (item.type === 'channel' ? 'Channel' : 'Group')}`;
+    const url = cleanUser ? `https://t.me/${cleanUser}` : `https://t.me/`;
+
+    inline_keyboard.push([{ text: label, url }]);
+  });
+
+  inline_keyboard.push([{ text: '✅ Verify Join', callback_data: 'check_membership' }]);
+
+  return { inline_keyboard };
+}
+
+/**
+ * Build force join html message text
+ */
+function buildForceJoinText(channels: TelegramChannelGroupRecord[], missingUsernames?: string[]) {
+  let text = '';
+
+  if (missingUsernames && missingUsernames.length > 0) {
+    text = `❌ <b>Verification Incomplete!</b>\n\nPlease join the required channels and groups below:\n\n`;
+  } else {
+    text = `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nTo continue using this bot, please join our official channels and groups:\n\n`;
+  }
+
+  const channelsList = channels.filter((c) => c.type === 'channel');
+  const groupsList = channels.filter((c) => c.type === 'group');
+
+  if (channelsList.length > 0) {
+    text += `<b>📢 Channels:</b>\n`;
+    channelsList.forEach((c) => {
+      const formatted = c.username.startsWith('@') ? c.username : `@${c.username}`;
+      const isMissing = missingUsernames?.includes(formatted) || missingUsernames?.includes(c.username);
+      const mark = isMissing ? '❌' : '•';
+      text += `${mark} ${c.displayName}: <b>${formatted}</b>\n`;
+    });
+    text += `\n`;
+  }
+
+  if (groupsList.length > 0) {
+    text += `<b>👥 Groups:</b>\n`;
+    groupsList.forEach((g) => {
+      const formatted = g.username.startsWith('@') ? g.username : `@${g.username}`;
+      const isMissing = missingUsernames?.includes(formatted) || missingUsernames?.includes(g.username);
+      const mark = isMissing ? '❌' : '•';
+      text += `${mark} ${g.displayName}: <b>${formatted}</b>\n`;
+    });
+    text += `\n`;
+  }
+
+  text += `After joining all required chats, click <b>✅ Verify Join</b> below.`;
+  return text;
+}
+
 /**
  * Fetch bot admin configuration dynamically from Firestore settings/config
  */
@@ -179,29 +318,47 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     if (data === 'check_membership') {
       const adminConfig = await getAdminConfig();
+      const autoVerificationEnabled = adminConfig?.autoVerificationEnabled !== false;
 
-      if (!adminConfig || !adminConfig.mainChannelUsername || !adminConfig.mainGroupUsername) {
+      const activeItems = await getActiveChannelsAndGroups();
+      const requiredItems = activeItems.filter((i) => i.required !== false && i.active !== false);
+
+      if (requiredItems.length === 0) {
+        const currentSess = userSessions.get(chatId);
+        userSessions.set(chatId, {
+          step: 'WAITING_NAME',
+          channelVerified: true,
+          groupVerified: true,
+          referrerUid: currentSess?.referrerUid,
+        });
+
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
-          text: 'Configuration Missing',
-          show_alert: true,
+          text: '✅ Membership Verified!',
+          show_alert: false,
+        });
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: '✅ <b>Membership Verified!</b>\n\nLet\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
+          parse_mode: 'HTML',
         });
         return;
       }
 
-      const channelUsername = adminConfig.mainChannelUsername.replace(/^@/, '');
-      const groupUsername = adminConfig.mainGroupUsername.replace(/^@/, '');
-      const autoVerificationEnabled = adminConfig.autoVerificationEnabled !== false;
-
-      let channelJoined = true;
-      let groupJoined = true;
+      const missingItems: TelegramChannelGroupRecord[] = [];
 
       if (autoVerificationEnabled) {
-        channelJoined = await checkChatMember(token, channelUsername, chatId);
-        groupJoined = await checkChatMember(token, groupUsername, chatId);
+        for (const item of requiredItems) {
+          const target = item.chatId || item.username;
+          const isMember = await checkChatMember(token, target, chatId);
+          if (!isMember) {
+            missingItems.push(item);
+          }
+        }
       }
 
-      if (channelJoined && groupJoined) {
+      if (missingItems.length === 0) {
         const currentSess = userSessions.get(chatId);
         userSessions.set(chatId, {
           step: 'WAITING_NAME',
@@ -222,14 +379,21 @@ export async function processTelegramUpdate(token: string, update: any) {
           parse_mode: 'HTML',
         });
       } else {
-        const missing = [];
-        if (!channelJoined) missing.push(`Channel (@${channelUsername})`);
-        if (!groupJoined) missing.push(`Group (@${groupUsername})`);
+        const missingUsernames = missingItems.map(
+          (i) => (i.username.startsWith('@') ? i.username : `@${i.username}`)
+        );
 
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
-          text: `❌ Verification Failed! You have not joined: ${missing.join(' and ')}`,
+          text: `❌ Verification Failed! Please join required chats.`,
           show_alert: true,
+        });
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `❌ <b>Please join:</b>\n\n${missingUsernames.join('\n\n')}\n\nbefore continuing.`,
+          parse_mode: 'HTML',
+          reply_markup: buildForceJoinKeyboard(activeItems),
         });
       }
       return;
@@ -594,19 +758,7 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     // Load dynamic configuration from Firestore settings/config
     const adminConfig = await getAdminConfig();
-
-    if (!adminConfig || !adminConfig.mainChannelUsername || !adminConfig.mainGroupUsername) {
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: 'Configuration Missing',
-        parse_mode: 'HTML',
-      });
-      return;
-    }
-
-    const channelUsername = adminConfig.mainChannelUsername.replace(/^@/, '');
-    const groupUsername = adminConfig.mainGroupUsername.replace(/^@/, '');
-    const forceJoinEnabled = adminConfig.forceJoinEnabled !== false;
+    const forceJoinEnabled = adminConfig?.forceJoinEnabled !== false;
 
     const existingSess = userSessions.get(chatId);
     const finalReferrerUid = referrerUid || existingSess?.referrerUid;
@@ -628,27 +780,31 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
+    const activeItems = await getActiveChannelsAndGroups();
+
+    if (activeItems.length === 0) {
+      userSessions.set(chatId, {
+        step: 'WAITING_NAME',
+        channelVerified: true,
+        groupVerified: true,
+        referrerUid: finalReferrerUid,
+      });
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: '👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
     userSessions.set(chatId, { step: 'FORCE_JOIN', referrerUid: finalReferrerUid });
 
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
-      text: `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\n` +
-        `To continue using this bot, please join our official Telegram Channel and Group:\n\n` +
-        `1️⃣ Join Channel: <b>@${channelUsername}</b>\n` +
-        `2️⃣ Join Group: <b>@${groupUsername}</b>\n\n` +
-        `After joining both, click the <b>Verify Join</b> button below.`,
+      text: buildForceJoinText(activeItems),
       parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '📢 Join Channel', url: `https://t.me/${channelUsername}` },
-            { text: '👥 Join Group', url: `https://t.me/${groupUsername}` },
-          ],
-          [
-            { text: '✅ Verify Join', callback_data: 'check_membership' },
-          ],
-        ],
-      },
+      reply_markup: buildForceJoinKeyboard(activeItems),
     });
     return;
   }
@@ -942,37 +1098,24 @@ export async function processTelegramUpdate(token: string, update: any) {
 
   // If no session exists and user is not registered, start onboarding
   if (!session && !existingUser) {
-    const adminConfig = await getAdminConfig();
+    const activeItems = await getActiveChannelsAndGroups();
+    userSessions.set(chatId, { step: 'FORCE_JOIN' });
 
-    if (!adminConfig || !adminConfig.mainChannelUsername || !adminConfig.mainGroupUsername) {
+    if (activeItems.length === 0) {
+      userSessions.set(chatId, { step: 'WAITING_NAME' });
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: 'Configuration Missing',
+        text: '👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
         parse_mode: 'HTML',
       });
       return;
     }
 
-    const channelUsername = adminConfig.mainChannelUsername.replace(/^@/, '');
-    const groupUsername = adminConfig.mainGroupUsername.replace(/^@/, '');
-
-    userSessions.set(chatId, { step: 'FORCE_JOIN' });
-
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
-      text: `👋 Please complete onboarding first!\n\n1️⃣ Join Channel: @${channelUsername}\n2️⃣ Join Group: @${groupUsername}`,
+      text: buildForceJoinText(activeItems),
       parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '📢 Join Channel', url: `https://t.me/${channelUsername}` },
-            { text: '👥 Join Group', url: `https://t.me/${groupUsername}` },
-          ],
-          [
-            { text: '✅ Verify Join', callback_data: 'check_membership' },
-          ],
-        ],
-      },
+      reply_markup: buildForceJoinKeyboard(activeItems),
     });
     return;
   }
@@ -981,35 +1124,13 @@ export async function processTelegramUpdate(token: string, update: any) {
 
   // STEP 1: FORCE JOIN CHECK
   if (session.step === 'FORCE_JOIN') {
-    const adminConfig = await getAdminConfig();
-
-    if (!adminConfig || !adminConfig.mainChannelUsername || !adminConfig.mainGroupUsername) {
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: 'Configuration Missing',
-        parse_mode: 'HTML',
-      });
-      return;
-    }
-
-    const channelUsername = adminConfig.mainChannelUsername.replace(/^@/, '');
-    const groupUsername = adminConfig.mainGroupUsername.replace(/^@/, '');
+    const activeItems = await getActiveChannelsAndGroups();
 
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
-      text: `⚠️ Please click the <b>Verify Join</b> button after joining @${channelUsername} and @${groupUsername}.`,
+      text: buildForceJoinText(activeItems),
       parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '📢 Join Channel', url: `https://t.me/${channelUsername}` },
-            { text: '👥 Join Group', url: `https://t.me/${groupUsername}` },
-          ],
-          [
-            { text: '✅ Verify Join', callback_data: 'check_membership' },
-          ],
-        ],
-      },
+      reply_markup: buildForceJoinKeyboard(activeItems),
     });
     return;
   }

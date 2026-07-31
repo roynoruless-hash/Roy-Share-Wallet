@@ -1,3 +1,17 @@
+export interface TelegramChannelItem {
+  id: string;
+  type: 'channel' | 'group';
+  username: string;
+  chatId: string;
+  displayName: string;
+  required: boolean;
+  active: boolean;
+  position: number;
+  createdAt: string;
+  status?: 'verified' | 'unverified' | 'checking' | 'error';
+  verifyError?: string;
+}
+
 export interface AdminConfig {
   // Telegram Configuration
   botToken: string;
@@ -84,6 +98,7 @@ export type TabType =
   | 'wallet'
   | 'withdrawal'
   | 'referral'
+  | 'milestones'
   | 'support'
   | 'security'
   | 'logs'
@@ -176,5 +191,55 @@ export interface WithdrawalRecord {
   rejectReason?: string;
   createdAt: string;
   processedAt?: string;
+}
+
+export interface ReferralMilestone {
+  id: string;
+  requiredReferrals: number;
+  rewardAmount: number;
+  rewardType: 'wallet' | 'coins' | 'bonus';
+  active: boolean;
+  position: number;
+  createdAt: string;
+}
+
+export interface MilestoneToken {
+  id?: string;
+  token: string;
+  uid: string;
+  telegramId: string;
+  milestoneId: string;
+  requiredReferrals: number;
+  rewardAmount: number;
+  rewardType: 'wallet' | 'coins' | 'bonus' | string;
+  createdAt: string;
+  expiresAt: string;
+  used: boolean;
+  usedAt?: string;
+}
+
+export interface MilestoneClaimRecord {
+  id: string;
+  uid: string;
+  telegramId: string;
+  userName?: string;
+  telegramUsername?: string;
+  milestoneId: string;
+  requiredReferrals: number;
+  rewardAmount: number;
+  rewardType: string;
+  claimToken: string;
+  status: 'approved' | 'rejected' | 'pending';
+  rejectReason?: string;
+  ip: string;
+  deviceFingerprint: string;
+  deviceHash: string;
+  localStorageId: string;
+  userAgent: string;
+  timezone: string;
+  platform: string;
+  location?: { latitude: number; longitude: number } | null;
+  claimTime: string;
+  verifiedAt?: string;
 }
 

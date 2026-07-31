@@ -17,6 +17,7 @@ import {
   Bot,
   Zap,
   LogOut,
+  Award,
 } from 'lucide-react';
 import { TabType } from '../types';
 
@@ -56,9 +57,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'channel' as TabType,
-      label: 'Channel & Group',
+      label: 'Channels & Groups',
       icon: Users2,
-      badge: undefined,
+      badge: 'v2.0',
     },
     {
       id: 'wallet' as TabType,
@@ -77,6 +78,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Referral Settings',
       icon: Share2,
       badge: undefined,
+    },
+    {
+      id: 'milestones' as TabType,
+      label: 'Referral Milestones',
+      icon: Award,
+      badge: 'New',
     },
     {
       id: 'support' as TabType,
