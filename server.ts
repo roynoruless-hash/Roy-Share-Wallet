@@ -11,10 +11,14 @@ import { db } from './src/services/firebase';
 import crypto from 'crypto';
 import { encrypt, decrypt } from './src/utils/encryption';
 import { execSync } from 'child_process';
+import { startContestScheduler } from './src/services/contestScheduler';
 
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+
+  // Start background contest scheduler
+  startContestScheduler();
 
   // Print startup version & build information
   let gitCommit = 'dev-main';

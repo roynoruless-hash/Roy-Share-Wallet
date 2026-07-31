@@ -55,8 +55,9 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     title: '',
     description: '',
     imageUrl: '',
-    startDate: '',
-    endDate: '',
+    registrationStartDate: '',
+    registrationEndDate: '',
+    votingEndDate: '',
     rules: '',
     maxVotesPerUser: 1,
     voteIntervalHours: 0,
@@ -127,8 +128,9 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
         title: contestForm.title,
         description: contestForm.description,
         imageUrl: contestForm.imageUrl,
-        startDate: contestForm.startDate,
-        endDate: contestForm.endDate,
+        registrationStartDate: contestForm.registrationStartDate,
+        registrationEndDate: contestForm.registrationEndDate,
+        votingEndDate: contestForm.votingEndDate,
         rules: contestForm.rules,
         maxVotesPerUser: contestForm.maxVotesPerUser,
         voteIntervalHours: contestForm.voteIntervalHours,
@@ -250,8 +252,9 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       title: contest.title,
       description: contest.description,
       imageUrl: contest.imageUrl || '',
-      startDate: contest.startDate,
-      endDate: contest.endDate,
+      registrationStartDate: contest.registrationStartDate,
+      registrationEndDate: contest.registrationEndDate,
+      votingEndDate: contest.votingEndDate,
       rules: contest.rules || '',
       maxVotesPerUser: contest.maxVotesPerUser || 1,
       voteIntervalHours: contest.voteIntervalHours || 0,
@@ -347,8 +350,9 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                 title: '',
                 description: '',
                 imageUrl: '',
-                startDate: new Date().toISOString().split('T')[0],
-                endDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+                registrationStartDate: new Date().toISOString().split('T')[0],
+                registrationEndDate: new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0] + 'T23:59',
+                votingEndDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0] + 'T23:59',
                 rules: '',
                 maxVotesPerUser: 1,
                 voteIntervalHours: 0,
@@ -476,28 +480,42 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                   />
                 </div>
 
-                {/* Start Date */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Start Date</label>
-                  <input
-                    type="date"
-                    required
-                    value={contestForm.startDate}
-                    onChange={e => setContestForm(prev => ({ ...prev, startDate: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
+                {/* Scheduling Parameters */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Registration Start Date</label>
+                      <input
+                        type="date"
+                        required
+                        value={contestForm.registrationStartDate}
+                        onChange={e => setContestForm(prev => ({ ...prev, registrationStartDate: e.target.value }))}
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
 
-                {/* End Date */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">End Date (Inclusive)</label>
-                  <input
-                    type="date"
-                    required
-                    value={contestForm.endDate}
-                    onChange={e => setContestForm(prev => ({ ...prev, endDate: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Registration End Date & Time</label>
+                      <input
+                        type="datetime-local"
+                        required
+                        value={contestForm.registrationEndDate}
+                        onChange={e => setContestForm(prev => ({ ...prev, registrationEndDate: e.target.value }))}
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Voting End Date & Time</label>
+                      <input
+                        type="datetime-local"
+                        required
+                        value={contestForm.votingEndDate}
+                        onChange={e => setContestForm(prev => ({ ...prev, votingEndDate: e.target.value }))}
+                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {/* Rules */}
@@ -686,7 +704,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                         <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-[10px] text-slate-500 font-medium pt-1">
                           <span className="flex items-center gap-1 text-slate-400">
                             <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                            {c.startDate} to {c.endDate}
+                            Reg: {c.registrationStartDate} to {c.registrationEndDate?.replace('T', ' ')} | Vote Ends: {c.votingEndDate?.replace('T', ' ')}
                           </span>
                           <span className="flex items-center gap-1 text-sky-400 font-bold">
                             <Coins className="w-3.5 h-3.5 text-sky-500" />

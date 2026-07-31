@@ -31,8 +31,11 @@ export async function getContests(): Promise<Contest[]> {
         title: data.title || '',
         description: data.description || '',
         imageUrl: data.imageUrl || '',
-        startDate: data.startDate || '',
-        endDate: data.endDate || '',
+        registrationStartDate: data.registrationStartDate || '',
+        registrationEndDate: data.registrationEndDate || '',
+        votingEndDate: data.votingEndDate || '',
+        registrationClosedProcessed: data.registrationClosedProcessed || false,
+        votingEndedProcessed: data.votingEndedProcessed || false,
         status: data.status || 'active',
         createdAt: data.createdAt || new Date().toISOString(),
         rules: data.rules || '',
@@ -61,8 +64,11 @@ export async function saveContest(contest: Partial<Contest> & { id?: string }): 
     title: contest.title || '',
     description: contest.description || '',
     imageUrl: contest.imageUrl || '',
-    startDate: contest.startDate || new Date().toISOString().split('T')[0],
-    endDate: contest.endDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+    registrationStartDate: contest.registrationStartDate || new Date().toISOString().split('T')[0],
+    registrationEndDate: contest.registrationEndDate || new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0] + 'T23:59',
+    votingEndDate: contest.votingEndDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0] + 'T23:59',
+    registrationClosedProcessed: contest.registrationClosedProcessed !== undefined ? contest.registrationClosedProcessed : false,
+    votingEndedProcessed: contest.votingEndedProcessed !== undefined ? contest.votingEndedProcessed : false,
     status: contest.status || 'active',
     createdAt: contest.createdAt || new Date().toISOString(),
     rules: contest.rules || '',
@@ -226,14 +232,14 @@ export async function submitVote(params: {
     }
 
     const now = new Date();
-    const startDate = new Date(contest.startDate);
-    const endDate = new Date(contest.endDate + 'T23:59:59'); // end date inclusive of entire day
+    const regEndDate = new Date(contest.registrationEndDate);
+    const voteEndDate = new Date(contest.votingEndDate);
 
-    if (now < startDate) {
-      return { success: false, error: 'This contest has not started yet.' };
+    if (now < regEndDate) {
+      return { success: false, error: 'Voting has not started yet. Registration is still open.' };
     }
-    if (now > endDate) {
-      return { success: false, error: 'This contest has already ended.' };
+    if (now > voteEndDate) {
+      return { success: false, error: 'Voting has already ended for this contest.' };
     }
 
     // Read the contestant

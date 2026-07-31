@@ -308,8 +308,11 @@ export interface Contest {
   title: string;
   description: string;
   imageUrl?: string;
-  startDate: string;
-  endDate: string;
+  registrationStartDate: string;
+  registrationEndDate: string;
+  votingEndDate: string;
+  registrationClosedProcessed?: boolean;
+  votingEndedProcessed?: boolean;
   status: 'upcoming' | 'active' | 'completed' | 'paused';
   createdAt: string;
   rules?: string;

@@ -21,6 +21,7 @@ interface UserSession {
   lastVerificationTime?: string;
   verificationVersion?: number;
   lastJoinMessageSentTime?: number;
+  pendingVote?: { contestId: string; contestantId: string };
 }
 
 // In-memory session state store for onboarding users
@@ -813,7 +814,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       activeContests.forEach(c => {
         listText += `🔹 <b>${c.title}</b>\n`;
         if (c.description) listText += `${c.description}\n`;
-        listText += `📅 <b>Ends:</b> ${c.endDate}\n`;
+        listText += `📅 <b>Ends:</b> ${c.votingEndDate?.replace('T', ' ')}\n`;
         if (c.voterRewardAmount && c.voterRewardAmount > 0) {
           listText += `💰 <b>Voter Bonus:</b> ₹${c.voterRewardAmount} per vote!\n`;
         }
@@ -1152,6 +1153,68 @@ export async function processTelegramUpdate(token: string, update: any) {
 
   // A. COMMAND: /start
   if (text === '/start' || text.startsWith('/start')) {
+    let startParam = '';
+    const parts = text.split(/\s+/);
+    if (parts.length > 1 && parts[1]) {
+      startParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
+    } else {
+      const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
+      if (match && match[1] && match[1].toLowerCase() !== '/start') {
+        startParam = match[1].trim();
+      }
+    }
+
+    if (startParam.startsWith('vote_')) {
+      const voteParts = startParam.split('_');
+      const contestId = voteParts[1];
+      const contestantId = voteParts[2];
+
+      if (existingUser) {
+        // Automatically submit vote for existing user!
+        const voterName = (existingUser.firstName || 'User') + (existingUser.username ? ' (@' + existingUser.username + ')' : '');
+        const voterUsername = existingUser.username ? '@' + existingUser.username : '';
+
+        const voteRes = await submitVote({
+          contestId,
+          contestantId,
+          voterTelegramId: chatId,
+          voterName,
+          voterUsername,
+          botToken: token
+        });
+
+        if (voteRes.success) {
+          const rewardText = voteRes.rewardEarned && voteRes.rewardEarned > 0 
+            ? `\n💰 <b>You earned a ₹${voteRes.rewardEarned} wallet bonus!</b>` 
+            : '';
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `✅ <b>Vote Successfully Cast!</b>\n\nYour vote has been recorded.${rewardText}\n\nThank you for participating!`,
+            parse_mode: 'HTML'
+          });
+        } else {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `❌ <b>Voting Failed</b>\n\nCould not record your vote: <b>${voteRes.error || 'Unknown error'}</b>`,
+            parse_mode: 'HTML'
+          });
+        }
+        return;
+      } else {
+        // For unregistered users: Save the vote intent in their userSession so we can auto-trigger it after they finish onboarding!
+        const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
+        session.pendingVote = { contestId, contestantId };
+        userSessions.set(chatId, session);
+        
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `👋 <b>Welcome to Roy Share Wallet!</b>\n\nTo complete your vote, please complete a quick mobile number verification.\n\nPress /start to begin onboarding!`,
+          parse_mode: 'HTML'
+        });
+        return;
+      }
+    }
+
     if (existingUser) {
       // Requirement 1: If user exists in DB -> Open Main Menu
       userSessions.delete(chatId);
@@ -1175,16 +1238,7 @@ export async function processTelegramUpdate(token: string, update: any) {
     }
 
     // Parse referral parameter from command (e.g. /start 149595 or /start=149595)
-    let refParam = '';
-    const parts = text.split(/\s+/);
-    if (parts.length > 1 && parts[1]) {
-      refParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
-    } else {
-      const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
-      if (match && match[1] && match[1].toLowerCase() !== '/start') {
-        refParam = match[1].trim();
-      }
-    }
+    let refParam = startParam;
 
     let referrerUid: string | undefined = undefined;
     if (refParam) {
@@ -1466,7 +1520,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       activeContests.forEach(c => {
         listText += `🔹 <b>${c.title}</b>\n`;
         if (c.description) listText += `${c.description}\n`;
-        listText += `📅 <b>Ends:</b> ${c.endDate}\n`;
+        listText += `📅 <b>Ends:</b> ${c.votingEndDate?.replace('T', ' ')}\n`;
         if (c.voterRewardAmount && c.voterRewardAmount > 0) {
           listText += `💰 <b>Voter Bonus:</b> ₹${c.voterRewardAmount} per vote!\n`;
         }
@@ -1816,6 +1870,8 @@ export async function processTelegramUpdate(token: string, update: any) {
       }
     }
 
+    const pendingVote = session.pendingVote;
+
     // Clear session
     userSessions.delete(chatId);
 
@@ -1831,6 +1887,37 @@ export async function processTelegramUpdate(token: string, update: any) {
         remove_keyboard: true,
       },
     });
+
+    if (pendingVote) {
+      const voterName = (newUserData.firstName || 'User') + (newUserData.username ? ' (@' + newUserData.username + ')' : '');
+      const voterUsername = newUserData.username || '';
+
+      const voteRes = await submitVote({
+        contestId: pendingVote.contestId,
+        contestantId: pendingVote.contestantId,
+        voterTelegramId: chatId,
+        voterName,
+        voterUsername,
+        botToken: token
+      });
+
+      if (voteRes.success) {
+        const rewardText = voteRes.rewardEarned && voteRes.rewardEarned > 0 
+          ? `\n💰 <b>You earned a ₹${voteRes.rewardEarned} wallet bonus!</b>` 
+          : '';
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `✅ <b>Vote Cast Automatically!</b>\n\nYour vote has been recorded.${rewardText}\n\nThank you for participating!`,
+          parse_mode: 'HTML'
+        });
+      } else {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `⚠️ <b>Could not cast vote automatically:</b>\n${voteRes.error || 'Unknown error'}`,
+          parse_mode: 'HTML'
+        });
+      }
+    }
 
     // SHOW MAIN MENU
     await sendTelegramApi(token, 'sendMessage', {
