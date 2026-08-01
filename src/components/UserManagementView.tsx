@@ -146,7 +146,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(sessionToken ? { 'x-admin-session-token': sessionToken } : {})
+            'Authorization': sessionToken ? `Bearer ${sessionToken}` : '',
+            'x-admin-session-token': sessionToken,
           },
           body: JSON.stringify({
             targetUid: selectedUser.uid,
@@ -158,6 +159,12 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
           }),
         });
         res = await apiRes.json();
+
+        if (apiRes.status === 401 || apiRes.status === 403) {
+          showToast(res.error || res.reason || 'Session expired or invalid. Redirecting to login...', 'error');
+          window.dispatchEvent(new CustomEvent('admin-session-expired'));
+          return;
+        }
       } catch (e) {
         console.warn('API call failed, executing direct Firestore fallback:', e);
       }

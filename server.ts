@@ -979,25 +979,84 @@ async function startServer() {
 
   // Middleware to require a valid admin session
   async function requireAdminSession(req: express.Request, res: express.Response, next: express.NextFunction) {
-    const token = req.headers['x-admin-session-token'] as string;
+    const rawAuth = req.headers['authorization'];
+    const authHeaderStr = typeof rawAuth === 'string' ? rawAuth : Array.isArray(rawAuth) ? (rawAuth as string[]).join(', ') : '';
+    const tokenHeader = req.headers['x-admin-session-token'];
+    const sessionTokenFromXHeader = typeof tokenHeader === 'string' ? tokenHeader : Array.isArray(tokenHeader) ? (tokenHeader as string[])[0] : '';
+
+    let token = sessionTokenFromXHeader;
+    if (!token && authHeaderStr) {
+      if (authHeaderStr.toLowerCase().startsWith('bearer ')) {
+        token = authHeaderStr.substring(7).trim();
+      } else {
+        token = authHeaderStr.trim();
+      }
+    }
+
+    console.log(`[AdminAuthLog] Path: ${req.method} ${req.path}`);
+    console.log(`[AdminAuthLog] Received Authorization header: "${authHeaderStr || 'N/A'}"`);
+    console.log(`[AdminAuthLog] Received x-admin-session-token header: "${sessionTokenFromXHeader || 'N/A'}"`);
+    console.log(`[AdminAuthLog] Extracted Session Token: "${token ? (token.substring(0, 8) + '...') : 'NONE'}"`);
+
     if (!token) {
-      return res.status(401).json({ success: false, error: 'Unauthorized: Session token missing.' });
+      const reason = 'Session token missing in request headers (neither Authorization nor x-admin-session-token provided).';
+      console.log(`[AdminAuthLog] Validation Result: FAIL | Reason: ${reason} | Admin UID: N/A | Admin Role: N/A`);
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized: Admin session token missing.',
+        reason
+      });
     }
 
     try {
       const sessionDoc = await getDoc(doc(db, 'adminSessions', 'active_session'));
       if (!sessionDoc.exists()) {
-        return res.status(401).json({ success: false, error: 'Unauthorized: Session invalid.' });
+        const reason = 'No active admin session found in database (active_session document missing).';
+        console.log(`[AdminAuthLog] Validation Result: FAIL | Reason: ${reason} | Admin UID: N/A | Admin Role: N/A`);
+        return res.status(401).json({
+          success: false,
+          error: 'Unauthorized: Admin session invalid.',
+          reason
+        });
       }
 
       const data = sessionDoc.data();
-      if (data.sessionToken !== token) {
-        return res.status(401).json({ success: false, error: 'Unauthorized: Session invalid.' });
+      const storedToken = data.sessionToken;
+      const adminUid = data.adminUid || data.adminId || 'super_admin_01';
+      const adminRole = data.adminRole || 'Super Admin';
+
+      if (storedToken !== token) {
+        const reason = 'Session token mismatch. Provided token does not match active session in database.';
+        console.log(`[AdminAuthLog] Validation Result: FAIL | Reason: ${reason} | Admin UID: ${adminUid} | Admin Role: ${adminRole}`);
+        return res.status(401).json({
+          success: false,
+          error: 'Unauthorized: Session token mismatch or invalid.',
+          reason,
+          adminUid,
+          adminRole
+        });
       }
 
       if (Date.now() > data.expiresAt) {
-        return res.status(401).json({ success: false, error: 'Unauthorized: Session expired.' });
+        const reason = `Session expired at ${new Date(data.expiresAt).toISOString()}.`;
+        console.log(`[AdminAuthLog] Validation Result: FAIL | Reason: ${reason} | Admin UID: ${adminUid} | Admin Role: ${adminRole}`);
+        return res.status(401).json({
+          success: false,
+          error: 'Unauthorized: Session expired.',
+          reason,
+          adminUid,
+          adminRole
+        });
       }
+
+      console.log(`[AdminAuthLog] Validation Result: SUCCESS | Admin UID: ${adminUid} | Admin Role: ${adminRole}`);
+
+      (req as any).adminSession = {
+        token,
+        adminUid,
+        adminRole,
+        data
+      };
 
       // Update lastActive and extend expiresAt (3 hours sliding window)
       const newExpiresAt = Date.now() + 3 * 3600 * 1000;
@@ -1009,7 +1068,13 @@ async function startServer() {
 
       next();
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: 'Server error validating session: ' + err.message });
+      const reason = `Server error during session validation: ${err.message}`;
+      console.error(`[AdminAuthLog] Validation Result: ERROR | Reason: ${reason}`);
+      return res.status(500).json({
+        success: false,
+        error: 'Server error validating session.',
+        reason
+      });
     }
   }
 
@@ -1288,20 +1353,21 @@ async function startServer() {
   // Execute Delete User Account (Super Admin Protected - No OTP required)
   app.post('/api/admin/delete-user-account', requireAdminSession, async (req, res) => {
     try {
-      const { targetUid, targetDocId, targetTelegramId, targetMobile, reason, adminRole } = req.body;
+      const sessionInfo = (req as any).adminSession || {};
+      const adminUid = sessionInfo.adminUid || 'super_admin_01';
+      const adminRole = sessionInfo.adminRole || 'Super Admin';
 
-      // Ensure Super Admin status
-      const sessionDoc = await getDoc(doc(db, 'adminSessions', 'active_session'));
-      if (!sessionDoc.exists()) {
-        return res.status(403).json({ success: false, error: 'Access Denied' });
-      }
+      console.log(`[DeleteUserAccountLog] Request received. Admin UID: ${adminUid}, Admin Role: ${adminRole}`);
 
-      if (adminRole && adminRole !== 'Super Admin' && adminRole !== 'super_admin') {
-        return res.status(403).json({ success: false, error: 'Access Denied' });
-      }
+      const { targetUid, targetDocId, targetTelegramId, targetMobile, reason } = req.body;
 
       if (!targetUid && !targetDocId) {
-        return res.status(400).json({ success: false, error: 'Target User UID or Document ID is required.' });
+        console.log(`[DeleteUserAccountLog] Bad Request: Missing targetUid and targetDocId`);
+        return res.status(400).json({
+          success: false,
+          error: 'Target User UID or Document ID is required.',
+          reason: 'Missing targetUid and targetDocId'
+        });
       }
 
       // Helper to batch query & delete
