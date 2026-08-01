@@ -313,18 +313,16 @@ export async function submitVote(params: {
     }
 
     const contest = contestSnap.data() as Contest;
-    if (contest.status !== 'active') {
-      return { success: false, error: '🔒 This voting contest has ended or is currently inactive.' };
-    }
 
-    const now = new Date();
-    const voteEndDate = contest.votingEndDate ? new Date(contest.votingEndDate) : new Date(0);
-
-    if (contest.status === 'completed' || contest.votingEndedProcessed || (contest.votingEndDate && now > voteEndDate)) {
+    if (contest.status === 'completed' || contest.votingEndedProcessed) {
       return { success: false, error: '🔒 This voting contest has ended. All voting links are now disabled.' };
     }
 
-    if (!contest.votingStarted && !contest.registrationClosedProcessed && contest.status !== 'active') {
+    if (contest.status === 'paused') {
+      return { success: false, error: '⏸ This contest is currently paused by the administrator.' };
+    }
+
+    if (!contest.votingStarted) {
       return { success: false, error: '⏳ Voting for this contest has not been started yet by the administrator.' };
     }
 
@@ -348,6 +346,8 @@ export async function submitVote(params: {
     const userVotesSnap = await getDocs(userVotesQuery);
     const previousVotes: VoteLog[] = [];
     userVotesSnap.forEach((d) => previousVotes.push(d.data() as VoteLog));
+
+    const now = new Date();
 
     // Check duplicate vote for same contestant (Requirement 8: One Telegram account = One vote per contestant)
     const votedForThisContestant = previousVotes.some((v) => v.contestantId === contestantId);

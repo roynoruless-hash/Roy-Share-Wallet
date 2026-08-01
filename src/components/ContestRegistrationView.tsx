@@ -348,10 +348,10 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
             <div className="space-y-1">
               <div className="flex items-center gap-1.5 text-slate-450">
                 <Calendar className="w-3.5 h-3.5 text-sky-500" />
-                <span className="text-[9px] font-bold uppercase tracking-wider">Registration Closes</span>
+                <span className="text-[9px] font-bold uppercase tracking-wider">Registration Status</span>
               </div>
-              <p className="text-xs font-semibold text-slate-200">
-                {regEndDate ? regEndDate.toLocaleDateString() : 'N/A'} at {regEndDate ? regEndDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A'}
+              <p className="text-xs font-semibold text-emerald-400">
+                Open until Admin starts voting
               </p>
             </div>
 

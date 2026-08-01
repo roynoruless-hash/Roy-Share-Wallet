@@ -179,7 +179,7 @@ async function sendContestantVoteCard(token: string, chatId: string, contestId: 
     return;
   }
 
-  if (contest.status === 'completed' || contest.votingEndedProcessed || (contest.votingEndDate && now > new Date(contest.votingEndDate))) {
+  if (contest.status === 'completed' || contest.votingEndedProcessed) {
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
       text: '🔒 <b>Voting Ended</b>\n\nVoting for this contest has concluded and voting links are now disabled.',
@@ -188,7 +188,7 @@ async function sendContestantVoteCard(token: string, chatId: string, contestId: 
     return;
   }
 
-  if (!contest.votingStarted && !contest.registrationClosedProcessed && contest.status !== 'active') {
+  if (!contest.votingStarted) {
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
       text: '⏳ <b>Voting Not Started</b>\n\nVoting for this contest has not been started yet by the administrator.',
@@ -925,7 +925,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       activeContests.forEach(c => {
         listText += `🔹 <b>${c.title}</b>\n`;
         if (c.description) listText += `${c.description}\n`;
-        listText += `📅 <b>Ends:</b> ${c.votingEndDate?.replace('T', ' ')}\n`;
+        listText += `📌 <b>Status:</b> ${c.votingStarted ? 'Voting Live 🔵' : 'Registration Open 🟢'}\n`;
         if (c.voterRewardAmount && c.voterRewardAmount > 0) {
           listText += `💰 <b>Voter Bonus:</b> ₹${c.voterRewardAmount} per vote!\n`;
         }
@@ -963,6 +963,40 @@ export async function processTelegramUpdate(token: string, update: any) {
           chat_id: chatId,
           text: '❌ <b>Contest not found</b>',
           parse_mode: 'HTML'
+        });
+        return;
+      }
+
+      if (contest.status === 'completed' || contest.votingEndedProcessed) {
+        const contestants = await getContestants(contestId);
+        const sorted = contestants.sort((a, b) => (b.votesCount || 0) - (a.votesCount || 0));
+        const totalVotes = sorted.reduce((acc, curr) => acc + (curr.votesCount || 0), 0);
+
+        let viewText = `🏆 <b>${contest.title} - FINAL RESULTS</b> 🏆\n\n`;
+        if (contest.description) viewText += `${contest.description}\n\n`;
+        viewText += `📊 <b>Total Votes Cast:</b> ${totalVotes}\n\n`;
+
+        if (sorted.length === 0) {
+          viewText += `No participants recorded.`;
+        } else {
+          viewText += `<b>Final Winner Standings:</b>\n\n`;
+          sorted.forEach((cn, idx) => {
+            const medal = idx === 0 ? '🏆 WINNER:' : idx === 1 ? '🥈 RUNNER-UP:' : idx === 2 ? '🥉 THIRD PLACE:' : `#${idx + 1}`;
+            viewText += `${medal} <b>${cn.name}</b> ${cn.username ? `(${cn.username})` : ''} - <b>${cn.votesCount || 0} votes</b>\n`;
+          });
+        }
+
+        const inline_keyboard = [[{
+          text: '⬅ Back to Contests',
+          callback_data: 'vote_list_contests'
+        }]];
+
+        await sendTelegramApi(token, 'editMessageText', {
+          chat_id: chatId,
+          message_id: cb.message?.message_id,
+          text: viewText,
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard }
         });
         return;
       }
@@ -1300,7 +1334,7 @@ export async function processTelegramUpdate(token: string, update: any) {
         return;
       }
 
-      if (contest.status === 'completed' || contest.votingEndedProcessed || (contest.votingEndDate && now > new Date(contest.votingEndDate))) {
+      if (contest.status === 'completed' || contest.votingEndedProcessed) {
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
           text: '🔒 <b>Voting Ended</b>\n\nVoting for this contest has concluded and voting links are now disabled.',
@@ -1309,7 +1343,7 @@ export async function processTelegramUpdate(token: string, update: any) {
         return;
       }
 
-      if (!contest.votingStarted && !contest.registrationClosedProcessed && contest.status !== 'active') {
+      if (!contest.votingStarted) {
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
           text: '⏳ <b>Voting Not Started</b>\n\nVoting for this contest has not been started yet by the administrator.',
@@ -1640,7 +1674,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       activeContests.forEach(c => {
         listText += `🔹 <b>${c.title}</b>\n`;
         if (c.description) listText += `${c.description}\n`;
-        listText += `📅 <b>Ends:</b> ${c.votingEndDate?.replace('T', ' ')}\n`;
+        listText += `📌 <b>Status:</b> ${c.votingStarted ? 'Voting Live 🔵' : 'Registration Open 🟢'}\n`;
         if (c.voterRewardAmount && c.voterRewardAmount > 0) {
           listText += `💰 <b>Voter Bonus:</b> ₹${c.voterRewardAmount} per vote!\n`;
         }

@@ -30,7 +30,8 @@ import {
   CheckCircle2,
   Rocket,
   CheckCircle,
-  XCircle
+  XCircle,
+  Trophy
 } from 'lucide-react';
 import { Contest, Contestant, VoteLog, AdminConfig, ContestLog } from '../types';
 import {
@@ -57,8 +58,6 @@ export function getContestPhase(contest: Contest) {
   const regStart = contest.registrationStartDate
     ? new Date(contest.registrationStartDate + (contest.registrationStartDate.includes('T') ? '' : 'T00:00:00'))
     : new Date(0);
-  const regEnd = contest.registrationEndDate ? new Date(contest.registrationEndDate) : new Date(0);
-  const voteEnd = contest.votingEndDate ? new Date(contest.votingEndDate) : new Date(0);
 
   if (contest.status === 'completed' || contest.votingEndedProcessed) {
     return {
@@ -76,6 +75,14 @@ export function getContestPhase(contest: Contest) {
       colorClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
     };
   }
+  if (contest.votingStarted || contest.registrationClosedProcessed) {
+    return {
+      code: 'voting_open',
+      label: 'Voting Live',
+      icon: '🔵',
+      colorClass: 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+    };
+  }
   if (now < regStart) {
     return {
       code: 'registration_pending',
@@ -84,35 +91,11 @@ export function getContestPhase(contest: Contest) {
       colorClass: 'bg-slate-800 text-slate-300 border border-slate-700'
     };
   }
-  if (now >= regStart && now <= regEnd) {
-    return {
-      code: 'registration_open',
-      label: 'Registration Open',
-      icon: '🟢',
-      colorClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-    };
-  }
-  if (now > regEnd && now <= voteEnd) {
-    return {
-      code: 'voting_open',
-      label: 'Voting Open',
-      icon: '🔵',
-      colorClass: 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
-    };
-  }
-  if (now > voteEnd) {
-    return {
-      code: 'voting_closed',
-      label: 'Voting Closed',
-      icon: '🔴',
-      colorClass: 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-    };
-  }
   return {
-    code: 'registration_closed',
-    label: 'Registration Closed',
-    icon: '🟡',
-    colorClass: 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+    code: 'registration_open',
+    label: 'Registration Open',
+    icon: '🟢',
+    colorClass: 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
   };
 }
 
@@ -164,7 +147,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   }, []);
 
   // Active Sub-Tab
-  const [activeSubTab, setActiveSubTab] = useState<'contests' | 'contestants' | 'logs'>('contests');
+  const [activeSubTab, setActiveSubTab] = useState<'contests' | 'contestants' | 'results' | 'logs'>('contests');
 
   // Loading indicator for resending Telegram link
   const [isResending, setIsResending] = useState<string | null>(null);
@@ -265,8 +248,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     description: '',
     imageUrl: '',
     registrationStartDate: '',
-    registrationEndDate: '',
-    votingEndDate: '',
+    registrationStartTime: '00:00',
     rules: '',
     maxVotesPerUser: 1,
     voteIntervalHours: 0,
@@ -304,7 +286,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   };
 
   // Safely change active subtab
-  const handleSubTabChange = (tab: 'contests' | 'contestants' | 'logs') => {
+  const handleSubTabChange = (tab: 'contests' | 'contestants' | 'results' | 'logs') => {
     if ((showContestForm || showContestantForm) && isFormDirty) {
       const confirmLeave = window.confirm(
         'You have unsaved changes in the editor. Are you sure you want to discard your changes?'
@@ -334,8 +316,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       description: '',
       imageUrl: '',
       registrationStartDate: new Date().toISOString().split('T')[0],
-      registrationEndDate: new Date(Date.now() + 2 * 86400000).toISOString().split('T')[0] + 'T23:59',
-      votingEndDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0] + 'T23:59',
+      registrationStartTime: '00:00',
       rules: '',
       maxVotesPerUser: 1,
       voteIntervalHours: 0,
@@ -445,7 +426,6 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
         const linkId = `vote_${contest.id}_${cn.id}`;
 
         await saveVoteLink({
-          id: linkId,
           contestId: contest.id,
           contestantId: cn.id,
           voteLink: uniqueLink,
@@ -566,48 +546,41 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     }
   };
 
-  const handleGenerateAndSendAllLinks = async (contest: Contest) => {
-    const contestContestants = contestants.filter(cn => cn.contestId === contest.id && cn.status === 'approved');
-    if (contestContestants.length === 0) {
-      showToast('No approved contestants found for this contest.', 'info');
-      return;
-    }
-
-    const confirmGen = window.confirm(
-      `Generate and send unique voting links via Telegram to all ${contestContestants.length} approved contestants?`
+  const handleEndVoting = async (contest: Contest) => {
+    const confirmEnd = window.confirm(
+      `🛑 End Voting for "${contest.title}"?\n\n` +
+      `This will:\n` +
+      `1. Stop all voting instantly and disable all vote links.\n` +
+      `2. Calculate total votes and lock all results.\n` +
+      `3. Automatically rank all contestants (1st, 2nd, 3rd place, etc.).\n` +
+      `4. Mark contest status as "Completed".\n\n` +
+      `Do you want to proceed?`
     );
-    if (!confirmGen) return;
+
+    if (!confirmEnd) return;
 
     setIsLoading(true);
     try {
-      let successCount = 0;
-      const botUsername = config.botUsername || 'RoyShareWalletBot';
-
-      for (const cn of contestContestants) {
-        const uniqueLink = `https://t.me/${botUsername}?start=vote_${contest.id}_${cn.id}`;
-        await saveVoteLink({
-          contestId: contest.id,
-          contestantId: cn.id,
-          voteLink: uniqueLink,
-        });
-
-        if (cn.telegramId) {
-          await handleResendVotingLink(cn);
-          successCount++;
-        }
-      }
+      await saveContest({
+        ...contest,
+        votingEndedProcessed: true,
+        status: 'completed'
+      });
 
       await addContestLog({
         contestId: contest.id,
-        action: 'ADMIN_GENERATE_LINKS',
-        details: `Admin manually generated and dispatched vote links to ${successCount} contestants.`,
+        action: 'END_VOTING',
+        details: `Admin manually ended voting. Locked votes and calculated final winner standings.`
       });
 
-      showToast(`Voting links generated & dispatched for ${contestContestants.length} contestants!`, 'success');
+      showToast(`🛑 Voting ended for "${contest.title}". Final winner standings locked!`, 'success');
+      setSelectedContestId(contest.id);
+      setSelectedContestFilter(contest.id);
+      setActiveSubTab('results');
       await reloadAllData();
     } catch (err: any) {
-      console.error('Error generating links:', err);
-      showToast('Failed to complete link generation.', 'error');
+      console.error('Error ending voting:', err);
+      showToast('Failed to end voting: ' + (err.message || 'Unknown error'), 'error');
     } finally {
       setIsLoading(false);
     }
@@ -630,14 +603,16 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     setIsSavingContest(true);
 
     try {
+      const startDateTimeStr = contestForm.registrationStartTime
+        ? `${contestForm.registrationStartDate}T${contestForm.registrationStartTime}`
+        : contestForm.registrationStartDate;
+
       await saveContest({
         ...(editingContest ? { id: editingContest.id } : {}),
         title: contestForm.title,
         description: contestForm.description,
         imageUrl: contestForm.imageUrl,
-        registrationStartDate: contestForm.registrationStartDate,
-        registrationEndDate: contestForm.registrationEndDate,
-        votingEndDate: contestForm.votingEndDate,
+        registrationStartDate: startDateTimeStr,
         rules: contestForm.rules,
         maxVotesPerUser: contestForm.maxVotesPerUser,
         voteIntervalHours: contestForm.voteIntervalHours,
@@ -776,13 +751,19 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     }
     setIsFormDirty(false);
     setEditingContest(contest);
+    let startDateVal = contest.registrationStartDate || new Date().toISOString().split('T')[0];
+    let startTimeVal = '00:00';
+    if (startDateVal.includes('T')) {
+      const parts = startDateVal.split('T');
+      startDateVal = parts[0];
+      startTimeVal = parts[1].substring(0, 5);
+    }
     setContestForm({
       title: contest.title,
       description: contest.description,
       imageUrl: contest.imageUrl || '',
-      registrationStartDate: contest.registrationStartDate,
-      registrationEndDate: contest.registrationEndDate,
-      votingEndDate: contest.votingEndDate,
+      registrationStartDate: startDateVal,
+      registrationStartTime: startTimeVal,
       rules: contest.rules || '',
       maxVotesPerUser: contest.maxVotesPerUser || 1,
       voteIntervalHours: contest.voteIntervalHours || 0,
@@ -1000,6 +981,31 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                       <span>🚀 Start Voting</span>
                     </button>
                   )}
+
+                  {selectedC.votingStarted && selectedC.status !== 'completed' && (
+                    <button
+                      onClick={() => handleEndVoting(selectedC)}
+                      className="py-2 px-4 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 transition text-xs font-extrabold flex items-center gap-1.5 shadow-lg cursor-pointer"
+                      title="Stop voting instantly, lock results & rank winners"
+                    >
+                      <XCircle className="w-4 h-4 text-rose-400" />
+                      <span>🛑 End Voting</span>
+                    </button>
+                  )}
+
+                  {(selectedC.status === 'completed' || selectedC.votingEndedProcessed) && (
+                    <button
+                      onClick={() => {
+                        setSelectedContestId(selectedC.id);
+                        setActiveSubTab('results');
+                      }}
+                      className="py-2 px-4 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 transition text-xs font-extrabold flex items-center gap-1.5 shadow-lg cursor-pointer"
+                      title="View final winner podium & leaderboard"
+                    >
+                      <Trophy className="w-4 h-4 text-amber-400" />
+                      <span>🏆 View Results</span>
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -1038,6 +1044,18 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
             <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
               {contestants.length}
             </span>
+          </button>
+
+          <button
+            onClick={() => handleSubTabChange('results')}
+            className={`px-3.5 py-2.5 text-xs font-bold transition rounded-xl flex items-center gap-2 shrink-0 cursor-pointer ${
+              activeSubTab === 'results'
+                ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+            }`}
+          >
+            <Trophy className="w-3.5 h-3.5 text-amber-400" />
+            <span>Results & Leaderboard 🏆</span>
           </button>
 
           <button
@@ -1168,6 +1186,31 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                           </button>
                         )}
 
+                        {c.votingStarted && c.status !== 'completed' && (
+                          <button
+                            onClick={() => handleEndVoting(c)}
+                            className="py-1.5 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition text-xs font-extrabold flex items-center gap-1.5 cursor-pointer shadow-md"
+                            title="End Voting & Lock Results"
+                          >
+                            <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                            <span>🛑 End Voting</span>
+                          </button>
+                        )}
+
+                        {(c.status === 'completed' || c.votingEndedProcessed) && (
+                          <button
+                            onClick={() => {
+                              setSelectedContestId(c.id);
+                              setActiveSubTab('results');
+                            }}
+                            className="py-1.5 px-3 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition text-xs font-extrabold flex items-center gap-1.5 cursor-pointer shadow-md"
+                            title="View Winner Standings & Leaderboard"
+                          >
+                            <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                            <span>🏆 View Results</span>
+                          </button>
+                        )}
+
                         <button
                           onClick={() => handleApproveAll(c.id)}
                           className="py-1.5 px-2.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition text-xs font-bold flex items-center gap-1 cursor-pointer"
@@ -1233,13 +1276,17 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                       <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/60">
                         <div className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
                           <Clock className="w-3 h-3 text-sky-400" />
-                          Voting Countdown
+                          Contest Workflow
                         </div>
                         <div className="text-xs font-mono font-bold text-sky-400 mt-1 truncate">
-                          {voteCountdown === 'Ended' ? 'Voting Ended 🔴' : voteCountdown}
+                          {c.status === 'completed' || c.votingEndedProcessed
+                            ? 'Completed 🏆'
+                            : c.votingStarted
+                            ? 'Voting Live 🔵'
+                            : 'Registration Open 🟢'}
                         </div>
                         <div className="text-[9px] text-slate-500 mt-0.5 truncate">
-                          Ends: {c.votingEndDate ? c.votingEndDate.replace('T', ' ') : 'N/A'}
+                          Start: {c.registrationStartDate ? c.registrationStartDate.replace('T', ' ') : 'N/A'}
                         </div>
                       </div>
 
@@ -1737,6 +1784,334 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
         </div>
       )}
 
+      {/* TAB: RESULTS & LEADERBOARD */}
+      {activeSubTab === 'results' && (
+        <div className="space-y-6">
+          {/* Contest Selector Bar */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Trophy className="w-5 h-5 text-amber-400" />
+              <span className="text-xs font-extrabold text-slate-200 uppercase tracking-wider">
+                Select Voting Contest:
+              </span>
+              <select
+                value={selectedContestId || contests[0]?.id || ''}
+                onChange={e => setSelectedContestId(e.target.value)}
+                className="px-3.5 py-2 text-xs font-bold rounded-xl bg-slate-950 border border-slate-800 text-amber-400 focus:outline-none focus:border-amber-500"
+              >
+                {contests.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.title} {c.status === 'completed' || c.votingEndedProcessed ? '🏆 (Completed)' : c.votingStarted ? '🔵 (Voting Live)' : '🟢 (Registration Open)'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {(() => {
+              const currentC = contests.find(c => c.id === (selectedContestId || contests[0]?.id));
+              if (!currentC) return null;
+              return (
+                <div className="flex items-center gap-2 shrink-0">
+                  {currentC.status === 'completed' || currentC.votingEndedProcessed ? (
+                    <span className="px-3 py-1.5 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 text-xs font-bold flex items-center gap-1.5">
+                      🏆 Winner Results Locked
+                    </span>
+                  ) : currentC.votingStarted ? (
+                    <button
+                      onClick={() => handleEndVoting(currentC)}
+                      className="py-1.5 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 text-xs font-extrabold transition flex items-center gap-1.5 cursor-pointer shadow-md"
+                    >
+                      <XCircle className="w-4 h-4 text-rose-400" />
+                      <span>🛑 End Voting & Lock Winners</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleStartVoting(currentC)}
+                      className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-emerald-500 via-sky-500 to-indigo-500 text-slate-950 text-xs font-extrabold transition flex items-center gap-1.5 cursor-pointer shadow-md"
+                    >
+                      <Rocket className="w-4 h-4 fill-slate-950" />
+                      <span>🚀 Start Voting</span>
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
+          {(() => {
+            const activeC = contests.find(c => c.id === (selectedContestId || contests[0]?.id)) || contests[0];
+            if (!activeC) {
+              return (
+                <div className="p-12 text-center rounded-2xl bg-slate-900 border border-slate-800 text-slate-500 text-xs">
+                  No contests available to display results.
+                </div>
+              );
+            }
+
+            const activeContestants = contestants
+              .filter(cn => cn.contestId === activeC.id)
+              .sort((a, b) => (b.votesCount || 0) - (a.votesCount || 0));
+
+            const totalVotes = activeContestants.reduce((acc, curr) => acc + (curr.votesCount || 0), 0);
+
+            const winner = activeContestants[0];
+            const runnerUp = activeContestants[1];
+            const thirdPlace = activeContestants[2];
+
+            return (
+              <div className="space-y-6">
+                {/* Header Stats Bar */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Contest Title</span>
+                      <span className="text-sm font-bold text-slate-200">{activeC.title}</span>
+                    </div>
+                    <Trophy className="w-6 h-6 text-amber-400 shrink-0" />
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">📊 Total Votes Cast</span>
+                      <span className="text-xl font-black font-mono text-sky-400">{totalVotes} Votes</span>
+                    </div>
+                    <CheckCircle className="w-6 h-6 text-sky-400 shrink-0" />
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">👥 Total Contestants</span>
+                      <span className="text-xl font-black font-mono text-emerald-400">{activeContestants.length} Participants</span>
+                    </div>
+                    <Users className="w-6 h-6 text-emerald-400 shrink-0" />
+                  </div>
+                </div>
+
+                {/* Podium Top 3 Winners */}
+                {activeContestants.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                    {/* 2nd Place (Runner-up) */}
+                    <div className="order-2 md:order-1 p-5 rounded-2xl bg-gradient-to-b from-slate-800/80 via-slate-900 to-slate-950 border border-slate-700/60 shadow-xl text-center space-y-3 relative overflow-hidden">
+                      <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-slate-700/50 text-slate-300 text-[10px] font-bold border border-slate-600">
+                        🥈 2nd Place
+                      </div>
+                      {runnerUp ? (
+                        <>
+                          <div className="w-20 h-20 rounded-2xl mx-auto overflow-hidden bg-slate-800 border-2 border-slate-400 flex items-center justify-center shadow-lg">
+                            {runnerUp.imageUrl ? (
+                              <img src={runnerUp.imageUrl} alt={runnerUp.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <User className="w-10 h-10 text-slate-400" />
+                            )}
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-black text-slate-200">{runnerUp.name}</h3>
+                            {runnerUp.username && <p className="text-[11px] text-sky-400 font-bold">{runnerUp.username}</p>}
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono">
+                            <span className="text-lg font-black text-slate-300">{runnerUp.votesCount || 0} Votes</span>
+                            <span className="text-[10px] text-slate-500 block">
+                              {totalVotes > 0 ? `${(((runnerUp.votesCount || 0) / totalVotes) * 100).toFixed(1)}% of total` : '0%'}
+                            </span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="py-8 text-xs text-slate-500 font-semibold">No Runner-up</div>
+                      )}
+                    </div>
+
+                    {/* 1st Place (Winner) */}
+                    <div className="order-1 md:order-2 p-6 rounded-2xl bg-gradient-to-b from-amber-500/20 via-slate-900 to-slate-950 border-2 border-amber-400/60 shadow-2xl shadow-amber-500/10 text-center space-y-3 relative overflow-hidden transform md:-translate-y-2">
+                      <div className="absolute top-2 right-2 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-extrabold border border-amber-400/40 uppercase tracking-wider flex items-center gap-1">
+                        <span>🏆 Winner</span>
+                      </div>
+                      {winner ? (
+                        <>
+                          <div className="w-24 h-24 rounded-2xl mx-auto overflow-hidden bg-slate-800 border-2 border-amber-400 flex items-center justify-center shadow-xl ring-4 ring-amber-400/20">
+                            {winner.imageUrl ? (
+                              <img src={winner.imageUrl} alt={winner.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <User className="w-12 h-12 text-amber-400" />
+                            )}
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-extrabold text-amber-400 uppercase tracking-widest block">GRAND CHAMPION</span>
+                            <h2 className="text-base font-black text-amber-200">{winner.name}</h2>
+                            {winner.username && <p className="text-xs text-sky-400 font-bold">{winner.username}</p>}
+                          </div>
+                          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 font-mono">
+                            <span className="text-2xl font-black text-amber-300">{winner.votesCount || 0} Votes</span>
+                            <span className="text-[10px] text-amber-400/80 block font-sans font-bold">
+                              {totalVotes > 0 ? `${(((winner.votesCount || 0) / totalVotes) * 100).toFixed(1)}% of total votes` : '0%'}
+                            </span>
+                          </div>
+                          {activeC.winnerRewardAmount && activeC.winnerRewardAmount > 0 ? (
+                            <div className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-extrabold">
+                              💰 Prize Cash Bonus: ₹{activeC.winnerRewardAmount}
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="py-8 text-xs text-slate-500 font-semibold">No Winner</div>
+                      )}
+                    </div>
+
+                    {/* 3rd Place */}
+                    <div className="order-3 p-5 rounded-2xl bg-gradient-to-b from-amber-900/20 via-slate-900 to-slate-950 border border-amber-800/40 shadow-xl text-center space-y-3 relative overflow-hidden">
+                      <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-amber-800/30 text-amber-400 text-[10px] font-bold border border-amber-700/50">
+                        🥉 3rd Place
+                      </div>
+                      {thirdPlace ? (
+                        <>
+                          <div className="w-20 h-20 rounded-2xl mx-auto overflow-hidden bg-slate-800 border-2 border-amber-700/60 flex items-center justify-center shadow-lg">
+                            {thirdPlace.imageUrl ? (
+                              <img src={thirdPlace.imageUrl} alt={thirdPlace.name} className="w-full h-full object-cover" />
+                            ) : (
+                              <User className="w-10 h-10 text-amber-600" />
+                            )}
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-black text-slate-200">{thirdPlace.name}</h3>
+                            {thirdPlace.username && <p className="text-[11px] text-sky-400 font-bold">{thirdPlace.username}</p>}
+                          </div>
+                          <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono">
+                            <span className="text-lg font-black text-amber-400/90">{thirdPlace.votesCount || 0} Votes</span>
+                            <span className="text-[10px] text-slate-500 block">
+                              {totalVotes > 0 ? `${(((thirdPlace.votesCount || 0) / totalVotes) * 100).toFixed(1)}% of total` : '0%'}
+                            </span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="py-8 text-xs text-slate-500 font-semibold">No 3rd Place</div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-12 text-center rounded-2xl bg-slate-900 border border-slate-800 text-slate-500 text-xs">
+                    No participants found in this contest.
+                  </div>
+                )}
+
+                {/* Complete Ranked Standings Table */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-extrabold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                    <span>📈 Complete Ranked Leaderboard</span>
+                    <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px]">
+                      {activeContestants.length} Contestants
+                    </span>
+                  </h3>
+
+                  <div className="rounded-2xl border border-slate-800 bg-slate-900 shadow-xl overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse min-w-[650px]">
+                        <thead>
+                          <tr className="bg-slate-950 border-b border-slate-800 text-[10px] text-slate-400 uppercase font-bold tracking-wider">
+                            <th className="p-3.5 pl-5 w-16">Rank</th>
+                            <th className="p-3.5">Participant Name</th>
+                            <th className="p-3.5">Telegram Handle</th>
+                            <th className="p-3.5 text-center">Votes Received</th>
+                            <th className="p-3.5 text-center">Vote Share</th>
+                            <th className="p-3.5 pr-5 text-right">Standing</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/80 text-xs text-slate-300 font-medium">
+                          {activeContestants.map((cn, idx) => {
+                            const rank = idx + 1;
+                            const pct = totalVotes > 0 ? (((cn.votesCount || 0) / totalVotes) * 100).toFixed(1) : '0';
+
+                            return (
+                              <tr
+                                key={cn.id}
+                                className={`hover:bg-slate-850/50 transition ${
+                                  rank === 1
+                                    ? 'bg-amber-500/5'
+                                    : rank === 2
+                                    ? 'bg-slate-800/20'
+                                    : rank === 3
+                                    ? 'bg-amber-900/10'
+                                    : ''
+                                }`}
+                              >
+                                <td className="p-3.5 pl-5 font-mono font-black">
+                                  {rank === 1 ? (
+                                    <span className="px-2 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/40 text-xs">
+                                      🏆 1st
+                                    </span>
+                                  ) : rank === 2 ? (
+                                    <span className="px-2 py-0.5 rounded bg-slate-700/50 text-slate-200 border border-slate-600 text-xs">
+                                      🥈 2nd
+                                    </span>
+                                  ) : rank === 3 ? (
+                                    <span className="px-2 py-0.5 rounded bg-amber-800/30 text-amber-400 border border-amber-700/50 text-xs">
+                                      🥉 3rd
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500 font-bold">#{rank}</span>
+                                  )}
+                                </td>
+
+                                <td className="p-3.5">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className="w-8 h-8 rounded-lg bg-slate-800 overflow-hidden shrink-0 border border-slate-700 flex items-center justify-center text-slate-400">
+                                      {cn.imageUrl ? (
+                                        <img src={cn.imageUrl} alt={cn.name} className="w-full h-full object-cover" />
+                                      ) : (
+                                        <User className="w-4 h-4" />
+                                      )}
+                                    </div>
+                                    <span className="font-bold text-slate-200">{cn.name}</span>
+                                  </div>
+                                </td>
+
+                                <td className="p-3.5">
+                                  {cn.username ? (
+                                    <span className="text-sky-400 font-bold font-mono">{cn.username}</span>
+                                  ) : (
+                                    <span className="text-slate-500 text-[11px]">N/A</span>
+                                  )}
+                                </td>
+
+                                <td className="p-3.5 text-center font-mono font-black text-sky-400 text-sm">
+                                  {cn.votesCount || 0}
+                                </td>
+
+                                <td className="p-3.5 text-center font-mono text-slate-400 text-xs">
+                                  {pct}%
+                                </td>
+
+                                <td className="p-3.5 pr-5 text-right font-bold">
+                                  {rank === 1 ? (
+                                    <span className="text-amber-400 font-extrabold uppercase text-[10px] tracking-wider">
+                                      🏆 WINNER
+                                    </span>
+                                  ) : rank === 2 ? (
+                                    <span className="text-slate-300 font-extrabold uppercase text-[10px] tracking-wider">
+                                      🥈 RUNNER-UP
+                                    </span>
+                                  ) : rank === 3 ? (
+                                    <span className="text-amber-600 font-extrabold uppercase text-[10px] tracking-wider">
+                                      🥉 THIRD PLACE
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500 text-[10px] uppercase">
+                                      PARTICIPANT
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
       {/* ========================================================= */}
       {/* CONTEST MODAL / BOTTOM SHEET */}
       {/* ========================================================= */}
@@ -1834,11 +2209,14 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                 {/* Schedule Dates */}
                 <div className="space-y-3 md:col-span-2 p-3.5 rounded-xl bg-slate-950/60 border border-slate-850">
                   <span className="text-[10px] font-extrabold text-sky-400 uppercase tracking-wider block">
-                    Campaign Timeline Schedule
+                    Campaign Registration Schedule
                   </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <p className="text-[10px] text-slate-400">
+                    Registration opens automatically on the Start Date & Time. Registration remains open until you manually click "Start Voting".
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-slate-400 uppercase">Registration Start Date</label>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase">Registration Start Date *</label>
                       <input
                         type="date"
                         required
@@ -1852,28 +2230,14 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                     </div>
 
                     <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-slate-400 uppercase">Registration End Date & Time</label>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase">Registration Start Time *</label>
                       <input
-                        type="datetime-local"
+                        type="time"
                         required
-                        value={contestForm.registrationEndDate}
+                        value={contestForm.registrationStartTime}
                         onChange={e => {
                           setIsFormDirty(true);
-                          setContestForm(prev => ({ ...prev, registrationEndDate: e.target.value }));
-                        }}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-slate-400 uppercase">Voting End Date & Time</label>
-                      <input
-                        type="datetime-local"
-                        required
-                        value={contestForm.votingEndDate}
-                        onChange={e => {
-                          setIsFormDirty(true);
-                          setContestForm(prev => ({ ...prev, votingEndDate: e.target.value }));
+                          setContestForm(prev => ({ ...prev, registrationStartTime: e.target.value }));
                         }}
                         className="w-full px-3 py-2 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                       />

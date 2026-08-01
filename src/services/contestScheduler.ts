@@ -65,81 +65,19 @@ async function runSchedulerCycle() {
         continue;
       }
 
-      const regStartDateStr = contest.registrationStartDate; // "YYYY-MM-DD"
-      const voteEndDateStr = contest.votingEndDate;         // "YYYY-MM-DDTHH:MM"
+      const regStartDateStr = contest.registrationStartDate;
 
-      if (!regStartDateStr || !voteEndDateStr) {
+      if (!regStartDateStr) {
         continue;
       }
 
       const regStartDate = new Date(regStartDateStr + (regStartDateStr.includes('T') ? '' : 'T00:00:00'));
-      const voteEndDate = new Date(voteEndDateStr);
 
-      // 1. Transition: Upcoming -> Active (When registration opens)
+      // Transition: Upcoming -> Active (When registration start date & time arrives)
       if (contest.status === 'upcoming' && now >= regStartDate) {
         console.log(`[Scheduler] Transitioning contest "${contest.title}" (${contest.id}) to active status (Registration Opened)`);
         await setDoc(doc(db, 'contests', contest.id), { status: 'active' }, { merge: true });
         continue;
-      }
-
-      // 2. Transition: Voting End Date reached -> Stop votes, Lock leaderboard, Calculate final results, Mark contest completed
-      if (now >= voteEndDate && !contest.votingEndedProcessed) {
-        console.log(`[Scheduler] Ending voting and calculating final standings for contest "${contest.title}" (${contest.id})`);
-
-        // Mark as processed immediately to lock other executions
-        await setDoc(doc(db, 'contests', contest.id), {
-          votingEndedProcessed: true,
-          status: 'completed'
-        }, { merge: true });
-
-        // Get contestants for this contest
-        const contestantsRef = collection(db, 'contestants');
-        const q = query(contestantsRef, where('contestId', '==', contest.id));
-        const contestantsSnap = await getDocs(q);
-        
-        const contestantsList = contestantsSnap.docs.map(docSnap => ({
-          id: docSnap.id,
-          ...docSnap.data()
-        })) as any[];
-
-        // Sort desc by votesCount
-        contestantsList.sort((a, b) => (b.votesCount || 0) - (a.votesCount || 0));
-
-        let standingsText = `🏁 <b>The contest "${contest.title}" has ended!</b>\n\n` +
-          `🏆 <b>Final Leaderboard Standing:</b>\n\n`;
-
-        if (contestantsList.length === 0) {
-          standingsText += `No contestants participated in this contest.`;
-        } else {
-          contestantsList.forEach((cn, idx) => {
-            const medal = idx === 0 ? '👑' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '🔹';
-            standingsText += `${medal} #${idx + 1} <b>${cn.name}</b> - ${cn.votesCount || 0} votes\n`;
-          });
-        }
-
-        const config = await getDecryptedConfig();
-        if (config && config.botToken) {
-          const token = config.botToken;
-
-          // Notify all contestants
-          for (const cn of contestantsList) {
-            if (cn.telegramId) {
-              let personalMessage = standingsText;
-              if (contestantsList[0] && contestantsList[0].id === cn.id) {
-                personalMessage += `\n🎉 <b>Congratulations! You are the WINNER of this contest!</b>`;
-                if (contest.winnerRewardAmount && contest.winnerRewardAmount > 0) {
-                  personalMessage += `\n🎁 Winner Reward: <b>₹${contest.winnerRewardAmount}</b> has been awarded or will be distributed!`;
-                }
-              }
-              await sendTelegramMessage(token, cn.telegramId, personalMessage);
-            }
-          }
-
-          // Notify Admin
-          if (config.adminChatId) {
-            await sendTelegramMessage(token, config.adminChatId, `🔔 <b>Contest Completed Automatically!</b>\n\n${standingsText}`);
-          }
-        }
       }
     }
   } catch (error) {
