@@ -135,9 +135,10 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
       let res: any = null;
       let sessionToken = '';
       try {
-        const rawSession = localStorage.getItem('royshare_admin_session');
+        const rawSession = localStorage.getItem('royshare_admin_session') || sessionStorage.getItem('royshare_admin_session');
         if (rawSession) {
-          sessionToken = JSON.parse(rawSession).sessionToken || '';
+          const parsed = JSON.parse(rawSession);
+          sessionToken = parsed.sessionToken || '';
         }
       } catch (e) {}
 
@@ -160,9 +161,9 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
         });
         res = await apiRes.json();
 
-        if (apiRes.status === 401 || apiRes.status === 403) {
+        if (apiRes.status === 401 || apiRes.status === 403 || (res && res.error && res.error.toLowerCase().includes('unauthorized'))) {
           showToast(res.error || res.reason || 'Session expired or invalid. Redirecting to login...', 'error');
-          window.dispatchEvent(new CustomEvent('admin-session-expired'));
+          window.dispatchEvent(new Event('admin-session-expired'));
           return;
         }
       } catch (e) {

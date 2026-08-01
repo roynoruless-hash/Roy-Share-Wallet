@@ -324,6 +324,7 @@ export interface Contest {
   voteIntervalHours?: number; // e.g., 24 for daily, 0 or undefined for one-time
   voterRewardAmount?: number; // wallet bonus for voting
   winnerRewardAmount?: number; // description or cash reward
+  totalWinners?: number; // default: 3
 }
 
 export interface Contestant {
@@ -339,6 +340,10 @@ export interface Contestant {
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;
   voteLink?: string;
+  rank?: number;
+  isWinner?: boolean;
+  winnerPrize?: string;
+  winningTime?: string;
 }
 
 export interface VoteLog {

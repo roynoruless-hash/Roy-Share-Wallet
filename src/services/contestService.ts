@@ -61,6 +61,7 @@ export async function getContests(): Promise<Contest[]> {
         voteIntervalHours: Number(data.voteIntervalHours) || 0,
         voterRewardAmount: Number(data.voterRewardAmount) || 0,
         winnerRewardAmount: Number(data.winnerRewardAmount) || 0,
+        totalWinners: Number(data.totalWinners) || 3,
       });
     });
     // Sort by createdAt desc
@@ -108,6 +109,7 @@ export async function saveContest(contest: Partial<Contest> & { id?: string }): 
     voteIntervalHours: contest.voteIntervalHours !== undefined ? Number(contest.voteIntervalHours) : 0,
     voterRewardAmount: contest.voterRewardAmount !== undefined ? Number(contest.voterRewardAmount) : 0,
     winnerRewardAmount: contest.winnerRewardAmount !== undefined ? Number(contest.winnerRewardAmount) : 0,
+    totalWinners: contest.totalWinners !== undefined ? Number(contest.totalWinners) : 3,
   };
   await setDoc(contestRef, dataToSave, { merge: true });
   return contestId;
@@ -169,6 +171,10 @@ export async function getContestants(contestId?: string): Promise<Contestant[]> 
         status: data.status || 'pending',
         createdAt: data.createdAt || new Date().toISOString(),
         voteLink: data.voteLink || '',
+        rank: data.rank !== undefined ? Number(data.rank) : undefined,
+        isWinner: data.isWinner !== undefined ? Boolean(data.isWinner) : undefined,
+        winnerPrize: data.winnerPrize || '',
+        winningTime: data.winningTime || '',
       });
     });
     // Sort by votesCount desc, then name asc
@@ -211,6 +217,18 @@ export async function saveContestant(contestant: Partial<Contestant> & { id?: st
   };
   if (contestant.voteLink !== undefined) {
     dataToSave.voteLink = contestant.voteLink;
+  }
+  if (contestant.rank !== undefined) {
+    dataToSave.rank = Number(contestant.rank);
+  }
+  if (contestant.isWinner !== undefined) {
+    dataToSave.isWinner = Boolean(contestant.isWinner);
+  }
+  if (contestant.winnerPrize !== undefined) {
+    dataToSave.winnerPrize = contestant.winnerPrize;
+  }
+  if (contestant.winningTime !== undefined) {
+    dataToSave.winningTime = contestant.winningTime;
   }
   await setDoc(contestantRef, dataToSave, { merge: true });
   return contestantId;

@@ -32,7 +32,8 @@ import {
   CheckCircle,
   XCircle,
   Trophy,
-  RotateCw
+  RotateCw,
+  Download
 } from 'lucide-react';
 import { Contest, Contestant, VoteLog, AdminConfig, ContestLog } from '../types';
 import {
@@ -49,6 +50,7 @@ import {
   addContestLog
 } from '../services/contestService';
 import { uploadImageToStorage, uploadImageToImgBB } from '../services/storageService';
+import { generateWinnerBannerDataUrl, downloadDataUrl } from '../utils/bannerGenerator';
 
 interface VotingContestsViewProps {
   config: AdminConfig;
@@ -256,8 +258,16 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     voteIntervalHours: 0,
     voterRewardAmount: 0,
     winnerRewardAmount: 0,
+    totalWinners: 3,
     status: 'active' as Contest['status']
   });
+
+  // Banner Preview & Download states
+  const [previewBannerUser, setPreviewBannerUser] = useState<Contestant | null>(null);
+  const [previewBannerUrl, setPreviewBannerUrl] = useState<string | null>(null);
+  const [previewBannerRank, setPreviewBannerRank] = useState<number>(1);
+  const [isGeneratingBanner, setIsGeneratingBanner] = useState<boolean>(false);
+  const [isBulkDownloading, setIsBulkDownloading] = useState<boolean>(false);
 
   // Warn on page reload/navigation if form is dirty
   useEffect(() => {
@@ -324,6 +334,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       voteIntervalHours: 0,
       voterRewardAmount: 0,
       winnerRewardAmount: 0,
+      totalWinners: 3,
       status: 'active'
     });
     setShowContestForm(true);
@@ -623,13 +634,15 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   };
 
   const handleEndVoting = async (contest: Contest) => {
+    const totalWinnersCount = contest.totalWinners || 3;
     const confirmEnd = window.confirm(
       `🛑 End Voting for "${contest.title}"?\n\n` +
       `This will:\n` +
-      `1. Stop all voting instantly and disable all vote links.\n` +
-      `2. Calculate total votes and lock all results.\n` +
-      `3. Automatically rank all contestants (1st, 2nd, 3rd place, etc.).\n` +
-      `4. Mark contest status as "Completed".\n\n` +
+      `1. Freeze all votes instantly & disable vote links.\n` +
+      `2. Sort contestants by highest verified votes.\n` +
+      `3. Automatically select Top ${totalWinnersCount} Winner(s).\n` +
+      `4. Store Rank, Votes, Winner Status, Prize & Winning Time for all contestants.\n` +
+      `5. Mark contest status as "Completed".\n\n` +
       `Do you want to proceed?`
     );
 
@@ -637,19 +650,50 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
     setIsLoading(true);
     try {
+      // 1. Update contest status
       await saveContest({
         ...contest,
         votingEndedProcessed: true,
         status: 'completed'
       });
 
+      // 2. Sort contestants by verified votes count
+      const contestContestants = contestants.filter(cn => cn.contestId === contest.id);
+      const sortedContestants = [...contestContestants].sort((a, b) => (b.votesCount || 0) - (a.votesCount || 0));
+
+      const winningIsoTime = new Date().toISOString();
+
+      // 3. Process each contestant with Rank, Winner Status, Prize, and Winning Time
+      for (let i = 0; i < sortedContestants.length; i++) {
+        const cn = sortedContestants[i];
+        const rank = i + 1;
+        const isWinner = rank <= totalWinnersCount;
+
+        let winnerPrize = '';
+        if (isWinner) {
+          if (contest.winnerRewardAmount && contest.winnerRewardAmount > 0) {
+            winnerPrize = `₹${contest.winnerRewardAmount}`;
+          } else {
+            winnerPrize = `Winner Trophy & Badge`;
+          }
+        }
+
+        await saveContestant({
+          ...cn,
+          rank,
+          isWinner,
+          winnerPrize,
+          winningTime: winningIsoTime
+        });
+      }
+
       await addContestLog({
         contestId: contest.id,
         action: 'END_VOTING',
-        details: `Admin manually ended voting. Locked votes and calculated final winner standings.`
+        details: `Admin manually ended voting. Locked votes and automatically selected top ${totalWinnersCount} winner(s).`
       });
 
-      showToast(`🛑 Voting ended for "${contest.title}". Final winner standings locked!`, 'success');
+      showToast(`🛑 Voting ended for "${contest.title}". Top ${totalWinnersCount} winner(s) finalized!`, 'success');
       setSelectedContestId(contest.id);
       setSelectedContestFilter(contest.id);
       setActiveSubTab('results');
@@ -659,6 +703,69 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       showToast('Failed to end voting: ' + (err.message || 'Unknown error'), 'error');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Banner Generator Handler Functions
+  const handlePreviewBanner = async (contest: Contest, winner: Contestant, rank: number) => {
+    setIsGeneratingBanner(true);
+    setPreviewBannerUser(winner);
+    setPreviewBannerRank(rank);
+    try {
+      const dataUrl = await generateWinnerBannerDataUrl(contest, winner, rank, winner.votesCount || 0);
+      setPreviewBannerUrl(dataUrl);
+    } catch (err) {
+      console.error('Error generating banner preview:', err);
+      showToast('Failed to generate banner preview.', 'error');
+    } finally {
+      setIsGeneratingBanner(false);
+    }
+  };
+
+  const handleDownloadSingleBanner = async (contest: Contest, winner: Contestant, rank: number) => {
+    try {
+      showToast('Generating high-quality banner PNG...', 'info');
+      const dataUrl = await generateWinnerBannerDataUrl(contest, winner, rank, winner.votesCount || 0);
+      const safeName = winner.name.replace(/[^a-zA-Z0-9]/g, '_');
+      const safeTitle = contest.title.replace(/[^a-zA-Z0-9]/g, '_');
+      const filename = `${safeTitle}_Winner_Rank_${rank}_${safeName}.png`;
+      downloadDataUrl(dataUrl, filename);
+      showToast(`✅ Winner banner downloaded for ${winner.name}!`, 'success');
+    } catch (err) {
+      console.error('Error downloading banner:', err);
+      showToast('Failed to download winner banner.', 'error');
+    }
+  };
+
+  const handleDownloadAllWinnerBanners = async (contest: Contest, winnersList: Contestant[]) => {
+    if (winnersList.length === 0) {
+      showToast('No winners available to download banners.', 'info');
+      return;
+    }
+
+    setIsBulkDownloading(true);
+    showToast(`Generating banners for ${winnersList.length} winner(s)...`, 'info');
+
+    try {
+      for (let idx = 0; idx < winnersList.length; idx++) {
+        const winner = winnersList[idx];
+        const rank = winner.rank || (idx + 1);
+        const dataUrl = await generateWinnerBannerDataUrl(contest, winner, rank, winner.votesCount || 0);
+
+        const safeName = winner.name.replace(/[^a-zA-Z0-9]/g, '_');
+        const safeTitle = contest.title.replace(/[^a-zA-Z0-9]/g, '_');
+        const filename = `${safeTitle}_Winner_Rank_${rank}_${safeName}.png`;
+        downloadDataUrl(dataUrl, filename);
+
+        await new Promise(res => setTimeout(res, 350));
+      }
+
+      showToast(`🎉 Downloaded banners for all ${winnersList.length} winner(s)!`, 'success');
+    } catch (err) {
+      console.error('Error during bulk banner download:', err);
+      showToast('Failed to download bulk banners.', 'error');
+    } finally {
+      setIsBulkDownloading(false);
     }
   };
 
@@ -694,6 +801,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
         voteIntervalHours: contestForm.voteIntervalHours,
         voterRewardAmount: contestForm.voterRewardAmount,
         winnerRewardAmount: contestForm.winnerRewardAmount,
+        totalWinners: contestForm.totalWinners || 3,
         status: contestForm.status,
         createdAt: editingContest?.createdAt || new Date().toISOString()
       });
@@ -845,6 +953,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       voteIntervalHours: contest.voteIntervalHours || 0,
       voterRewardAmount: contest.voterRewardAmount || 0,
       winnerRewardAmount: contest.winnerRewardAmount || 0,
+      totalWinners: contest.totalWinners || 3,
       status: contest.status
     });
     setShowContestForm(true);
@@ -1922,11 +2031,11 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       {activeSubTab === 'results' && (
         <div className="space-y-6">
           {/* Contest Selector Bar */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl">
             <div className="flex items-center gap-2 flex-wrap">
               <Trophy className="w-5 h-5 text-amber-400" />
               <span className="text-xs font-extrabold text-slate-200 uppercase tracking-wider">
-                Select Voting Contest:
+                Select Contest:
               </span>
               <select
                 value={selectedContestId || contests[0]?.id || ''}
@@ -1942,13 +2051,45 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
             </div>
 
             {(() => {
-              const currentC = contests.find(c => c.id === (selectedContestId || contests[0]?.id));
+              const currentC = contests.find(c => c.id === (selectedContestId || contests[0]?.id)) || contests[0];
               if (!currentC) return null;
+
+              const currentContestants = contestants
+                .filter(cn => cn.contestId === currentC.id)
+                .sort((a, b) => (b.votesCount || 0) - (a.votesCount || 0));
+
+              const winnersList = currentContestants.slice(0, currentC.totalWinners || 3);
+
               return (
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 flex-wrap shrink-0">
+                  <span className="px-3 py-1.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-extrabold flex items-center gap-1.5">
+                    <Trophy className="w-3.5 h-3.5" />
+                    Total Winners: {currentC.totalWinners || 3}
+                  </span>
+
+                  {winnersList.length > 0 && (
+                    <button
+                      onClick={() => handleDownloadAllWinnerBanners(currentC, winnersList)}
+                      disabled={isBulkDownloading}
+                      className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 disabled:opacity-50 text-slate-950 text-xs font-extrabold transition flex items-center gap-1.5 cursor-pointer shadow-md"
+                    >
+                      {isBulkDownloading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                          <span>Generating Banners...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-4 h-4 stroke-[2.5px]" />
+                          <span>Download All Winner Banners ({winnersList.length})</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+
                   {currentC.status === 'completed' || currentC.votingEndedProcessed ? (
                     <span className="px-3 py-1.5 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 text-xs font-bold flex items-center gap-1.5">
-                      🏆 Winner Results Locked
+                      🏆 Results Finalized
                     </span>
                   ) : currentC.votingStarted ? (
                     <button
@@ -1987,144 +2128,165 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
               .sort((a, b) => (b.votesCount || 0) - (a.votesCount || 0));
 
             const totalVotes = activeContestants.reduce((acc, curr) => acc + (curr.votesCount || 0), 0);
-
-            const winner = activeContestants[0];
-            const runnerUp = activeContestants[1];
-            const thirdPlace = activeContestants[2];
+            const totalWinnersCount = activeC.totalWinners || 3;
+            const topWinners = activeContestants.slice(0, totalWinnersCount);
 
             return (
               <div className="space-y-6">
                 {/* Header Stats Bar */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex items-center justify-between">
                     <div>
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Contest Title</span>
-                      <span className="text-sm font-bold text-slate-200">{activeC.title}</span>
+                      <span className="text-xs font-extrabold text-slate-200 line-clamp-1">{activeC.title}</span>
                     </div>
-                    <Trophy className="w-6 h-6 text-amber-400 shrink-0" />
+                    <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
                   </div>
 
                   <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex items-center justify-between">
                     <div>
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">📊 Total Votes Cast</span>
-                      <span className="text-xl font-black font-mono text-sky-400">{totalVotes} Votes</span>
+                      <span className="text-lg font-black font-mono text-sky-400">{totalVotes} Votes</span>
                     </div>
-                    <CheckCircle className="w-6 h-6 text-sky-400 shrink-0" />
+                    <CheckCircle className="w-5 h-5 text-sky-400 shrink-0" />
                   </div>
 
                   <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex items-center justify-between">
                     <div>
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">👥 Total Contestants</span>
-                      <span className="text-xl font-black font-mono text-emerald-400">{activeContestants.length} Participants</span>
+                      <span className="text-lg font-black font-mono text-emerald-400">{activeContestants.length} Participants</span>
                     </div>
-                    <Users className="w-6 h-6 text-emerald-400 shrink-0" />
+                    <Users className="w-5 h-5 text-emerald-400 shrink-0" />
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">👑 Total Winners</span>
+                      <span className="text-lg font-black font-mono text-amber-400">{totalWinnersCount} Winners</span>
+                    </div>
+                    <Award className="w-5 h-5 text-amber-400 shrink-0" />
                   </div>
                 </div>
 
-                {/* Podium Top 3 Winners */}
-                {activeContestants.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                    {/* 2nd Place (Runner-up) */}
-                    <div className="order-2 md:order-1 p-5 rounded-2xl bg-gradient-to-b from-slate-800/80 via-slate-900 to-slate-950 border border-slate-700/60 shadow-xl text-center space-y-3 relative overflow-hidden">
-                      <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-slate-700/50 text-slate-300 text-[10px] font-bold border border-slate-600">
-                        🥈 2nd Place
-                      </div>
-                      {runnerUp ? (
-                        <>
-                          <div className="w-20 h-20 rounded-2xl mx-auto overflow-hidden bg-slate-800 border-2 border-slate-400 flex items-center justify-center shadow-lg">
-                            {runnerUp.imageUrl ? (
-                              <img src={runnerUp.imageUrl} alt={runnerUp.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <User className="w-10 h-10 text-slate-400" />
-                            )}
-                          </div>
-                          <div>
-                            <h3 className="text-sm font-black text-slate-200">{runnerUp.name}</h3>
-                            {runnerUp.username && <p className="text-[11px] text-sky-400 font-bold">{runnerUp.username}</p>}
-                          </div>
-                          <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono">
-                            <span className="text-lg font-black text-slate-300">{runnerUp.votesCount || 0} Votes</span>
-                            <span className="text-[10px] text-slate-500 block">
-                              {totalVotes > 0 ? `${(((runnerUp.votesCount || 0) / totalVotes) * 100).toFixed(1)}% of total` : '0%'}
-                            </span>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="py-8 text-xs text-slate-500 font-semibold">No Runner-up</div>
-                      )}
-                    </div>
+                {/* Top Winners Cards Grid */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                      <Trophy className="w-4 h-4 text-amber-400" />
+                      <span>Top Official Winners ({topWinners.length}/{totalWinnersCount})</span>
+                    </h3>
+                    {topWinners.length > 0 && (
+                      <button
+                        onClick={() => handleDownloadAllWinnerBanners(activeC, topWinners)}
+                        disabled={isBulkDownloading}
+                        className="text-xs text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 transition"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Download All Banners</span>
+                      </button>
+                    )}
+                  </div>
 
-                    {/* 1st Place (Winner) */}
-                    <div className="order-1 md:order-2 p-6 rounded-2xl bg-gradient-to-b from-amber-500/20 via-slate-900 to-slate-950 border-2 border-amber-400/60 shadow-2xl shadow-amber-500/10 text-center space-y-3 relative overflow-hidden transform md:-translate-y-2">
-                      <div className="absolute top-2 right-2 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-extrabold border border-amber-400/40 uppercase tracking-wider flex items-center gap-1">
-                        <span>🏆 Winner</span>
-                      </div>
-                      {winner ? (
-                        <>
-                          <div className="w-24 h-24 rounded-2xl mx-auto overflow-hidden bg-slate-800 border-2 border-amber-400 flex items-center justify-center shadow-xl ring-4 ring-amber-400/20">
-                            {winner.imageUrl ? (
-                              <img src={winner.imageUrl} alt={winner.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <User className="w-12 h-12 text-amber-400" />
-                            )}
-                          </div>
-                          <div>
-                            <span className="text-[10px] font-extrabold text-amber-400 uppercase tracking-widest block">GRAND CHAMPION</span>
-                            <h2 className="text-base font-black text-amber-200">{winner.name}</h2>
-                            {winner.username && <p className="text-xs text-sky-400 font-bold">{winner.username}</p>}
-                          </div>
-                          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 font-mono">
-                            <span className="text-2xl font-black text-amber-300">{winner.votesCount || 0} Votes</span>
-                            <span className="text-[10px] text-amber-400/80 block font-sans font-bold">
-                              {totalVotes > 0 ? `${(((winner.votesCount || 0) / totalVotes) * 100).toFixed(1)}% of total votes` : '0%'}
-                            </span>
-                          </div>
-                          {activeC.winnerRewardAmount && activeC.winnerRewardAmount > 0 ? (
-                            <div className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-extrabold">
-                              💰 Prize Cash Bonus: ₹{activeC.winnerRewardAmount}
+                  {topWinners.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {topWinners.map((winner, idx) => {
+                        const rank = winner.rank || (idx + 1);
+                        const pct = totalVotes > 0 ? (((winner.votesCount || 0) / totalVotes) * 100).toFixed(1) : '0';
+
+                        let badgeText = `🏅 Rank #${rank} Winner`;
+                        let badgeStyle = 'bg-sky-500/10 text-sky-400 border-sky-500/20';
+                        if (rank === 1) {
+                          badgeText = '🥇 1st Place Winner';
+                          badgeStyle = 'bg-amber-500/20 text-amber-300 border-amber-400/40';
+                        } else if (rank === 2) {
+                          badgeText = '🥈 2nd Place Winner';
+                          badgeStyle = 'bg-slate-700/40 text-slate-200 border-slate-600';
+                        } else if (rank === 3) {
+                          badgeText = '🥉 3rd Place Winner';
+                          badgeStyle = 'bg-amber-900/30 text-amber-400 border-amber-700/40';
+                        }
+
+                        const prizeText = winner.winnerPrize
+                          ? winner.winnerPrize
+                          : activeC.winnerRewardAmount && activeC.winnerRewardAmount > 0
+                          ? `₹${activeC.winnerRewardAmount}`
+                          : 'Winner Trophy & Certificate';
+
+                        return (
+                          <div
+                            key={winner.id}
+                            className={`p-5 rounded-2xl bg-gradient-to-b from-slate-900 via-slate-900/90 to-slate-950 border shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden ${
+                              rank === 1
+                                ? 'border-amber-400/50 shadow-amber-500/5 ring-1 ring-amber-400/20'
+                                : 'border-slate-800 hover:border-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold border ${badgeStyle}`}>
+                                {badgeText}
+                              </span>
+                              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                                Verified
+                              </span>
                             </div>
-                          ) : null}
-                        </>
-                      ) : (
-                        <div className="py-8 text-xs text-slate-500 font-semibold">No Winner</div>
-                      )}
-                    </div>
 
-                    {/* 3rd Place */}
-                    <div className="order-3 p-5 rounded-2xl bg-gradient-to-b from-amber-900/20 via-slate-900 to-slate-950 border border-amber-800/40 shadow-xl text-center space-y-3 relative overflow-hidden">
-                      <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-amber-800/30 text-amber-400 text-[10px] font-bold border border-amber-700/50">
-                        🥉 3rd Place
-                      </div>
-                      {thirdPlace ? (
-                        <>
-                          <div className="w-20 h-20 rounded-2xl mx-auto overflow-hidden bg-slate-800 border-2 border-amber-700/60 flex items-center justify-center shadow-lg">
-                            {thirdPlace.imageUrl ? (
-                              <img src={thirdPlace.imageUrl} alt={thirdPlace.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <User className="w-10 h-10 text-amber-600" />
-                            )}
+                            <div className="flex items-center gap-3.5">
+                              <div className="w-16 h-16 rounded-2xl bg-slate-800 overflow-hidden shrink-0 border-2 border-slate-700 flex items-center justify-center text-slate-400 shadow-md">
+                                {winner.imageUrl ? (
+                                  <img src={winner.imageUrl} alt={winner.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <User className="w-8 h-8" />
+                                )}
+                              </div>
+                              <div className="space-y-0.5 min-w-0">
+                                <h4 className="text-sm font-black text-slate-100 truncate">{winner.name}</h4>
+                                {winner.username && (
+                                  <p className="text-xs font-bold text-sky-400 truncate">{winner.username}</p>
+                                )}
+                                {winner.telegramId && (
+                                  <p className="text-[10px] text-slate-500 font-mono">ID: {winner.telegramId}</p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 p-3 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                              <div>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Verified Votes</span>
+                                <span className="text-base font-black font-mono text-sky-400">{winner.votesCount || 0} ({pct}%)</span>
+                              </div>
+                              <div>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Prize</span>
+                                <span className="text-xs font-bold text-amber-400 truncate block">{prizeText}</span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 pt-1">
+                              <button
+                                onClick={() => handlePreviewBanner(activeC, winner, rank)}
+                                disabled={isGeneratingBanner}
+                                className="flex-1 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center justify-center gap-1.5 border border-slate-700 cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-sky-400" />
+                                <span>Preview Banner</span>
+                              </button>
+                              <button
+                                onClick={() => handleDownloadSingleBanner(activeC, winner, rank)}
+                                className="py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                              >
+                                <Download className="w-3.5 h-3.5 stroke-[2.5px]" />
+                                <span>Download PNG</span>
+                              </button>
+                            </div>
                           </div>
-                          <div>
-                            <h3 className="text-sm font-black text-slate-200">{thirdPlace.name}</h3>
-                            {thirdPlace.username && <p className="text-[11px] text-sky-400 font-bold">{thirdPlace.username}</p>}
-                          </div>
-                          <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono">
-                            <span className="text-lg font-black text-amber-400/90">{thirdPlace.votesCount || 0} Votes</span>
-                            <span className="text-[10px] text-slate-500 block">
-                              {totalVotes > 0 ? `${(((thirdPlace.votesCount || 0) / totalVotes) * 100).toFixed(1)}% of total` : '0%'}
-                            </span>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="py-8 text-xs text-slate-500 font-semibold">No 3rd Place</div>
-                      )}
+                        );
+                      })}
                     </div>
-                  </div>
-                ) : (
-                  <div className="p-12 text-center rounded-2xl bg-slate-900 border border-slate-800 text-slate-500 text-xs">
-                    No participants found in this contest.
-                  </div>
-                )}
+                  ) : (
+                    <div className="p-10 text-center rounded-2xl bg-slate-900 border border-slate-800 text-slate-500 text-xs">
+                      No participants registered yet for this contest.
+                    </div>
+                  )}
+                </div>
 
                 {/* Complete Ranked Standings Table */}
                 <div className="space-y-3">
@@ -2137,39 +2299,50 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
                   <div className="rounded-2xl border border-slate-800 bg-slate-900 shadow-xl overflow-hidden">
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse min-w-[650px]">
+                      <table className="w-full text-left border-collapse min-w-[700px]">
                         <thead>
                           <tr className="bg-slate-950 border-b border-slate-800 text-[10px] text-slate-400 uppercase font-bold tracking-wider">
-                            <th className="p-3.5 pl-5 w-16">Rank</th>
+                            <th className="p-3.5 pl-5 w-20">Rank</th>
                             <th className="p-3.5">Participant Name</th>
-                            <th className="p-3.5">Telegram Handle</th>
-                            <th className="p-3.5 text-center">Votes Received</th>
-                            <th className="p-3.5 text-center">Vote Share</th>
-                            <th className="p-3.5 pr-5 text-right">Standing</th>
+                            <th className="p-3.5 text-center">Verified Votes</th>
+                            <th className="p-3.5">Winner Prize</th>
+                            <th className="p-3.5">Winning Time</th>
+                            <th className="p-3.5 pr-5 text-right">Winner Banner</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800/80 text-xs text-slate-300 font-medium">
                           {activeContestants.map((cn, idx) => {
-                            const rank = idx + 1;
+                            const rank = cn.rank || (idx + 1);
+                            const isWinner = cn.isWinner !== undefined ? cn.isWinner : rank <= totalWinnersCount;
                             const pct = totalVotes > 0 ? (((cn.votesCount || 0) / totalVotes) * 100).toFixed(1) : '0';
+
+                            const prizeText = cn.winnerPrize
+                              ? cn.winnerPrize
+                              : isWinner
+                              ? (activeC.winnerRewardAmount && activeC.winnerRewardAmount > 0 ? `₹${activeC.winnerRewardAmount}` : 'Trophy & Certificate')
+                              : '-';
+
+                            const winTimeStr = cn.winningTime
+                              ? new Date(cn.winningTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
+                              : isWinner && (activeC.status === 'completed' || activeC.votingEndedProcessed)
+                              ? 'Finalized'
+                              : '-';
 
                             return (
                               <tr
                                 key={cn.id}
                                 className={`hover:bg-slate-850/50 transition ${
-                                  rank === 1
-                                    ? 'bg-amber-500/5'
-                                    : rank === 2
-                                    ? 'bg-slate-800/20'
-                                    : rank === 3
-                                    ? 'bg-amber-900/10'
+                                  isWinner
+                                    ? rank === 1
+                                      ? 'bg-amber-500/5'
+                                      : 'bg-slate-800/30'
                                     : ''
                                 }`}
                               >
                                 <td className="p-3.5 pl-5 font-mono font-black">
                                   {rank === 1 ? (
                                     <span className="px-2 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/40 text-xs">
-                                      🏆 1st
+                                      🥇 1st
                                     </span>
                                   ) : rank === 2 ? (
                                     <span className="px-2 py-0.5 rounded bg-slate-700/50 text-slate-200 border border-slate-600 text-xs">
@@ -2178,6 +2351,10 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                                   ) : rank === 3 ? (
                                     <span className="px-2 py-0.5 rounded bg-amber-800/30 text-amber-400 border border-amber-700/50 text-xs">
                                       🥉 3rd
+                                    </span>
+                                  ) : isWinner ? (
+                                    <span className="px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs">
+                                      🏅 #{rank}
                                     </span>
                                   ) : (
                                     <span className="text-slate-500 font-bold">#{rank}</span>
@@ -2193,43 +2370,46 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                                         <User className="w-4 h-4" />
                                       )}
                                     </div>
-                                    <span className="font-bold text-slate-200">{cn.name}</span>
+                                    <div>
+                                      <span className="font-bold text-slate-200 block">{cn.name}</span>
+                                      {cn.username && <span className="text-[10px] text-sky-400 font-bold block">{cn.username}</span>}
+                                    </div>
                                   </div>
-                                </td>
-
-                                <td className="p-3.5">
-                                  {cn.username ? (
-                                    <span className="text-sky-400 font-bold font-mono">{cn.username}</span>
-                                  ) : (
-                                    <span className="text-slate-500 text-[11px]">N/A</span>
-                                  )}
                                 </td>
 
                                 <td className="p-3.5 text-center font-mono font-black text-sky-400 text-sm">
                                   {cn.votesCount || 0}
+                                  <span className="text-[10px] text-slate-500 font-sans block font-normal">({pct}%)</span>
                                 </td>
 
-                                <td className="p-3.5 text-center font-mono text-slate-400 text-xs">
-                                  {pct}%
+                                <td className="p-3.5 font-bold text-amber-400 text-xs">
+                                  {prizeText}
                                 </td>
 
-                                <td className="p-3.5 pr-5 text-right font-bold">
-                                  {rank === 1 ? (
-                                    <span className="text-amber-400 font-extrabold uppercase text-[10px] tracking-wider">
-                                      🏆 WINNER
-                                    </span>
-                                  ) : rank === 2 ? (
-                                    <span className="text-slate-300 font-extrabold uppercase text-[10px] tracking-wider">
-                                      🥈 RUNNER-UP
-                                    </span>
-                                  ) : rank === 3 ? (
-                                    <span className="text-amber-600 font-extrabold uppercase text-[10px] tracking-wider">
-                                      🥉 THIRD PLACE
-                                    </span>
+                                <td className="p-3.5 text-slate-400 text-[11px] font-mono">
+                                  {winTimeStr}
+                                </td>
+
+                                <td className="p-3.5 pr-5 text-right">
+                                  {isWinner ? (
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <button
+                                        onClick={() => handlePreviewBanner(activeC, cn, rank)}
+                                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 border border-slate-700 transition cursor-pointer"
+                                        title="Preview Winner Banner"
+                                      >
+                                        <Eye className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDownloadSingleBanner(activeC, cn, rank)}
+                                        className="py-1 px-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[11px] transition flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <Download className="w-3 h-3 stroke-[2.5px]" />
+                                        <span>PNG</span>
+                                      </button>
+                                    </div>
                                   ) : (
-                                    <span className="text-slate-500 text-[10px] uppercase">
-                                      PARTICIPANT
-                                    </span>
+                                    <span className="text-slate-600 text-[10px] uppercase font-bold">Participant</span>
                                   )}
                                 </td>
                               </tr>
@@ -2467,6 +2647,31 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                     placeholder="0.00"
                     className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
                   />
+                </div>
+
+                {/* Total Winners */}
+                <div className="space-y-1.5 md:col-span-2 p-3 rounded-xl bg-slate-950/60 border border-amber-500/20">
+                  <label className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1">
+                    <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                    Total Winners *
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={contestForm.totalWinners}
+                      onChange={e => {
+                        setIsFormDirty(true);
+                        setContestForm(prev => ({ ...prev, totalWinners: Math.max(1, parseInt(e.target.value) || 1) }));
+                      }}
+                      placeholder="3"
+                      className="w-32 px-3.5 py-2 text-xs font-bold rounded-xl bg-slate-900 border border-slate-800 text-amber-400 focus:outline-none focus:border-amber-500"
+                    />
+                    <p className="text-[11px] text-slate-400">
+                      Determines how many top contestants will be selected as official winners when End Voting is clicked.
+                    </p>
+                  </div>
                 </div>
 
                 {/* Banner Cover Image */}
@@ -2808,6 +3013,62 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BANNER PREVIEW MODAL */}
+      {previewBannerUrl && previewBannerUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-5 flex flex-col items-center text-center relative max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => {
+                setPreviewBannerUrl(null);
+                setPreviewBannerUser(null);
+              }}
+              className="absolute top-4 right-4 p-2 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-100 transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <span className="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/40 text-[11px] font-extrabold uppercase tracking-wider inline-flex items-center gap-1">
+                <Trophy className="w-3.5 h-3.5" />
+                Winner Banner Preview
+              </span>
+              <h3 className="text-lg font-black text-slate-100">{previewBannerUser.name}</h3>
+              <p className="text-xs text-slate-400">1080x1080 PNG Official Winner Certificate Banner</p>
+            </div>
+
+            <div className="w-full max-w-xs mx-auto aspect-square rounded-2xl overflow-hidden border-2 border-amber-400/40 shadow-2xl bg-slate-950">
+              <img src={previewBannerUrl} alt="Winner Banner" className="w-full h-full object-contain" />
+            </div>
+
+            <div className="flex items-center gap-3 w-full pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewBannerUrl(null);
+                  setPreviewBannerUser(null);
+                }}
+                className="flex-1 py-3 px-4 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+              >
+                Close Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const currentC = contests.find(c => c.id === (selectedContestId || contests[0]?.id)) || contests[0];
+                  if (currentC && previewBannerUser) {
+                    handleDownloadSingleBanner(currentC, previewBannerUser, previewBannerRank);
+                  }
+                }}
+                className="flex-1 py-3 px-5 rounded-xl text-xs font-black bg-amber-500 hover:bg-amber-400 text-slate-950 transition flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 cursor-pointer"
+              >
+                <Download className="w-4 h-4 stroke-[2.5px]" />
+                <span>Download PNG</span>
+              </button>
             </div>
           </div>
         </div>
