@@ -2,6 +2,7 @@ import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction,
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
 import { getContests, getContestants, submitVote } from '../services/contestService';
+import { sendAdminWithdrawalNotification, handleAdminWithdrawalCallback } from './adminWithdrawalBot';
 
 interface UserSession {
   step: 'FORCE_JOIN' | 'WAITING_NAME' | 'WAITING_MOBILE' | 'WAITING_CONTACT' | 'WITHDRAW_METHOD_SELECT' | 'WITHDRAW_AMOUNT' | 'WITHDRAW_DETAILS' | 'WITHDRAW_CONFIRM';
@@ -361,7 +362,7 @@ async function generateUniqueUid(): Promise<string> {
 /**
  * Send Telegram message helper
  */
-async function sendTelegramApi(token: string, method: string, payload: any) {
+export async function sendTelegramApi(token: string, method: string, payload: any) {
   try {
     const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method: 'POST',
@@ -537,9 +538,18 @@ export async function processTelegramUpdate(token: string, update: any) {
   // 2. HANDLE CALLBACK QUERIES (Inline Buttons like "Verify Join")
   if (update.callback_query) {
     const cb = update.callback_query;
+    const data = cb.data;
+
+    // Telegram Admin Withdrawal Management callbacks
+    if (data && data.startsWith('wdr_')) {
+      const adminConfig = await getAdminConfig();
+      const handled = await handleAdminWithdrawalCallback(token, cb, adminConfig);
+      if (handled) return;
+    }
+
     const chatType = cb.message?.chat?.type;
 
-    // Reject callback queries from groups, supergroups, or channels
+    // Reject callback queries from non-private chats for general users
     if (chatType !== 'private') {
       console.log('Ignored Group Update');
       return;
@@ -547,7 +557,6 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     const chatId = String(cb.message?.chat?.id || cb.from?.id);
     const cbId = cb.id;
-    const data = cb.data;
 
     if (data === 'check_membership') {
       const existingUser = await getUserByTelegramId(chatId);
@@ -798,7 +807,7 @@ export async function processTelegramUpdate(token: string, update: any) {
         const withdrawalId = `WDR_${Date.now().toString().slice(-6)}_${Math.floor(1000 + Math.random() * 9000)}`;
 
         // Add document to withdrawals collection first (maintaining status: pending)
-        await addDoc(collection(db, 'withdrawals'), {
+        const withdrawalData = {
           withdrawalId,
           userId: userDocId,
           uid: freshUserData.uid,
@@ -811,7 +820,9 @@ export async function processTelegramUpdate(token: string, update: any) {
           redeemCodeDetails: redeemCodeDetails,
           status: 'pending',
           createdAt: new Date().toISOString(),
-        });
+        };
+
+        const wDocRef = await addDoc(collection(db, 'withdrawals'), withdrawalData);
 
         // Method label for transaction log
         let methodDetailLog = '';
@@ -861,25 +872,16 @@ export async function processTelegramUpdate(token: string, update: any) {
           parse_mode: 'HTML',
         });
 
-        // Notify Admin via Telegram
+        // Notify Admin via Telegram with Interactive Approval Card
         const adminChat = adminConfig?.adminTelegramId || adminConfig?.adminChatId;
         if (adminChat) {
-          let adminMsgDetail = '';
-          if (method === 'upi') adminMsgDetail = `💳 <b>UPI ID:</b> <code>${upiId}</code>\n`;
-          else if (method === 'qr') adminMsgDetail = `🖼 <b>QR Image:</b> ${qrImageUrl ? `<a href="${qrImageUrl}">View QR Photo</a>` : 'Uploaded'}\n`;
-          else if (method === 'redeem_code') adminMsgDetail = `🎁 <b>Redeem Code:</b> <code>${redeemCodeDetails}</code>\n`;
-
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: adminChat,
-            text: `🔔 <b>New Pending Withdrawal Request!</b>\n\n` +
-              `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
-              `👤 <b>User:</b> ${freshUserData.firstName} (UID: <code>${freshUserData.uid}</code>)\n` +
-              `💵 <b>Amount:</b> ₹${amount}\n` +
-              `📌 <b>Method:</b> ${method.toUpperCase()}\n` +
-              adminMsgDetail +
-              `📱 <b>Mobile:</b> <code>${freshUserData.mobile}</code>`,
-            parse_mode: 'HTML',
-          });
+          await sendAdminWithdrawalNotification(
+            token,
+            adminChat,
+            wDocRef.id,
+            withdrawalData,
+            { ...freshUserData, walletBalance: newBalance }
+          );
         }
       } catch (err: any) {
         console.error('Error confirming withdrawal:', err);
