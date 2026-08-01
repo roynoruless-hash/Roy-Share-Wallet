@@ -230,6 +230,10 @@ export async function generateWinnerBannerDataUrl(
 
     const prizeText = winner.winnerPrize
       ? `${winner.winnerPrize}`
+      : winner.prizeAmount && winner.prizeAmount > 0
+      ? `₹${winner.prizeAmount}`
+      : Array.isArray(contest.winnerPrizes) && contest.winnerPrizes[rank - 1] !== undefined && contest.winnerPrizes[rank - 1] > 0
+      ? `₹${contest.winnerPrizes[rank - 1]}`
       : contest.winnerRewardAmount && contest.winnerRewardAmount > 0
       ? `₹${contest.winnerRewardAmount}`
       : '🏆 Champion Prize';

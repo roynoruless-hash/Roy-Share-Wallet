@@ -47,7 +47,8 @@ import {
   getVoteLinks,
   getContestLogs,
   saveVoteLink,
-  addContestLog
+  addContestLog,
+  creditContestantWinnerWallet
 } from '../services/contestService';
 import { uploadImageToStorage, uploadImageToImgBB } from '../services/storageService';
 import { generateWinnerBannerDataUrl, downloadDataUrl } from '../utils/bannerGenerator';
@@ -258,6 +259,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     voteIntervalHours: 0,
     voterRewardAmount: 0,
     winnerRewardAmount: 0,
+    winnerPrizes: [0, 0, 0] as number[],
     totalWinners: 3,
     status: 'active' as Contest['status']
   });
@@ -334,6 +336,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       voteIntervalHours: 0,
       voterRewardAmount: 0,
       winnerRewardAmount: 0,
+      winnerPrizes: [0, 0, 0],
       totalWinners: 3,
       status: 'active'
     });
@@ -662,19 +665,37 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       const sortedContestants = [...contestContestants].sort((a, b) => (b.votesCount || 0) - (a.votesCount || 0));
 
       const winningIsoTime = new Date().toISOString();
+      const winnerPrizes = Array.isArray(contest.winnerPrizes) ? contest.winnerPrizes : [];
 
-      // 3. Process each contestant with Rank, Winner Status, Prize, and Winning Time
+      let totalCreditedCount = 0;
+      let totalCreditedAmount = 0;
+
+      // 3. Process each contestant with Rank, Winner Status, Prize, Wallet Credit & Winning Time
       for (let i = 0; i < sortedContestants.length; i++) {
         const cn = sortedContestants[i];
         const rank = i + 1;
         const isWinner = rank <= totalWinnersCount;
 
-        let winnerPrize = '';
+        let prizeAmount = 0;
+        let winnerPrize = '-';
+        let walletCreditStatus: 'credited' | 'failed' | 'none' = 'none';
+
         if (isWinner) {
-          if (contest.winnerRewardAmount && contest.winnerRewardAmount > 0) {
-            winnerPrize = `₹${contest.winnerRewardAmount}`;
-          } else {
-            winnerPrize = `Winner Trophy & Badge`;
+          if (winnerPrizes.length > 0 && winnerPrizes[i] !== undefined) {
+            prizeAmount = Number(winnerPrizes[i]) || 0;
+          } else if (rank === 1 && contest.winnerRewardAmount && contest.winnerRewardAmount > 0) {
+            prizeAmount = Number(contest.winnerRewardAmount) || 0;
+          }
+
+          winnerPrize = prizeAmount > 0 ? `₹${prizeAmount}` : 'Winner Trophy & Badge';
+
+          if (prizeAmount > 0) {
+            const creditRes = await creditContestantWinnerWallet(cn, contest, prizeAmount, rank);
+            walletCreditStatus = creditRes.status;
+            if (creditRes.status === 'credited') {
+              totalCreditedCount++;
+              totalCreditedAmount += prizeAmount;
+            }
           }
         }
 
@@ -683,17 +704,23 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
           rank,
           isWinner,
           winnerPrize,
-          winningTime: winningIsoTime
+          prizeAmount,
+          walletCreditStatus,
+          winningTime: winningIsoTime,
+          winnerStatus: isWinner ? 'Winner' : 'Participant'
         });
       }
 
       await addContestLog({
         contestId: contest.id,
         action: 'END_VOTING',
-        details: `Admin manually ended voting. Locked votes and automatically selected top ${totalWinnersCount} winner(s).`
+        details: `Admin manually ended voting. Top ${totalWinnersCount} winner(s) finalized. Automatically credited ₹${totalCreditedAmount} to ${totalCreditedCount} winner wallet(s).`
       });
 
-      showToast(`🛑 Voting ended for "${contest.title}". Top ${totalWinnersCount} winner(s) finalized!`, 'success');
+      showToast(
+        `🛑 Voting ended for "${contest.title}". Top ${totalWinnersCount} winner(s) finalized and ₹${totalCreditedAmount} credited to ${totalCreditedCount} wallet(s)!`,
+        'success'
+      );
       setSelectedContestId(contest.id);
       setSelectedContestFilter(contest.id);
       setActiveSubTab('results');
@@ -783,6 +810,17 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       return;
     }
 
+    // Validate prize amounts
+    const currentPrizes = contestForm.winnerPrizes || [];
+    for (let i = 0; i < currentPrizes.length; i++) {
+      if (currentPrizes[i] < 0) {
+        showToast(`Rank ${i + 1} prize amount must be greater than or equal to ₹0`, 'error');
+        return;
+      }
+    }
+
+    const totalPrizePool = currentPrizes.reduce((sum, val) => sum + (Number(val) || 0), 0);
+
     setIsSavingContest(true);
 
     try {
@@ -800,7 +838,8 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
         maxVotesPerUser: contestForm.maxVotesPerUser,
         voteIntervalHours: contestForm.voteIntervalHours,
         voterRewardAmount: contestForm.voterRewardAmount,
-        winnerRewardAmount: contestForm.winnerRewardAmount,
+        winnerRewardAmount: totalPrizePool,
+        winnerPrizes: currentPrizes,
         totalWinners: contestForm.totalWinners || 3,
         status: contestForm.status,
         createdAt: editingContest?.createdAt || new Date().toISOString()
@@ -942,6 +981,21 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       startDateVal = parts[0];
       startTimeVal = parts[1].substring(0, 5);
     }
+    const totalW = contest.totalWinners || 3;
+    let initialPrizes: number[] = [];
+    if (Array.isArray(contest.winnerPrizes) && contest.winnerPrizes.length > 0) {
+      initialPrizes = contest.winnerPrizes.map(Number);
+    } else if (contest.winnerRewardAmount && contest.winnerRewardAmount > 0) {
+      initialPrizes = [contest.winnerRewardAmount];
+    }
+
+    const restoredPrizes: number[] = [];
+    for (let i = 0; i < totalW; i++) {
+      restoredPrizes.push(initialPrizes[i] !== undefined ? initialPrizes[i] : 0);
+    }
+
+    const totalPool = restoredPrizes.reduce((sum, p) => sum + (Number(p) || 0), 0);
+
     setContestForm({
       title: contest.title,
       description: contest.description,
@@ -952,8 +1006,9 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
       maxVotesPerUser: contest.maxVotesPerUser || 1,
       voteIntervalHours: contest.voteIntervalHours || 0,
       voterRewardAmount: contest.voterRewardAmount || 0,
-      winnerRewardAmount: contest.winnerRewardAmount || 0,
-      totalWinners: contest.totalWinners || 3,
+      winnerRewardAmount: totalPool,
+      winnerPrizes: restoredPrizes,
+      totalWinners: totalW,
       status: contest.status
     });
     setShowContestForm(true);
@@ -2134,7 +2189,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
             return (
               <div className="space-y-6">
                 {/* Header Stats Bar */}
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                   <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex items-center justify-between">
                     <div>
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Contest Title</span>
@@ -2165,6 +2220,18 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                       <span className="text-lg font-black font-mono text-amber-400">{totalWinnersCount} Winners</span>
                     </div>
                     <Award className="w-5 h-5 text-amber-400 shrink-0" />
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">💰 Total Prize Pool</span>
+                      <span className="text-lg font-black font-mono text-amber-400">
+                        ₹{((activeC.winnerPrizes && activeC.winnerPrizes.length > 0
+                          ? activeC.winnerPrizes.reduce((sum, p) => sum + (Number(p) || 0), 0)
+                          : activeC.winnerRewardAmount) || 0).toLocaleString()}
+                      </span>
+                    </div>
+                    <Coins className="w-5 h-5 text-amber-400 shrink-0" />
                   </div>
                 </div>
 
@@ -2249,14 +2316,26 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                               </div>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2 p-3 rounded-xl bg-slate-950/80 border border-slate-800/80">
+                            <div className="grid grid-cols-3 gap-2 p-3 rounded-xl bg-slate-950/80 border border-slate-800/80">
                               <div>
                                 <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Verified Votes</span>
                                 <span className="text-base font-black font-mono text-sky-400">{winner.votesCount || 0} ({pct}%)</span>
                               </div>
                               <div>
-                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Prize</span>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Prize Won</span>
                                 <span className="text-xs font-bold text-amber-400 truncate block">{prizeText}</span>
+                              </div>
+                              <div>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Payment Status</span>
+                                {winner.walletCreditStatus === 'credited' ? (
+                                  <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full inline-block">✅ Credited</span>
+                                ) : winner.walletCreditStatus === 'failed' ? (
+                                  <span className="text-[10px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/30 px-2 py-0.5 rounded-full inline-block">❌ Failed</span>
+                                ) : winner.prizeAmount && winner.prizeAmount > 0 ? (
+                                  <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-full inline-block">⏳ Pending</span>
+                                ) : (
+                                  <span className="text-[10px] font-bold text-slate-400 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-full inline-block">ℹ N/A</span>
+                                )}
                               </div>
                             </div>
 
@@ -2305,7 +2384,8 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                             <th className="p-3.5 pl-5 w-20">Rank</th>
                             <th className="p-3.5">Participant Name</th>
                             <th className="p-3.5 text-center">Verified Votes</th>
-                            <th className="p-3.5">Winner Prize</th>
+                            <th className="p-3.5">Prize Won</th>
+                            <th className="p-3.5">Payment Status</th>
                             <th className="p-3.5">Winning Time</th>
                             <th className="p-3.5 pr-5 text-right">Winner Banner</th>
                           </tr>
@@ -2384,6 +2464,26 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
                                 <td className="p-3.5 font-bold text-amber-400 text-xs">
                                   {prizeText}
+                                </td>
+
+                                <td className="p-3.5">
+                                  {cn.walletCreditStatus === 'credited' ? (
+                                    <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-bold inline-flex items-center gap-1">
+                                      ✅ Credited
+                                    </span>
+                                  ) : cn.walletCreditStatus === 'failed' ? (
+                                    <span className="px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[10px] font-bold inline-flex items-center gap-1">
+                                      ❌ Failed
+                                    </span>
+                                  ) : isWinner && ((cn.prizeAmount && cn.prizeAmount > 0) || (activeC.winnerRewardAmount && activeC.winnerRewardAmount > 0)) ? (
+                                    <span className="px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[10px] font-bold inline-flex items-center gap-1">
+                                      ⏳ Pending
+                                    </span>
+                                  ) : (
+                                    <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold inline-flex items-center gap-1">
+                                      ℹ N/A
+                                    </span>
+                                  )}
                                 </td>
 
                                 <td className="p-3.5 text-slate-400 text-[11px] font-mono">
@@ -2630,47 +2730,111 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                   />
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                    <Award className="w-3.5 h-3.5 text-amber-400" />
-                    Winner Cash Reward (₹)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={contestForm.winnerRewardAmount}
-                    onChange={e => {
-                      setIsFormDirty(true);
-                      setContestForm(prev => ({ ...prev, winnerRewardAmount: parseFloat(e.target.value) || 0 }));
-                    }}
-                    placeholder="0.00"
-                    className="w-full px-3.5 py-2.5 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-sky-500"
-                  />
-                </div>
+                {/* Total Winners & Dynamic Prize Configuration */}
+                <div className="space-y-4 md:col-span-2 p-4 rounded-2xl bg-slate-950/80 border border-amber-500/30">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-extrabold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <Trophy className="w-4 h-4 text-amber-400" />
+                        Total Winners & Prize Distribution *
+                      </label>
+                      <p className="text-[11px] text-slate-400">
+                        Specify total winners count and configure custom prize amounts for each rank.
+                      </p>
+                    </div>
 
-                {/* Total Winners */}
-                <div className="space-y-1.5 md:col-span-2 p-3 rounded-xl bg-slate-950/60 border border-amber-500/20">
-                  <label className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1">
-                    <Trophy className="w-3.5 h-3.5 text-amber-400" />
-                    Total Winners *
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="number"
-                      min="1"
-                      required
-                      value={contestForm.totalWinners}
-                      onChange={e => {
-                        setIsFormDirty(true);
-                        setContestForm(prev => ({ ...prev, totalWinners: Math.max(1, parseInt(e.target.value) || 1) }));
-                      }}
-                      placeholder="3"
-                      className="w-32 px-3.5 py-2 text-xs font-bold rounded-xl bg-slate-900 border border-slate-800 text-amber-400 focus:outline-none focus:border-amber-500"
-                    />
-                    <p className="text-[11px] text-slate-400">
-                      Determines how many top contestants will be selected as official winners when End Voting is clicked.
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-300">Total Winners:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="50"
+                        required
+                        value={contestForm.totalWinners}
+                        onChange={e => {
+                          const count = Math.max(1, Math.min(50, parseInt(e.target.value) || 1));
+                          setIsFormDirty(true);
+                          setContestForm(prev => {
+                            const currentPrizes = [...(prev.winnerPrizes || [])];
+                            const updatedPrizes: number[] = [];
+                            for (let i = 0; i < count; i++) {
+                              updatedPrizes.push(currentPrizes[i] !== undefined ? currentPrizes[i] : 0);
+                            }
+                            const pool = updatedPrizes.reduce((sum, p) => sum + (Number(p) || 0), 0);
+                            return {
+                              ...prev,
+                              totalWinners: count,
+                              winnerPrizes: updatedPrizes,
+                              winnerRewardAmount: pool
+                            };
+                          });
+                        }}
+                        className="w-24 px-3 py-1.5 text-xs font-bold font-mono text-center rounded-xl bg-slate-900 border border-slate-700 text-amber-400 focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Real-time Calculated Total Prize Pool Display */}
+                  <div className="p-3.5 rounded-xl bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-500/20 flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center shrink-0">
+                        <Coins className="w-4 h-4 text-amber-400" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Prize Pool</span>
+                        <span className="text-[11px] text-slate-400">Real-time sum of all rank prizes</span>
+                      </div>
+                    </div>
+                    <span className="text-lg font-black font-mono text-amber-400 bg-slate-900 px-3.5 py-1 rounded-xl border border-amber-500/30">
+                      💰 ₹{(contestForm.winnerPrizes || []).reduce((sum, p) => sum + (Number(p) || 0), 0).toLocaleString()}
+                    </span>
+                  </div>
+
+                  {/* Dynamic Prize Amount Fields Grid */}
+                  <div className="space-y-2 pt-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                      Individual Rank Prize Amounts (₹)
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                      {Array.from({ length: contestForm.totalWinners }).map((_, idx) => {
+                        const rank = idx + 1;
+                        const labelText = rank === 1 ? '🥇 1st Prize' : rank === 2 ? '🥈 2nd Prize' : rank === 3 ? '🥉 3rd Prize' : `🏅 ${rank}th Prize`;
+                        const prizeVal = contestForm.winnerPrizes[idx] !== undefined ? contestForm.winnerPrizes[idx] : 0;
+
+                        return (
+                          <div key={idx} className="space-y-1 p-2.5 rounded-xl bg-slate-900 border border-slate-800 focus-within:border-amber-500/50 transition">
+                            <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
+                              <span>{labelText}</span>
+                            </label>
+                            <div className="relative flex items-center">
+                              <span className="absolute left-2.5 text-xs text-amber-400 font-bold">₹</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={prizeVal}
+                                onChange={e => {
+                                  const num = Math.max(0, parseFloat(e.target.value) || 0);
+                                  setIsFormDirty(true);
+                                  setContestForm(prev => {
+                                    const newPrizes = [...(prev.winnerPrizes || [])];
+                                    newPrizes[idx] = num;
+                                    const pool = newPrizes.reduce((sum, p) => sum + (Number(p) || 0), 0);
+                                    return {
+                                      ...prev,
+                                      winnerPrizes: newPrizes,
+                                      winnerRewardAmount: pool
+                                    };
+                                  });
+                                }}
+                                placeholder="0"
+                                className="w-full pl-6 pr-2.5 py-1.5 text-xs font-mono font-bold rounded-lg bg-slate-950 border border-slate-800 text-amber-400 focus:outline-none focus:border-amber-500"
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
 

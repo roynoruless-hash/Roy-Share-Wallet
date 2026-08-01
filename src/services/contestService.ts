@@ -61,6 +61,7 @@ export async function getContests(): Promise<Contest[]> {
         voteIntervalHours: Number(data.voteIntervalHours) || 0,
         voterRewardAmount: Number(data.voterRewardAmount) || 0,
         winnerRewardAmount: Number(data.winnerRewardAmount) || 0,
+        winnerPrizes: Array.isArray(data.winnerPrizes) ? data.winnerPrizes.map(Number) : [],
         totalWinners: Number(data.totalWinners) || 3,
       });
     });
@@ -109,6 +110,7 @@ export async function saveContest(contest: Partial<Contest> & { id?: string }): 
     voteIntervalHours: contest.voteIntervalHours !== undefined ? Number(contest.voteIntervalHours) : 0,
     voterRewardAmount: contest.voterRewardAmount !== undefined ? Number(contest.voterRewardAmount) : 0,
     winnerRewardAmount: contest.winnerRewardAmount !== undefined ? Number(contest.winnerRewardAmount) : 0,
+    winnerPrizes: Array.isArray(contest.winnerPrizes) ? contest.winnerPrizes.map(Number) : [],
     totalWinners: contest.totalWinners !== undefined ? Number(contest.totalWinners) : 3,
   };
   await setDoc(contestRef, dataToSave, { merge: true });
@@ -227,11 +229,125 @@ export async function saveContestant(contestant: Partial<Contestant> & { id?: st
   if (contestant.winnerPrize !== undefined) {
     dataToSave.winnerPrize = contestant.winnerPrize;
   }
+  if (contestant.prizeAmount !== undefined) {
+    dataToSave.prizeAmount = Number(contestant.prizeAmount);
+  }
+  if (contestant.walletCreditStatus !== undefined) {
+    dataToSave.walletCreditStatus = contestant.walletCreditStatus;
+  }
   if (contestant.winningTime !== undefined) {
     dataToSave.winningTime = contestant.winningTime;
   }
+  if (contestant.winnerStatus !== undefined) {
+    dataToSave.winnerStatus = contestant.winnerStatus;
+  }
   await setDoc(contestantRef, dataToSave, { merge: true });
   return contestantId;
+}
+
+/**
+ * Credit contest prize to a winner's wallet and record transactions
+ */
+export async function creditContestantWinnerWallet(
+  contestant: Contestant,
+  contest: Contest,
+  prizeAmount: number,
+  rank: number
+): Promise<{ success: boolean; status: 'credited' | 'failed' | 'none'; message?: string }> {
+  if (prizeAmount <= 0) {
+    return { success: true, status: 'none', message: 'No prize amount to credit' };
+  }
+
+  try {
+    const usersRef = collection(db, 'users');
+    let userDoc: any = null;
+
+    // 1. Try matching by telegramId if present
+    if (contestant.telegramId) {
+      const qTg = query(usersRef, where('telegramId', '==', String(contestant.telegramId)), limit(1));
+      const snapTg = await getDocs(qTg);
+      if (!snapTg.empty) {
+        userDoc = snapTg.docs[0];
+      }
+    }
+
+    // 2. Try matching by username if not found
+    if (!userDoc && contestant.username) {
+      const cleanUsername = contestant.username.replace(/^@/, '').trim();
+      if (cleanUsername) {
+        const qUn = query(usersRef, where('username', '==', cleanUsername), limit(1));
+        const snapUn = await getDocs(qUn);
+        if (!snapUn.empty) {
+          userDoc = snapUn.docs[0];
+        }
+      }
+    }
+
+    // 3. Try matching by name if not found
+    if (!userDoc && contestant.name) {
+      const qNm = query(usersRef, where('firstName', '==', contestant.name.trim()), limit(1));
+      const snapNm = await getDocs(qNm);
+      if (!snapNm.empty) {
+        userDoc = snapNm.docs[0];
+      }
+    }
+
+    if (!userDoc) {
+      console.warn(`[creditContestantWinnerWallet] User doc not found for contestant ${contestant.name} (${contestant.telegramId})`);
+      return { success: false, status: 'failed', message: 'User account not found' };
+    }
+
+    const userData = userDoc.data();
+    const currentBalance = Number(userData.walletBalance) || 0;
+    const newBalance = currentBalance + prizeAmount;
+    const nowIso = new Date().toISOString();
+
+    // Update user balance in Firestore
+    await updateDoc(userDoc.ref, {
+      walletBalance: newBalance,
+      updatedAt: nowIso
+    });
+
+    // Record Transaction in transactions collection
+    const txnId = 'TXN_WIN_' + Math.random().toString(36).substring(2, 10).toUpperCase();
+    const txRef = doc(db, 'transactions', txnId);
+    const rankLabel = rank === 1 ? '1st' : rank === 2 ? '2nd' : rank === 3 ? '3rd' : `${rank}th`;
+
+    await setDoc(txRef, {
+      id: txnId,
+      transactionId: txnId,
+      userId: userDoc.id,
+      uid: userData.uid || '',
+      telegramId: String(userData.telegramId || contestant.telegramId || ''),
+      fullName: userData.firstName || contestant.name,
+      mobile: userData.mobile || '',
+      type: 'Contest Prize',
+      amount: prizeAmount,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      status: 'completed',
+      description: `🏆 Prize for ${rankLabel} Place in contest "${contest.title}"`,
+      createdAt: nowIso,
+    });
+
+    // Also record in walletTransactions collection for user history / bot
+    const walletTxnId = 'WTX_WIN_' + Math.random().toString(36).substring(2, 10).toUpperCase();
+    await setDoc(doc(db, 'walletTransactions', walletTxnId), {
+      transactionId: walletTxnId,
+      userId: userDoc.id,
+      uid: userData.uid || '',
+      type: 'Contest Prize',
+      amount: prizeAmount,
+      status: 'completed',
+      description: `🏆 Prize for ${rankLabel} Place in contest "${contest.title}"`,
+      createdAt: nowIso,
+    });
+
+    return { success: true, status: 'credited' };
+  } catch (err: any) {
+    console.error('Error crediting winner wallet:', err);
+    return { success: false, status: 'failed', message: err.message };
+  }
 }
 
 /**

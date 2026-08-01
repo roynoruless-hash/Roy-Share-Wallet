@@ -324,6 +324,7 @@ export interface Contest {
   voteIntervalHours?: number; // e.g., 24 for daily, 0 or undefined for one-time
   voterRewardAmount?: number; // wallet bonus for voting
   winnerRewardAmount?: number; // description or cash reward
+  winnerPrizes?: number[]; // rank prizes array [rank1, rank2, rank3...]
   totalWinners?: number; // default: 3
 }
 
@@ -343,7 +344,10 @@ export interface Contestant {
   rank?: number;
   isWinner?: boolean;
   winnerPrize?: string;
+  prizeAmount?: number;
+  walletCreditStatus?: 'credited' | 'failed' | 'none';
   winningTime?: string;
+  winnerStatus?: string;
 }
 
 export interface VoteLog {
