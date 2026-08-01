@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { Contest, Contestant, VoteLog, BotUser } from '../types';
+import { uploadImageToStorage } from './storageService';
 
 /**
  * Fetch all contests from Firestore
@@ -26,11 +27,25 @@ export async function getContests(): Promise<Contest[]> {
     const contests: Contest[] = [];
     querySnapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      let banner = data.bannerUrl || data.imageUrl || '';
+
+      // Asynchronously replace any legacy base64 image in Firestore
+      if (banner.startsWith('data:image')) {
+        const originalBase64 = banner;
+        uploadImageToStorage(originalBase64, 'contests').then((publicUrl) => {
+          if (publicUrl && publicUrl !== originalBase64) {
+            updateDoc(docSnap.ref, { bannerUrl: publicUrl, imageUrl: publicUrl }).catch(() => {});
+          }
+        }).catch(() => {});
+        banner = '';
+      }
+
       contests.push({
         id: docSnap.id,
         title: data.title || '',
         description: data.description || '',
-        imageUrl: data.imageUrl || '',
+        bannerUrl: banner,
+        imageUrl: banner,
         registrationStartDate: data.registrationStartDate || '',
         registrationEndDate: data.registrationEndDate || '',
         votingEndDate: data.votingEndDate || '',
@@ -62,10 +77,21 @@ export async function getContests(): Promise<Contest[]> {
 export async function saveContest(contest: Partial<Contest> & { id?: string }): Promise<string> {
   const contestId = contest.id || 'CST' + Math.random().toString(36).substring(2, 9).toUpperCase();
   const contestRef = doc(db, 'contests', contestId);
+
+  let bannerUrl = contest.bannerUrl || contest.imageUrl || '';
+  if (bannerUrl && bannerUrl.startsWith('data:image')) {
+    try {
+      bannerUrl = await uploadImageToStorage(bannerUrl, 'contests');
+    } catch (err) {
+      console.error('Failed to upload banner image to Firebase Storage:', err);
+    }
+  }
+
   const dataToSave: any = {
     title: contest.title || '',
     description: contest.description || '',
-    imageUrl: contest.imageUrl || '',
+    bannerUrl: bannerUrl,
+    imageUrl: bannerUrl,
     registrationStartDate: contest.registrationStartDate || new Date().toISOString().split('T')[0],
     registrationEndDate: contest.registrationEndDate || '',
     votingEndDate: contest.votingEndDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0] + 'T23:59',
@@ -116,6 +142,18 @@ export async function getContestants(contestId?: string): Promise<Contestant[]> 
     const contestants: Contestant[] = [];
     querySnapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      let img = data.imageUrl || '';
+
+      if (img.startsWith('data:image')) {
+        const originalBase64 = img;
+        uploadImageToStorage(originalBase64, 'contestants').then((publicUrl) => {
+          if (publicUrl && publicUrl !== originalBase64) {
+            updateDoc(docSnap.ref, { imageUrl: publicUrl }).catch(() => {});
+          }
+        }).catch(() => {});
+        img = '';
+      }
+
       contestants.push({
         id: docSnap.id,
         contestId: data.contestId || '',
@@ -124,7 +162,7 @@ export async function getContestants(contestId?: string): Promise<Contestant[]> 
         telegramId: data.telegramId || '',
         username: data.username || '',
         description: data.description || '',
-        imageUrl: data.imageUrl || '',
+        imageUrl: img,
         votesCount: Number(data.votesCount) || 0,
         status: data.status || 'pending',
         createdAt: data.createdAt || new Date().toISOString(),
@@ -146,6 +184,16 @@ export async function getContestants(contestId?: string): Promise<Contestant[]> 
 export async function saveContestant(contestant: Partial<Contestant> & { id?: string; contestId: string }): Promise<string> {
   const contestantId = contestant.id || 'CNT' + Math.random().toString(36).substring(2, 9).toUpperCase();
   const contestantRef = doc(db, 'contestants', contestantId);
+
+  let imageUrl = contestant.imageUrl || '';
+  if (imageUrl && imageUrl.startsWith('data:image')) {
+    try {
+      imageUrl = await uploadImageToStorage(imageUrl, 'contestants');
+    } catch (err) {
+      console.error('Failed to upload contestant image to Firebase Storage:', err);
+    }
+  }
+
   const dataToSave: any = {
     contestId: contestant.contestId,
     contestTitle: contestant.contestTitle || '',
@@ -153,7 +201,7 @@ export async function saveContestant(contestant: Partial<Contestant> & { id?: st
     telegramId: contestant.telegramId || '',
     username: contestant.username || '',
     description: contestant.description || '',
-    imageUrl: contestant.imageUrl || '',
+    imageUrl: imageUrl,
     votesCount: contestant.votesCount !== undefined ? Number(contestant.votesCount) : 0,
     status: contestant.status || 'pending',
     createdAt: contestant.createdAt || new Date().toISOString(),

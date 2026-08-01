@@ -307,6 +307,7 @@ export interface Contest {
   id: string;
   title: string;
   description: string;
+  bannerUrl?: string;
   imageUrl?: string;
   registrationStartDate: string;
   registrationEndDate?: string;

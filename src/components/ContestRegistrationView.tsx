@@ -13,6 +13,7 @@ import {
   Share2
 } from 'lucide-react';
 import { getContests, saveContestant } from '../services/contestService';
+import { uploadImageToStorage } from '../services/storageService';
 import { Contest } from '../types';
 
 interface ContestRegistrationViewProps {
@@ -101,26 +102,26 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
     }
   };
 
-  const processFile = (file: File) => {
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+
+  const processFile = async (file: File) => {
     if (!file.type.startsWith('image/')) {
       setImageError('Please upload an image file (PNG/JPG/WEBP).');
       return;
     }
-    // Limit to 150KB for Base64 storage in firestore
-    if (file.size > 150 * 1024) {
-      setImageError('Please select a smaller image (under 150KB) to ensure quick loading.');
-      return;
-    }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      setImageUrl(reader.result as string);
-      setImageError(null);
-    };
-    reader.onerror = () => {
-      setImageError('Failed to read image file.');
-    };
-    reader.readAsDataURL(file);
+    setIsUploadingImage(true);
+    setImageError(null);
+
+    try {
+      const publicUrl = await uploadImageToStorage(file, 'contestants');
+      setImageUrl(publicUrl);
+    } catch (err: any) {
+      console.error('Failed to upload image:', err);
+      setImageError('Failed to upload image to Firebase Storage. Please try again.');
+    } finally {
+      setIsUploadingImage(false);
+    }
   };
 
   const clearImage = () => {
@@ -425,7 +426,12 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
             <div className="space-y-1.5">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Contestant Photo / Avatar (Optional)</label>
               
-              {!imageUrl ? (
+              {isUploadingImage ? (
+                <div className="border border-dashed rounded-2xl p-6 text-center border-sky-500 bg-sky-500/5 flex flex-col items-center justify-center space-y-2">
+                  <Loader2 className="w-6 h-6 text-sky-400 animate-spin" />
+                  <p className="text-xs font-semibold text-slate-350">Uploading photo to Firebase Storage...</p>
+                </div>
+              ) : !imageUrl ? (
                 <div
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
@@ -448,7 +454,7 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
                   <p className="text-xs font-semibold text-slate-350">
                     Drag & Drop your photo here, or <span className="text-sky-400">Browse</span>
                   </p>
-                  <p className="text-[10px] text-slate-500">Supports JPG, PNG, WEBP (Max: 150KB)</p>
+                  <p className="text-[10px] text-slate-500">Supports JPG, PNG, WEBP (Auto-compressed & saved to Storage)</p>
                 </div>
               ) : (
                 <div className="p-4 rounded-2xl bg-slate-950 border border-slate-850 flex items-center justify-between">

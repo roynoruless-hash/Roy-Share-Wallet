@@ -31,7 +31,8 @@ import {
   Rocket,
   CheckCircle,
   XCircle,
-  Trophy
+  Trophy,
+  RotateCw
 } from 'lucide-react';
 import { Contest, Contestant, VoteLog, AdminConfig, ContestLog } from '../types';
 import {
@@ -47,6 +48,7 @@ import {
   saveVoteLink,
   addContestLog
 } from '../services/contestService';
+import { uploadImageToStorage } from '../services/storageService';
 
 interface VotingContestsViewProps {
   config: AdminConfig;
@@ -358,6 +360,80 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
   const [selectedContestFilter, setSelectedContestFilter] = useState('all');
   const [contestantStatusFilter, setContestantStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [logSearch, setLogSearch] = useState('');
+
+  // Refresh & Touch states for Contestants
+  const [isRefreshingContestants, setIsRefreshingContestants] = useState(false);
+  const [touchStartY, setTouchStartY] = useState<number | null>(null);
+  const [pullDistance, setPullDistance] = useState<number>(0);
+
+  // Dedicated Refresh for Contestants module
+  const handleRefreshContestants = async (isManual = true) => {
+    if (isRefreshingContestants) return;
+    setIsRefreshingContestants(true);
+    try {
+      const [cnList, cList, lList, cLogList] = await Promise.all([
+        getContestants(),
+        getContests(),
+        getVoteLogs(),
+        getContestLogs()
+      ]);
+
+      setContestants(cnList);
+      setContests(cList);
+      setVoteLogs(lList);
+      setContestLogs(cLogList);
+      setLastUpdatedTime(new Date().toLocaleTimeString());
+
+      if (isManual) {
+        showToast('✅ Contestants refreshed successfully.', 'success');
+      }
+    } catch (err) {
+      console.error('Error refreshing contestants:', err);
+      if (isManual) {
+        showToast('❌ Failed to refresh. Please try again.', 'error');
+      }
+    } finally {
+      setIsRefreshingContestants(false);
+    }
+  };
+
+  // Auto refresh contestants every 15 seconds when viewing Contestants tab
+  useEffect(() => {
+    if (activeSubTab !== 'contestants') return;
+
+    const intervalId = setInterval(() => {
+      handleRefreshContestants(false);
+    }, 15000);
+
+    return () => clearInterval(intervalId);
+  }, [activeSubTab]);
+
+  // Touch handlers for mobile Pull-to-Refresh
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (activeSubTab === 'contestants' && window.scrollY <= 10) {
+      setTouchStartY(e.touches[0].clientY);
+    } else {
+      setTouchStartY(null);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (activeSubTab === 'contestants' && touchStartY !== null && window.scrollY <= 10) {
+      const currentY = e.touches[0].clientY;
+      const diff = currentY - touchStartY;
+      if (diff > 0) {
+        setPullDistance(Math.min(diff, 100));
+      }
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (activeSubTab === 'contestants' && pullDistance > 60 && !isRefreshingContestants) {
+      handleRefreshContestants(true);
+    }
+    setTouchStartY(null);
+    setPullDistance(0);
+  };
 
   // Initial Fetch
   const reloadAllData = async () => {
@@ -797,28 +873,26 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     setShowContestantForm(true);
   };
 
-  // Image Upload base64 parser helper
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'contest' | 'contestant') => {
+  // Image Upload helper using Firebase Storage
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'contest' | 'contestant') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 2 * 1024 * 1024) {
-      showToast('Image size exceeds 2MB limit.', 'error');
-      return;
-    }
+    showToast('Uploading image to Firebase Storage...', 'info');
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setIsFormDirty(true);
-        if (type === 'contest') {
-          setContestForm(prev => ({ ...prev, imageUrl: reader.result as string }));
-        } else {
-          setContestantForm(prev => ({ ...prev, imageUrl: reader.result as string }));
-        }
+    try {
+      const publicUrl = await uploadImageToStorage(file, type === 'contest' ? 'contests' : 'contestants');
+      setIsFormDirty(true);
+      if (type === 'contest') {
+        setContestForm(prev => ({ ...prev, imageUrl: publicUrl }));
+      } else {
+        setContestantForm(prev => ({ ...prev, imageUrl: publicUrl }));
       }
-    };
-    reader.readAsDataURL(file);
+      showToast('Image uploaded successfully!', 'success');
+    } catch (err) {
+      console.error('Image upload failed:', err);
+      showToast('Failed to upload image to Firebase Storage.', 'error');
+    }
   };
 
   // Filter Contests and Contestants based on search
@@ -1376,7 +1450,32 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
       {/* TAB 2: CONTESTANTS */}
       {activeSubTab === 'contestants' && (
-        <div className="space-y-4">
+        <div
+          className="space-y-4 touch-pan-y"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        >
+          {/* Mobile Pull-to-Refresh Indicator */}
+          {(pullDistance > 0 || isRefreshingContestants) && (
+            <div
+              className="flex items-center justify-center gap-2 py-2 text-xs text-sky-400 font-bold transition-all overflow-hidden bg-slate-900/80 rounded-xl border border-sky-500/20 shadow-lg"
+              style={{
+                height: isRefreshingContestants ? '40px' : `${Math.min(pullDistance, 50)}px`,
+                opacity: isRefreshingContestants ? 1 : pullDistance / 60
+              }}
+            >
+              <RotateCw className={`w-4 h-4 text-sky-400 ${isRefreshingContestants || pullDistance > 60 ? 'animate-spin' : ''}`} />
+              <span>
+                {isRefreshingContestants
+                  ? 'Refreshing contestants...'
+                  : pullDistance > 60
+                  ? 'Release to refresh'
+                  : 'Pull down to refresh'}
+              </span>
+            </div>
+          )}
+
           {/* Controls Bar */}
           <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
             {/* Contest Filter dropdown */}
@@ -1406,6 +1505,17 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
                 className="w-full pl-10 pr-4 py-2.5 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500"
               />
             </div>
+
+            {/* Refresh Button */}
+            <button
+              onClick={() => handleRefreshContestants(true)}
+              disabled={isRefreshingContestants}
+              className="py-2.5 px-3.5 rounded-xl font-bold text-xs bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 hover:text-sky-400 transition flex items-center justify-center gap-1.5 shadow-md disabled:opacity-60 cursor-pointer shrink-0"
+              title="Refresh Contestants Data"
+            >
+              <RotateCw className={`w-4 h-4 text-sky-400 ${isRefreshingContestants ? 'animate-spin' : ''}`} />
+              <span>Refresh</span>
+            </button>
 
             {/* Add Contestant Button */}
             <button
