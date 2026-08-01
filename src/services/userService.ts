@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs, doc, runTransaction, addDoc, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, runTransaction, addDoc, deleteDoc, orderBy, limit } from 'firebase/firestore';
 import { db } from './firebase';
 import { BotUser, WalletTransaction } from '../types';
 
@@ -439,4 +439,147 @@ export async function unbanUser(params: {
     return { success: false, error: err.message || 'Unban action failed' };
   }
 }
+
+/**
+ * Permanently delete a user account and all associated data from Firestore:
+ * - Profile document
+ * - Wallet & transaction history
+ * - Referral tokens & logs
+ * - Milestone tokens & claim records
+ * - Feedback reviews & OTPs
+ * - Contest registrations & contestants
+ * - Vote history & vote links
+ * - Withdrawals & device fingerprints
+ * - Writes audit log to adminLogs and userDeleteLogs
+ */
+export async function deleteUserAccountPermanently(params: {
+  user: BotUser;
+  adminId?: string;
+  adminName?: string;
+  reason?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const { user, adminId = 'Super Admin', adminName = 'Super Admin', reason = '' } = params;
+
+  if (!user || (!user.id && !user.uid)) {
+    return { success: false, error: 'Invalid user target for deletion.' };
+  }
+
+  try {
+    // Helper to query & delete matching documents in a collection
+    const deleteMatchingDocs = async (collectionName: string, fieldName: string, fieldValue: string | undefined | null) => {
+      if (!fieldValue) return;
+      try {
+        const colRef = collection(db, collectionName);
+        const q = query(colRef, where(fieldName, '==', fieldValue));
+        const snap = await getDocs(q);
+        for (const docSnap of snap.docs) {
+          await deleteDoc(doc(db, collectionName, docSnap.id));
+        }
+      } catch (err) {
+        console.warn(`Error deleting matching docs in ${collectionName} for ${fieldName}=${fieldValue}:`, err);
+      }
+    };
+
+    // 1. Delete user document from 'users'
+    if (user.id) {
+      try {
+        await deleteDoc(doc(db, 'users', user.id));
+      } catch (e) {}
+    }
+    await deleteMatchingDocs('users', 'uid', user.uid);
+    await deleteMatchingDocs('users', 'telegramId', user.telegramId);
+    if (user.mobile && user.mobile !== 'N/A') {
+      await deleteMatchingDocs('users', 'mobile', user.mobile);
+    }
+
+    // 2. Delete wallet transactions
+    await deleteMatchingDocs('transactions', 'uid', user.uid);
+    await deleteMatchingDocs('transactions', 'userId', user.id);
+    await deleteMatchingDocs('transactions', 'telegramId', user.telegramId);
+
+    // 3. Delete referral data
+    await deleteMatchingDocs('referralTokens', 'uid', user.uid);
+    await deleteMatchingDocs('referralTokens', 'referrerUid', user.uid);
+    await deleteMatchingDocs('referralTokens', 'referredUid', user.uid);
+    await deleteMatchingDocs('referralLogs', 'uid', user.uid);
+    await deleteMatchingDocs('referralLogs', 'referrerUid', user.uid);
+    await deleteMatchingDocs('referralLogs', 'referredUid', user.uid);
+
+    // 4. Delete milestone data
+    await deleteMatchingDocs('milestoneTokens', 'uid', user.uid);
+    await deleteMatchingDocs('milestoneTokens', 'telegramId', user.telegramId);
+    await deleteMatchingDocs('milestoneClaimRecords', 'uid', user.uid);
+    await deleteMatchingDocs('milestoneClaimRecords', 'telegramId', user.telegramId);
+
+    // 5. Delete feedback & reviews
+    await deleteMatchingDocs('feedbackReviews', 'uid', user.uid);
+    await deleteMatchingDocs('feedbackReviews', 'telegramId', user.telegramId);
+    if (user.mobile && user.mobile !== 'N/A') {
+      const cleanMobile = user.mobile.replace(/\D/g, '');
+      if (cleanMobile) {
+        try {
+          await deleteDoc(doc(db, 'feedbackOtps', cleanMobile));
+        } catch (e) {}
+      }
+    }
+
+    // 6. Delete contest registrations & contestants
+    await deleteMatchingDocs('contestants', 'uid', user.uid);
+    await deleteMatchingDocs('contestants', 'telegramId', user.telegramId);
+    await deleteMatchingDocs('contestants', 'userId', user.id);
+
+    // 7. Delete vote history & vote links
+    await deleteMatchingDocs('voteLogs', 'voterUid', user.uid);
+    await deleteMatchingDocs('voteLogs', 'uid', user.uid);
+    await deleteMatchingDocs('voteLogs', 'telegramId', user.telegramId);
+    await deleteMatchingDocs('voteLogs', 'voterTelegramId', user.telegramId);
+    await deleteMatchingDocs('voteLinks', 'uid', user.uid);
+    await deleteMatchingDocs('voteLinks', 'telegramId', user.telegramId);
+
+    // 8. Delete withdrawals
+    await deleteMatchingDocs('withdrawals', 'uid', user.uid);
+    await deleteMatchingDocs('withdrawals', 'userId', user.id);
+    await deleteMatchingDocs('withdrawals', 'telegramId', user.telegramId);
+
+    // 9. Delete device fingerprints
+    await deleteMatchingDocs('deviceFingerprints', 'uid', user.uid);
+    await deleteMatchingDocs('deviceFingerprints', 'telegramId', user.telegramId);
+    await deleteMatchingDocs('bannedDevices', 'uid', user.uid);
+
+    // 10. Audit log entries
+    const nowIso = new Date().toISOString();
+    await addDoc(collection(db, 'adminLogs'), {
+      action: 'DELETE_USER_ACCOUNT',
+      adminId,
+      adminName,
+      targetUid: user.uid,
+      targetMobile: user.mobile || 'N/A',
+      targetTelegramId: user.telegramId || 'N/A',
+      userFirstName: user.firstName || 'User',
+      username: user.username || '',
+      reason: reason.trim() || 'Admin Permanent Account Deletion',
+      timestamp: nowIso,
+      createdAt: nowIso,
+    });
+
+    await addDoc(collection(db, 'userDeleteLogs'), {
+      adminId,
+      adminName,
+      targetUid: user.uid,
+      targetMobile: user.mobile || 'N/A',
+      targetTelegramId: user.telegramId || 'N/A',
+      userFirstName: user.firstName || 'User',
+      username: user.username || '',
+      reason: reason.trim() || 'Admin Permanent Account Deletion',
+      deletedAt: nowIso,
+      timestamp: nowIso,
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Failed to delete user account:', err);
+    return { success: false, error: err.message || 'Deletion failed.' };
+  }
+}
+
 

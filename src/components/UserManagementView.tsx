@@ -26,6 +26,8 @@ import {
   Send,
   History,
   FileText,
+  Trash2,
+  ShieldAlert,
 } from 'lucide-react';
 import { AdminConfig, BotUser, WalletTransaction } from '../types';
 import {
@@ -36,6 +38,7 @@ import {
   banUser,
   unbanUser,
   sendDirectTelegramMessage,
+  deleteUserAccountPermanently,
 } from '../services/userService';
 
 interface UserManagementViewProps {
@@ -60,10 +63,13 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
   const [passbookPage, setPassbookPage] = useState(1);
 
   // Modal Action States
-  const [activeModal, setActiveModal] = useState<'credit' | 'debit' | 'ban' | 'unban' | 'message' | null>(null);
+  const [activeModal, setActiveModal] = useState<'credit' | 'debit' | 'ban' | 'unban' | 'message' | 'delete' | null>(null);
   const [modalAmount, setModalAmount] = useState('');
   const [modalReason, setModalReason] = useState('');
   const [modalMessage, setModalMessage] = useState('');
+  const [deleteOtp, setDeleteOtp] = useState('');
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Load Users from Firestore
@@ -121,6 +127,96 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
     setModalAmount('');
     setModalReason('');
     setModalMessage('');
+    setDeleteOtp('');
+    setOtpSent(false);
+    setIsSendingOtp(false);
+  };
+
+  // Request OTP for account deletion
+  const handleRequestDeleteOtp = async () => {
+    if (!selectedUser) return;
+    setIsSendingOtp(true);
+    try {
+      const res = await fetch('/api/admin/request-delete-user-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetUid: selectedUser.uid,
+          targetMobile: selectedUser.mobile,
+          targetTelegramId: selectedUser.telegramId,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🔐 Delete verification OTP sent to Super Admin Telegram!', 'success');
+        setOtpSent(true);
+      } else {
+        showToast(data.error || 'Failed to send OTP to Admin Telegram', 'error');
+      }
+    } catch (err: any) {
+      showToast('Network error requesting OTP', 'error');
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
+
+  // Handle Action: Delete User Account
+  const handleDeleteAccount = async () => {
+    if (!selectedUser) return;
+
+    setIsSubmitting(true);
+    try {
+      let res: any = null;
+      try {
+        const apiRes = await fetch('/api/admin/delete-user-account', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targetUid: selectedUser.uid,
+            targetDocId: selectedUser.id,
+            targetTelegramId: selectedUser.telegramId,
+            targetMobile: selectedUser.mobile,
+            changeOtp: deleteOtp.trim(),
+            reason: modalReason.trim() || 'Super Admin Account Deletion',
+          }),
+        });
+        res = await apiRes.json();
+      } catch (e) {
+        console.warn('API call failed, executing direct Firestore fallback:', e);
+      }
+
+      if (res && res.success) {
+        showToast('✅ User account deleted successfully. The user can now register again as a new account.', 'success');
+        const deletedUid = selectedUser.uid;
+        setSelectedUser(null);
+        closeModal();
+        setUsers((prev) => prev.filter((u) => u.uid !== deletedUid && u.id !== selectedUser.id));
+        loadUsers();
+      } else if (res && res.error) {
+        showToast(`Deletion failed: ${res.error}`, 'error');
+      } else {
+        const directRes = await deleteUserAccountPermanently({
+          user: selectedUser,
+          adminId: config.adminTelegramId || 'Super Admin',
+          adminName: 'Super Admin',
+          reason: modalReason.trim() || 'Super Admin Account Deletion',
+        });
+        if (directRes.success) {
+          showToast('✅ User account deleted successfully. The user can now register again as a new account.', 'success');
+          const deletedUid = selectedUser.uid;
+          setSelectedUser(null);
+          closeModal();
+          setUsers((prev) => prev.filter((u) => u.uid !== deletedUid && u.id !== selectedUser.id));
+          loadUsers();
+        } else {
+          showToast(`Deletion failed: ${directRes.error}`, 'error');
+        }
+      }
+    } catch (err: any) {
+      showToast(`Error deleting account: ${err.message}`, 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Handle Action: Add Money
@@ -614,7 +710,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
             {/* ADMIN ACTION BUTTONS */}
             <div className="space-y-2">
               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Admin Actions</h4>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                 <button
                   onClick={() => setActiveModal('credit')}
                   className="py-2.5 px-3 rounded-xl text-xs font-bold bg-emerald-500/15 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/30 transition flex items-center justify-center gap-1.5 shadow-sm"
@@ -654,7 +750,15 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
                   className="py-2.5 px-3 rounded-xl text-xs font-bold bg-sky-500/15 hover:bg-sky-500 text-sky-400 hover:text-slate-950 border border-sky-500/30 transition flex items-center justify-center gap-1.5 shadow-sm"
                 >
                   <MessageSquare className="w-4 h-4" />
-                  <span>💬 Send Message</span>
+                  <span>💬 Message</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveModal('delete')}
+                  className="py-2.5 px-3 rounded-xl text-xs font-bold bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 transition flex items-center justify-center gap-1.5 shadow-sm col-span-2 sm:col-span-1"
+                >
+                  <Trash2 className="w-4 h-4 text-rose-400" />
+                  <span>🗑️ Delete</span>
                 </button>
               </div>
             </div>
@@ -1019,6 +1123,133 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
               >
                 {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 <span>Send Message</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ACTION MODAL: DELETE USER ACCOUNT (SUPER ADMIN ONLY) */}
+      {activeModal === 'delete' && selectedUser && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-rose-900/60 rounded-2xl w-full max-w-lg p-6 space-y-5 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-3 border-b border-rose-900/40">
+              <div className="flex items-center gap-2 text-rose-400 font-bold text-base">
+                <ShieldAlert className="w-6 h-6 text-rose-500" />
+                <span>Delete User Account (Super Admin)</span>
+              </div>
+              <button onClick={closeModal} className="text-slate-400 hover:text-white p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Permanent Warning Box */}
+            <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs space-y-2">
+              <div className="flex items-center gap-2 text-rose-400 font-bold text-sm">
+                <AlertTriangle className="w-5 h-5 shrink-0" />
+                <span>⚠️ PERMANENT DELETION WARNING</span>
+              </div>
+              <p className="font-semibold text-rose-100">
+                Are you sure you want to permanently delete this user account? This action cannot be undone.
+              </p>
+            </div>
+
+            {/* Target Summary Card */}
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs text-slate-300">
+              <div className="font-bold text-white text-sm pb-1 border-b border-slate-800 flex justify-between">
+                <span>👤 {selectedUser.firstName}</span>
+                <span className="text-sky-400 font-mono">UID: {selectedUser.uid}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                <div>📱 Mobile: <b className="text-slate-200">{selectedUser.mobile || 'N/A'}</b></div>
+                <div>🆔 Telegram ID: <b className="text-slate-200">{selectedUser.telegramId}</b></div>
+                <div>💰 Wallet: <b className="text-emerald-400">₹{selectedUser.walletBalance}</b></div>
+                <div>👥 Referrals: <b className="text-slate-200">{selectedUser.totalReferrals || 0}</b></div>
+              </div>
+            </div>
+
+            {/* Items wiped notice */}
+            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+              <span className="font-bold text-slate-300 block">The following data will be permanently purged:</span>
+              <ul className="list-disc list-inside space-y-0.5 text-slate-400">
+                <li>Firestore Profile & Status records</li>
+                <li>Wallet balance & full transaction history</li>
+                <li>Referral tokens, logs & milestone claim records</li>
+                <li>Feedback submissions & OTP verifications</li>
+                <li>Contest registrations & voting history</li>
+                <li>Withdrawal requests & device verification fingerprints</li>
+              </ul>
+              <p className="pt-1.5 text-emerald-400 font-medium">
+                ✅ Once deleted, the mobile number and Telegram ID will be completely freed, allowing the user to register again as a new account.
+              </p>
+            </div>
+
+            {/* Verification & Reason Input */}
+            <div className="space-y-3 pt-1">
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-xs font-bold text-slate-200">
+                    🔐 Security OTP / Password Confirmation
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleRequestDeleteOtp}
+                    disabled={isSendingOtp}
+                    className="text-[11px] text-sky-400 hover:text-sky-300 font-semibold underline disabled:opacity-50"
+                  >
+                    {isSendingOtp ? 'Sending OTP...' : otpSent ? 'Resend OTP to Bot' : 'Send OTP to Admin Bot'}
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={deleteOtp}
+                  onChange={(e) => setDeleteOtp(e.target.value)}
+                  placeholder={otpSent ? "Enter 6-digit OTP sent to Telegram" : "Enter OTP or Admin Confirmation Code"}
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-mono placeholder:font-sans placeholder:text-slate-500 focus:outline-none focus:border-rose-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-200 block mb-1">
+                  Reason for Deletion (Optional - for Audit Log)
+                </label>
+                <input
+                  type="text"
+                  value={modalReason}
+                  onChange={(e) => setModalReason(e.target.value)}
+                  placeholder="e.g. Fraudulent account / Duplicate entry / User requested"
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-rose-500"
+                />
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={closeModal}
+                disabled={isSubmitting}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteAccount}
+                disabled={isSubmitting}
+                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white flex items-center gap-2 transition shadow-lg disabled:opacity-50"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Deleting Account...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>Permanently Delete User</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

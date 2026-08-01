@@ -1285,6 +1285,177 @@ async function startServer() {
     }
   });
 
+  // Request delete user verification OTP
+  app.post('/api/admin/request-delete-user-otp', requireAdminSession, async (req, res) => {
+    try {
+      const { targetUid, targetMobile, targetTelegramId } = req.body;
+      const decryptedConfig = await getDecryptedConfig();
+      if (!decryptedConfig || !decryptedConfig.botToken || !decryptedConfig.adminChatId) {
+        return res.status(400).json({ success: false, error: 'Bot is not fully configured.' });
+      }
+
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
+
+      await setDoc(doc(db, 'adminOtps', `admin_delete_user_${targetUid || 'otp'}`), {
+        otp,
+        targetUid,
+        expiresAt,
+        createdAt: new Date().toISOString()
+      });
+
+      const text =
+        `⚠️ <b>SUPER ADMIN ACTION: DELETE USER ACCOUNT</b>\n\n` +
+        `<b>Target UID:</b> <code>${targetUid || 'N/A'}</code>\n` +
+        `<b>Target Mobile:</b> ${targetMobile || 'N/A'}\n` +
+        `<b>Telegram ID:</b> <code>${targetTelegramId || 'N/A'}</code>\n\n` +
+        `<b>Verification OTP:</b>\n<code>${otp}</code>\n\n` +
+        `<i>Valid for 5 minutes. Enter this OTP in Admin Dashboard to confirm permanent deletion.</i>`;
+
+      await sendTelegramMessage(decryptedConfig.botToken, decryptedConfig.adminChatId, text);
+
+      return res.json({ success: true, message: 'Delete Account verification OTP sent to Super Admin Telegram.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Execute Delete User Account (Protected)
+  app.post('/api/admin/delete-user-account', requireAdminSession, async (req, res) => {
+    try {
+      const { targetUid, targetDocId, targetTelegramId, targetMobile, changeOtp, reason } = req.body;
+
+      if (!targetUid && !targetDocId) {
+        return res.status(400).json({ success: false, error: 'Target User UID or Document ID is required.' });
+      }
+
+      // Verify OTP if provided or required
+      const otpDocKey = `admin_delete_user_${targetUid || 'otp'}`;
+      const otpDoc = await getDoc(doc(db, 'adminOtps', otpDocKey));
+
+      if (otpDoc.exists()) {
+        const otpData = otpDoc.data();
+        if (Date.now() > otpData.expiresAt) {
+          return res.status(400).json({ success: false, error: 'Verification OTP has expired. Please request a new OTP.' });
+        }
+        if (String(changeOtp).trim() !== otpData.otp) {
+          return res.status(400).json({ success: false, error: 'Invalid verification OTP. Please try again.' });
+        }
+        await deleteDoc(doc(db, 'adminOtps', otpDocKey));
+      } else if (changeOtp) {
+        const fallbackOtpDoc = await getDoc(doc(db, 'adminOtps', 'admin_settings_change_otp'));
+        if (fallbackOtpDoc.exists()) {
+          const otpData = fallbackOtpDoc.data();
+          if (String(changeOtp).trim() !== otpData.otp) {
+            return res.status(400).json({ success: false, error: 'Invalid verification OTP.' });
+          }
+          await deleteDoc(doc(db, 'adminOtps', 'admin_settings_change_otp'));
+        }
+      }
+
+      // Helper to batch query & delete
+      const deleteMatchingDocs = async (collectionName: string, fieldName: string, fieldValue: string | undefined | null) => {
+        if (!fieldValue) return;
+        try {
+          const colRef = collection(db, collectionName);
+          const q = query(colRef, where(fieldName, '==', fieldValue));
+          const snap = await getDocs(q);
+          for (const docSnap of snap.docs) {
+            await deleteDoc(doc(db, collectionName, docSnap.id));
+          }
+        } catch (err) {
+          console.warn(`Error deleting ${collectionName} docs:`, err);
+        }
+      };
+
+      if (targetDocId) {
+        try {
+          await deleteDoc(doc(db, 'users', targetDocId));
+        } catch (e) {}
+      }
+      await deleteMatchingDocs('users', 'uid', targetUid);
+      await deleteMatchingDocs('users', 'telegramId', targetTelegramId);
+      if (targetMobile && targetMobile !== 'N/A') {
+        await deleteMatchingDocs('users', 'mobile', targetMobile);
+      }
+
+      // Wallet transactions
+      await deleteMatchingDocs('transactions', 'uid', targetUid);
+      await deleteMatchingDocs('transactions', 'userId', targetDocId);
+      await deleteMatchingDocs('transactions', 'telegramId', targetTelegramId);
+
+      // Referral & milestone
+      await deleteMatchingDocs('referralTokens', 'uid', targetUid);
+      await deleteMatchingDocs('referralTokens', 'referrerUid', targetUid);
+      await deleteMatchingDocs('referralTokens', 'referredUid', targetUid);
+      await deleteMatchingDocs('referralLogs', 'uid', targetUid);
+      await deleteMatchingDocs('referralLogs', 'referrerUid', targetUid);
+      await deleteMatchingDocs('referralLogs', 'referredUid', targetUid);
+      await deleteMatchingDocs('milestoneTokens', 'uid', targetUid);
+      await deleteMatchingDocs('milestoneTokens', 'telegramId', targetTelegramId);
+      await deleteMatchingDocs('milestoneClaimRecords', 'uid', targetUid);
+      await deleteMatchingDocs('milestoneClaimRecords', 'telegramId', targetTelegramId);
+
+      // Feedback, contestants, votes, withdrawals, devices
+      await deleteMatchingDocs('feedbackReviews', 'uid', targetUid);
+      await deleteMatchingDocs('feedbackReviews', 'telegramId', targetTelegramId);
+      if (targetMobile && targetMobile !== 'N/A') {
+        const cleanMobile = targetMobile.replace(/\D/g, '');
+        if (cleanMobile) {
+          try {
+            await deleteDoc(doc(db, 'feedbackOtps', cleanMobile));
+          } catch (e) {}
+        }
+      }
+      await deleteMatchingDocs('contestants', 'uid', targetUid);
+      await deleteMatchingDocs('contestants', 'telegramId', targetTelegramId);
+      await deleteMatchingDocs('contestants', 'userId', targetDocId);
+      await deleteMatchingDocs('voteLogs', 'voterUid', targetUid);
+      await deleteMatchingDocs('voteLogs', 'uid', targetUid);
+      await deleteMatchingDocs('voteLogs', 'telegramId', targetTelegramId);
+      await deleteMatchingDocs('voteLinks', 'uid', targetUid);
+      await deleteMatchingDocs('voteLinks', 'telegramId', targetTelegramId);
+      await deleteMatchingDocs('withdrawals', 'uid', targetUid);
+      await deleteMatchingDocs('withdrawals', 'userId', targetDocId);
+      await deleteMatchingDocs('withdrawals', 'telegramId', targetTelegramId);
+      await deleteMatchingDocs('deviceFingerprints', 'uid', targetUid);
+      await deleteMatchingDocs('deviceFingerprints', 'telegramId', targetTelegramId);
+      await deleteMatchingDocs('bannedDevices', 'uid', targetUid);
+
+      // Record Audit Log
+      const nowIso = new Date().toISOString();
+      await addDoc(collection(db, 'adminLogs'), {
+        action: 'DELETE_USER_ACCOUNT',
+        adminId: 'Super Admin',
+        adminName: 'Super Admin',
+        targetUid: targetUid || 'N/A',
+        mobileNumber: targetMobile || 'N/A',
+        telegramId: targetTelegramId || 'N/A',
+        reason: reason || 'Admin Permanent Account Deletion',
+        timestamp: nowIso,
+        createdAt: nowIso
+      });
+
+      await addDoc(collection(db, 'userDeleteLogs'), {
+        adminId: 'Super Admin',
+        adminName: 'Super Admin',
+        targetUid: targetUid || 'N/A',
+        mobileNumber: targetMobile || 'N/A',
+        telegramId: targetTelegramId || 'N/A',
+        reason: reason || 'Admin Permanent Account Deletion',
+        deletedAt: nowIso,
+        timestamp: nowIso
+      });
+
+      return res.json({
+        success: true,
+        message: '✅ User account deleted successfully. The user can now register again as a new account.'
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Load Admin Config (Protected)
   app.get('/api/admin/config', requireAdminSession, async (req, res) => {
     try {
