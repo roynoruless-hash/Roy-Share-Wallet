@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldAlert, AlertTriangle, Clock, Users, ToggleLeft, ToggleRight, Save, Cpu, Layers } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, Clock, Users, ToggleLeft, ToggleRight, Save, Cpu, Image as ImageIcon, Key, ExternalLink, CheckCircle2 } from 'lucide-react';
 import { AdminConfig } from '../types';
 
 interface SecurityViewProps {
@@ -26,7 +26,7 @@ export const SecurityView: React.FC<SecurityViewProps> = ({
           <div>
             <h2 className="text-lg font-bold text-white">System & Security Settings</h2>
             <p className="text-xs text-slate-400">
-              Maintenance mode, whitelisted admin IDs, session timeout, and future architecture readiness.
+              Maintenance mode, ImgBB image hosting API, whitelisted admin IDs, and session timeout.
             </p>
           </div>
         </div>
@@ -74,6 +74,62 @@ export const SecurityView: React.FC<SecurityViewProps> = ({
               <ToggleLeft className="w-8 h-8" />
             )}
           </button>
+        </div>
+
+        {/* ImgBB Image Hosting Section */}
+        <div className="p-5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400">
+                <ImageIcon className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">ImgBB Image Hosting API</h3>
+                <p className="text-[11px] text-slate-400">
+                  Upload contest banners and contestant photos directly to ImgBB CDNs.
+                </p>
+              </div>
+            </div>
+
+            {config.imgbbApiKey?.trim() ? (
+              <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>ImgBB Key Active</span>
+              </span>
+            ) : (
+              <span className="px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>Key Required</span>
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-bold text-slate-300 flex items-center gap-2">
+              <Key className="w-4 h-4 text-sky-400" />
+              <span>ImgBB API Key</span>
+            </label>
+            <input
+              type="text"
+              id="imgbb-api-key-input"
+              value={config.imgbbApiKey || ''}
+              onChange={(e) => updateConfig({ imgbbApiKey: e.target.value })}
+              placeholder="e.g. 3a7b9c1d2e3f4g5h6i7j8k9l0m"
+              className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition font-mono"
+            />
+            <div className="flex items-center justify-between text-[11px] text-slate-500 flex-wrap gap-1">
+              <span>This key is securely stored in Admin Config and used for uploading contest image banners.</span>
+              <a
+                href="https://api.imgbb.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sky-400 hover:underline flex items-center gap-1 font-semibold"
+              >
+                <span>Get Free ImgBB API Key</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          </div>
         </div>
 
         {/* Security Parameters */}

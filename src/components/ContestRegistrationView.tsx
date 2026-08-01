@@ -13,7 +13,8 @@ import {
   Share2
 } from 'lucide-react';
 import { getContests, saveContestant } from '../services/contestService';
-import { uploadImageToStorage } from '../services/storageService';
+import { uploadImageToStorage, uploadImageWithFallback } from '../services/storageService';
+import { loadAdminConfig } from '../services/configService';
 import { Contest } from '../types';
 
 interface ContestRegistrationViewProps {
@@ -40,6 +41,15 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [registeredContestantId, setRegisteredContestantId] = useState('');
+  const [imgbbApiKey, setImgbbApiKey] = useState<string>('');
+
+  useEffect(() => {
+    loadAdminConfig().then(res => {
+      if (res.config?.imgbbApiKey) {
+        setImgbbApiKey(res.config.imgbbApiKey);
+      }
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     // 1. Fetch contest details
@@ -114,11 +124,11 @@ export const ContestRegistrationView: React.FC<ContestRegistrationViewProps> = (
     setImageError(null);
 
     try {
-      const publicUrl = await uploadImageToStorage(file, 'contestants');
+      const publicUrl = await uploadImageWithFallback(file, imgbbApiKey, 'contestants');
       setImageUrl(publicUrl);
     } catch (err: any) {
       console.error('Failed to upload image:', err);
-      setImageError('Failed to upload image to Firebase Storage. Please try again.');
+      setImageError(err?.message || 'Failed to upload image. Please try again.');
     } finally {
       setIsUploadingImage(false);
     }

@@ -67,6 +67,7 @@ export const DEFAULT_CONFIG: AdminConfig = {
   sessionTimeout: 180, // Default to 180 minutes (3 hours)
   adminMobileNumber: '',
   diagnosticError: '',
+  imgbbApiKey: '',
 
   // Metadata
   updatedAt: new Date().toISOString(),

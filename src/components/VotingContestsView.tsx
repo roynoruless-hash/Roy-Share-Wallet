@@ -48,7 +48,7 @@ import {
   saveVoteLink,
   addContestLog
 } from '../services/contestService';
-import { uploadImageToStorage } from '../services/storageService';
+import { uploadImageToStorage, uploadImageToImgBB } from '../services/storageService';
 
 interface VotingContestsViewProps {
   config: AdminConfig;
@@ -873,25 +873,49 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
     setShowContestantForm(true);
   };
 
-  // Image Upload helper using Firebase Storage
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+
+  // Image Upload helper using ImgBB API Key or storage fallback
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'contest' | 'contestant') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    showToast('Uploading image to Firebase Storage...', 'info');
+    if (!file.type.startsWith('image/')) {
+      showToast('Please select a valid image file (PNG/JPG/WEBP).', 'error');
+      return;
+    }
+
+    setIsUploadingImage(true);
+    const hasImgbbKey = Boolean(config.imgbbApiKey && config.imgbbApiKey.trim());
+
+    if (hasImgbbKey) {
+      showToast('Compressing & uploading image to ImgBB CDN...', 'info');
+    } else {
+      showToast('Uploading image to storage...', 'info');
+    }
 
     try {
-      const publicUrl = await uploadImageToStorage(file, type === 'contest' ? 'contests' : 'contestants');
+      let publicUrl = '';
+      if (hasImgbbKey) {
+        publicUrl = await uploadImageToImgBB(file, config.imgbbApiKey!);
+        showToast('Image uploaded successfully to ImgBB!', 'success');
+      } else {
+        publicUrl = await uploadImageToStorage(file, type === 'contest' ? 'contests' : 'contestants');
+        showToast('Image uploaded! Tip: Add your ImgBB API Key in System Settings for ImgBB CDN hosting.', 'info');
+      }
+
       setIsFormDirty(true);
       if (type === 'contest') {
         setContestForm(prev => ({ ...prev, imageUrl: publicUrl }));
       } else {
         setContestantForm(prev => ({ ...prev, imageUrl: publicUrl }));
       }
-      showToast('Image uploaded successfully!', 'success');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Image upload failed:', err);
-      showToast('Failed to upload image to Firebase Storage.', 'error');
+      showToast(err?.message || 'Failed to upload image. Please check your ImgBB API Key.', 'error');
+    } finally {
+      setIsUploadingImage(false);
+      e.target.value = '';
     }
   };
 

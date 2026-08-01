@@ -15,7 +15,8 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { Contest, Contestant, VoteLog, BotUser } from '../types';
-import { uploadImageToStorage } from './storageService';
+import { uploadImageWithFallback, uploadImageToStorage } from './storageService';
+import { loadAdminConfig } from './configService';
 
 /**
  * Fetch all contests from Firestore
@@ -81,9 +82,10 @@ export async function saveContest(contest: Partial<Contest> & { id?: string }): 
   let bannerUrl = contest.bannerUrl || contest.imageUrl || '';
   if (bannerUrl && bannerUrl.startsWith('data:image')) {
     try {
-      bannerUrl = await uploadImageToStorage(bannerUrl, 'contests');
+      const configRes = await loadAdminConfig();
+      bannerUrl = await uploadImageWithFallback(bannerUrl, configRes.config?.imgbbApiKey, 'contests');
     } catch (err) {
-      console.error('Failed to upload banner image to Firebase Storage:', err);
+      console.error('Failed to upload banner image:', err);
     }
   }
 
@@ -188,9 +190,10 @@ export async function saveContestant(contestant: Partial<Contestant> & { id?: st
   let imageUrl = contestant.imageUrl || '';
   if (imageUrl && imageUrl.startsWith('data:image')) {
     try {
-      imageUrl = await uploadImageToStorage(imageUrl, 'contestants');
+      const configRes = await loadAdminConfig();
+      imageUrl = await uploadImageWithFallback(imageUrl, configRes.config?.imgbbApiKey, 'contestants');
     } catch (err) {
-      console.error('Failed to upload contestant image to Firebase Storage:', err);
+      console.error('Failed to upload contestant image:', err);
     }
   }
 

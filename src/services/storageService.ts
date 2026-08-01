@@ -59,6 +59,92 @@ export async function compressImage(
 }
 
 /**
+ * Upload image to ImgBB Image Hosting API using the provided API Key.
+ * Automatically compresses the image prior to upload.
+ * Returns direct public image URL (e.g. https://i.ibb.co/...).
+ */
+export async function uploadImageToImgBB(
+  fileOrBase64: File | Blob | string,
+  apiKey: string
+): Promise<string> {
+  const cleanKey = apiKey ? apiKey.trim() : '';
+  if (!cleanKey) {
+    throw new Error('ImgBB API Key is not configured. Please set your ImgBB API Key in System Settings.');
+  }
+
+  if (typeof fileOrBase64 === 'string') {
+    const trimmed = fileOrBase64.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+  }
+
+  // Compress image to ensure fast & lightweight upload
+  let compressedBlob: Blob;
+  if (typeof fileOrBase64 === 'string') {
+    const res = await fetch(fileOrBase64);
+    const blob = await res.blob();
+    compressedBlob = await compressImage(blob, 1200, 0.85);
+  } else {
+    compressedBlob = await compressImage(fileOrBase64, 1200, 0.85);
+  }
+
+  const formData = new FormData();
+  formData.append('image', compressedBlob, 'banner.jpg');
+
+  const response = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(cleanKey)}`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let errorMsg = `ImgBB upload failed (HTTP ${response.status})`;
+    try {
+      const errJson = JSON.parse(errorText);
+      if (errJson.error && errJson.error.message) {
+        errorMsg = `ImgBB Error: ${errJson.error.message}`;
+      }
+    } catch (e) {}
+    throw new Error(errorMsg);
+  }
+
+  const json = await response.json();
+  if (json.success && json.data && (json.data.url || json.data.display_url)) {
+    return json.data.url || json.data.display_url;
+  } else {
+    throw new Error('ImgBB response did not contain a valid image URL.');
+  }
+}
+
+/**
+ * Universal image upload helper.
+ * Prefers ImgBB hosting if apiKey is configured; falls back to Firebase Storage.
+ */
+export async function uploadImageWithFallback(
+  fileOrBase64: File | Blob | string,
+  imgbbApiKey?: string,
+  folder: 'contests' | 'contestants' | 'general' = 'contests'
+): Promise<string> {
+  if (!fileOrBase64) return '';
+
+  if (typeof fileOrBase64 === 'string') {
+    const trimmed = fileOrBase64.trim();
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return trimmed;
+    }
+  }
+
+  if (imgbbApiKey && imgbbApiKey.trim()) {
+    return await uploadImageToImgBB(fileOrBase64, imgbbApiKey.trim());
+  }
+
+  // Fallback to Firebase Storage if no ImgBB API key provided
+  return await uploadImageToStorage(fileOrBase64, folder);
+}
+
+/**
  * Upload an image file, blob, or base64 data string to Firebase Storage
  * and return the public download URL.
  */

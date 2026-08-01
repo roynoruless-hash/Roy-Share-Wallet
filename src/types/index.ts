@@ -77,6 +77,7 @@ export interface AdminConfig {
   sessionTimeout: number;
   adminMobileNumber?: string;
   diagnosticError?: string;
+  imgbbApiKey?: string;
 
   // Metadata
   updatedAt?: string;
