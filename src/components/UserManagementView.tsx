@@ -67,9 +67,6 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
   const [modalAmount, setModalAmount] = useState('');
   const [modalReason, setModalReason] = useState('');
   const [modalMessage, setModalMessage] = useState('');
-  const [deleteOtp, setDeleteOtp] = useState('');
-  const [isSendingOtp, setIsSendingOtp] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Load Users from Firestore
@@ -127,56 +124,36 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
     setModalAmount('');
     setModalReason('');
     setModalMessage('');
-    setDeleteOtp('');
-    setOtpSent(false);
-    setIsSendingOtp(false);
   };
 
-  // Request OTP for account deletion
-  const handleRequestDeleteOtp = async () => {
-    if (!selectedUser) return;
-    setIsSendingOtp(true);
-    try {
-      const res = await fetch('/api/admin/request-delete-user-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targetUid: selectedUser.uid,
-          targetMobile: selectedUser.mobile,
-          targetTelegramId: selectedUser.telegramId,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        showToast('🔐 Delete verification OTP sent to Super Admin Telegram!', 'success');
-        setOtpSent(true);
-      } else {
-        showToast(data.error || 'Failed to send OTP to Admin Telegram', 'error');
-      }
-    } catch (err: any) {
-      showToast('Network error requesting OTP', 'error');
-    } finally {
-      setIsSendingOtp(false);
-    }
-  };
-
-  // Handle Action: Delete User Account
+  // Handle Action: Delete User Account (Super Admin only, no OTP required)
   const handleDeleteAccount = async () => {
     if (!selectedUser) return;
 
     setIsSubmitting(true);
     try {
       let res: any = null;
+      let sessionToken = '';
+      try {
+        const rawSession = localStorage.getItem('royshare_admin_session');
+        if (rawSession) {
+          sessionToken = JSON.parse(rawSession).sessionToken || '';
+        }
+      } catch (e) {}
+
       try {
         const apiRes = await fetch('/api/admin/delete-user-account', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(sessionToken ? { 'x-admin-session-token': sessionToken } : {})
+          },
           body: JSON.stringify({
             targetUid: selectedUser.uid,
             targetDocId: selectedUser.id,
             targetTelegramId: selectedUser.telegramId,
             targetMobile: selectedUser.mobile,
-            changeOtp: deleteOtp.trim(),
+            adminRole: 'Super Admin',
             reason: modalReason.trim() || 'Super Admin Account Deletion',
           }),
         });
@@ -1184,31 +1161,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
               </p>
             </div>
 
-            {/* Verification & Reason Input */}
+            {/* Reason Input */}
             <div className="space-y-3 pt-1">
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="text-xs font-bold text-slate-200">
-                    🔐 Security OTP / Password Confirmation
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleRequestDeleteOtp}
-                    disabled={isSendingOtp}
-                    className="text-[11px] text-sky-400 hover:text-sky-300 font-semibold underline disabled:opacity-50"
-                  >
-                    {isSendingOtp ? 'Sending OTP...' : otpSent ? 'Resend OTP to Bot' : 'Send OTP to Admin Bot'}
-                  </button>
-                </div>
-                <input
-                  type="text"
-                  value={deleteOtp}
-                  onChange={(e) => setDeleteOtp(e.target.value)}
-                  placeholder={otpSent ? "Enter 6-digit OTP sent to Telegram" : "Enter OTP or Admin Confirmation Code"}
-                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-mono placeholder:font-sans placeholder:text-slate-500 focus:outline-none focus:border-rose-500"
-                />
-              </div>
-
               <div>
                 <label className="text-xs font-bold text-slate-200 block mb-1">
                   Reason for Deletion (Optional - for Audit Log)

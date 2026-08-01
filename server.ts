@@ -1285,72 +1285,23 @@ async function startServer() {
     }
   });
 
-  // Request delete user verification OTP
-  app.post('/api/admin/request-delete-user-otp', requireAdminSession, async (req, res) => {
-    try {
-      const { targetUid, targetMobile, targetTelegramId } = req.body;
-      const decryptedConfig = await getDecryptedConfig();
-      if (!decryptedConfig || !decryptedConfig.botToken || !decryptedConfig.adminChatId) {
-        return res.status(400).json({ success: false, error: 'Bot is not fully configured.' });
-      }
-
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
-
-      await setDoc(doc(db, 'adminOtps', `admin_delete_user_${targetUid || 'otp'}`), {
-        otp,
-        targetUid,
-        expiresAt,
-        createdAt: new Date().toISOString()
-      });
-
-      const text =
-        `⚠️ <b>SUPER ADMIN ACTION: DELETE USER ACCOUNT</b>\n\n` +
-        `<b>Target UID:</b> <code>${targetUid || 'N/A'}</code>\n` +
-        `<b>Target Mobile:</b> ${targetMobile || 'N/A'}\n` +
-        `<b>Telegram ID:</b> <code>${targetTelegramId || 'N/A'}</code>\n\n` +
-        `<b>Verification OTP:</b>\n<code>${otp}</code>\n\n` +
-        `<i>Valid for 5 minutes. Enter this OTP in Admin Dashboard to confirm permanent deletion.</i>`;
-
-      await sendTelegramMessage(decryptedConfig.botToken, decryptedConfig.adminChatId, text);
-
-      return res.json({ success: true, message: 'Delete Account verification OTP sent to Super Admin Telegram.' });
-    } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // Execute Delete User Account (Protected)
+  // Execute Delete User Account (Super Admin Protected - No OTP required)
   app.post('/api/admin/delete-user-account', requireAdminSession, async (req, res) => {
     try {
-      const { targetUid, targetDocId, targetTelegramId, targetMobile, changeOtp, reason } = req.body;
+      const { targetUid, targetDocId, targetTelegramId, targetMobile, reason, adminRole } = req.body;
+
+      // Ensure Super Admin status
+      const sessionDoc = await getDoc(doc(db, 'adminSessions', 'active_session'));
+      if (!sessionDoc.exists()) {
+        return res.status(403).json({ success: false, error: 'Access Denied' });
+      }
+
+      if (adminRole && adminRole !== 'Super Admin' && adminRole !== 'super_admin') {
+        return res.status(403).json({ success: false, error: 'Access Denied' });
+      }
 
       if (!targetUid && !targetDocId) {
         return res.status(400).json({ success: false, error: 'Target User UID or Document ID is required.' });
-      }
-
-      // Verify OTP if provided or required
-      const otpDocKey = `admin_delete_user_${targetUid || 'otp'}`;
-      const otpDoc = await getDoc(doc(db, 'adminOtps', otpDocKey));
-
-      if (otpDoc.exists()) {
-        const otpData = otpDoc.data();
-        if (Date.now() > otpData.expiresAt) {
-          return res.status(400).json({ success: false, error: 'Verification OTP has expired. Please request a new OTP.' });
-        }
-        if (String(changeOtp).trim() !== otpData.otp) {
-          return res.status(400).json({ success: false, error: 'Invalid verification OTP. Please try again.' });
-        }
-        await deleteDoc(doc(db, 'adminOtps', otpDocKey));
-      } else if (changeOtp) {
-        const fallbackOtpDoc = await getDoc(doc(db, 'adminOtps', 'admin_settings_change_otp'));
-        if (fallbackOtpDoc.exists()) {
-          const otpData = fallbackOtpDoc.data();
-          if (String(changeOtp).trim() !== otpData.otp) {
-            return res.status(400).json({ success: false, error: 'Invalid verification OTP.' });
-          }
-          await deleteDoc(doc(db, 'adminOtps', 'admin_settings_change_otp'));
-        }
       }
 
       // Helper to batch query & delete
