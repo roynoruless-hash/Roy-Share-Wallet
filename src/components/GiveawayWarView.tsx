@@ -182,6 +182,7 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
   const [manualPointModalReason, setManualPointModalReason] = useState<string>('Offline Invite');
   const [showLeaderGuideModal, setShowLeaderGuideModal] = useState<boolean>(false);
   const [leaderDashboardStats, setLeaderDashboardStats] = useState<any>(null);
+  const [activeQrLink, setActiveQrLink] = useState<{ title: string; link: string } | null>(null);
 
   // Admin Creator Form State
   const [isEditing, setIsEditing] = useState<boolean>(false);
@@ -1100,85 +1101,232 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                       {activeWar.description}
                     </p>
                   </div>
+                </div>
+              </div>
 
-                  {/* Active Registered Warrior Profile Selector */}
-                  <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-3 w-full md:w-80 shrink-0">
-                    <div className="flex items-center justify-between text-xs font-bold text-slate-300">
-                      <span className="flex items-center gap-1.5 text-amber-400">
-                        <UserCheck className="w-4 h-4" />
-                        <span>Warrior Account</span>
-                      </span>
-                      <span className="text-slate-400 text-[10px] font-mono">Live Firestore</span>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                        Select Registered Account
-                      </label>
-                      <select
-                        value={currentUserTgId}
-                        onChange={(e) => {
-                          const selId = e.target.value;
-                          setCurrentUserTgId(selId);
-                          const u = registeredUsers.find((x) => String(x.telegramId) === String(selId));
-                          if (u) setCurrentUserName(u.firstName || u.username || 'User');
-                          localStorage.setItem('active_war_user_tg_id', selId);
-                        }}
-                        className="w-full bg-slate-900 text-white text-xs px-3 py-2 rounded-xl border border-slate-700 focus:outline-none font-bold cursor-pointer"
-                      >
-                        {registeredUsers.length === 0 ? (
-                          <option value={currentUserTgId}>
-                            {currentUserName} (ID: {currentUserTgId})
-                          </option>
-                        ) : (
-                          registeredUsers.map((u) => (
-                            <option key={u.id || u.telegramId} value={u.telegramId}>
-                              {u.firstName || u.username || 'User'} {u.username ? `(@${u.username})` : ''} - ID: {u.telegramId}
-                            </option>
-                          ))
-                        )}
-                      </select>
-                    </div>
-
-                    {currentMember ? (
-                      <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-400 flex items-center justify-between font-bold">
-                        <div className="flex items-center gap-1.5">
-                          <Lock className="w-3.5 h-3.5" />
-                          <span>Joined: {currentMember.teamName}</span>
-                        </div>
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 font-black">
-                          {currentMember.points} Pts
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-400 text-center font-medium">
-                        ⚠️ Not joined a team yet. Select a team below to lock choice!
-                      </div>
-                    )}
+              {/* OFFICIAL TEAM REGISTRATION LINKS (ONLY TWO REGISTRATION LINKS GENERATED) */}
+              <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-base font-black text-white flex items-center gap-2">
+                      <Share2 className="w-5 h-5 text-amber-400" />
+                      <span>Official Giveaway War Registration Links</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Share these initial links to recruit warriors. The <strong>FIRST verified user</strong> who joins becomes the official 👑 <strong>Team Leader</strong>!
+                    </p>
                   </div>
+                  <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/30 text-[10px] font-black uppercase tracking-wider">
+                    FIRST JOIN = AUTO LEADER
+                  </span>
                 </div>
 
-                {/* Team Referral Link Banner (If joined) */}
-                {currentMember && (
-                  <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-4">
-                    <div className="space-y-1 text-center sm:text-left">
-                      <div className="text-xs font-black text-amber-400 flex items-center justify-center sm:justify-start gap-1.5">
-                        <Share2 className="w-4 h-4" />
-                        <span>Team Referral Link Active</span>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {activeWar.teams.slice(0, 2).map((team, idx) => {
+                    const teamTag = idx === 0 ? 'teamA' : 'teamB';
+                    const botUsername = config.botUsername || 'Roy_wallett_bot';
+                    const tgRegLink = `https://t.me/${botUsername}?start=${teamTag}_${activeWar.id}`;
+                    const webRegLink = `https://roy-share-wallet.onrender.com/war/${teamTag}/${activeWar.id}`;
+
+                    return (
+                      <div
+                        key={team.id}
+                        className="p-5 rounded-2xl bg-slate-800/80 border border-slate-700 space-y-4 relative overflow-hidden"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2.5">
+                            <span className="w-4 h-4 rounded-full shrink-0" style={{ backgroundColor: team.color || (idx === 0 ? '#EF4444' : '#3B82F6') }} />
+                            <h4 className="text-sm font-black text-white">{idx === 0 ? '🔴 Team A Registration Link' : '🔵 Team B Registration Link'}</h4>
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-mono">Team: {team.name}</span>
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className="p-3 rounded-xl bg-slate-950/90 border border-slate-800 space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Telegram Bot Link</span>
+                            <code className="text-xs text-amber-300 font-mono break-all select-all block">{tgRegLink}</code>
+                          </div>
+
+                          <div className="p-2.5 rounded-xl bg-slate-950/50 border border-slate-800/80 flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Web Link</span>
+                            <code className="text-[11px] text-slate-300 font-mono truncate select-all">{webRegLink}</code>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons: Copy, Share, QR Code */}
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(tgRegLink);
+                              showToast(`Copied ${team.name} Telegram Registration Link!`, 'success');
+                            }}
+                            className="py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/20"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              const shareText = `⚔️ Join ${team.name} in Giveaway War! Click link to register and battle for prize pool ₹${activeWar.prizePool}!`;
+                              const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(tgRegLink)}&text=${encodeURIComponent(shareText)}`;
+                              window.open(shareUrl, '_blank');
+                            }}
+                            className="py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-md shadow-blue-500/20"
+                          >
+                            <Share2 className="w-3.5 h-3.5" />
+                            <span>Share</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setActiveQrLink({
+                                title: `${team.name} Registration QR Code`,
+                                link: tgRegLink
+                              });
+                            }}
+                            className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-1.5"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                            <span>QR Code</span>
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-[11px] text-slate-300">
-                        Share your unique team invite link. Friends joining will automatically join <strong className="text-white">{currentMember.teamName}</strong> and earn you +{activeWar.pointRules?.referralPoints || 10} referral points!
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleCopyInviteLink(currentMember.teamId)}
-                      className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition flex items-center gap-2 shrink-0 shadow-lg shadow-amber-500/20"
-                    >
-                      {copiedInvite ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                      <span>{copiedInvite ? 'Copied!' : 'Copy Team Link'}</span>
-                    </button>
-                  </div>
-                )}
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* OFFICIAL TEAM LEADER STATUS CARDS */}
+              <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    <Award className="w-5 h-5 text-amber-400" />
+                    <span>Official Team Leaders</span>
+                  </h3>
+                  <span className="text-xs text-slate-400">First verified user automatically becomes Leader</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {activeWar.teams.slice(0, 2).map((team, idx) => {
+                    const teamLabel = idx === 0 ? 'Team A' : 'Team B';
+                    const activeMembersCount = members.filter((m) => m.teamId === team.id && m.status === 'ACTIVE').length;
+
+                    return (
+                      <div
+                        key={team.id}
+                        className={`p-5 rounded-2xl border transition-all ${
+                          team.leaderTelegramId
+                            ? 'bg-gradient-to-br from-amber-950/30 via-slate-900 to-slate-900 border-amber-500/50 shadow-lg'
+                            : 'bg-slate-800/40 border-slate-700/60'
+                        }`}
+                      >
+                        {team.leaderTelegramId ? (
+                          /* AFTER LEADER JOINED */
+                          <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xl">👑</span>
+                                <div>
+                                  <span className="text-[10px] font-extrabold uppercase text-amber-400 tracking-wider block">
+                                    👑 {teamLabel} Leader
+                                  </span>
+                                  <h4 className="text-lg font-black text-white">{team.leaderName}</h4>
+                                </div>
+                              </div>
+                              <span className="px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-bold">
+                                ● Leader Active
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                              <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+                                <span className="text-[10px] text-slate-400 font-bold block uppercase">Username</span>
+                                <span className="text-xs font-bold text-amber-300 truncate block">
+                                  {team.leaderUsername ? `@${team.leaderUsername}` : 'N/A'}
+                                </span>
+                              </div>
+
+                              <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+                                <span className="text-[10px] text-slate-400 font-bold block uppercase">Telegram ID</span>
+                                <span className="text-xs font-mono font-bold text-white truncate block">
+                                  {team.leaderTelegramId}
+                                </span>
+                              </div>
+
+                              <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+                                <span className="text-[10px] text-slate-400 font-bold block uppercase">Total Members</span>
+                                <span className="text-xs font-black text-emerald-400 block">
+                                  {activeMembersCount} Members
+                                </span>
+                              </div>
+
+                              <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800">
+                                <span className="text-[10px] text-slate-400 font-bold block uppercase">Team Points</span>
+                                <span className="text-xs font-black text-amber-400 block">
+                                  {team.score || 0} Pts
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Personal Leader Invite Link */}
+                            <div className="p-3.5 rounded-xl bg-slate-950 border border-amber-500/30 space-y-2">
+                              <div className="flex items-center justify-between text-xs font-bold text-amber-300">
+                                <span>🔗 Leader Personal Invite Link:</span>
+                                <span className="text-[10px] text-slate-400">Earns Leadership Bonus Points</span>
+                              </div>
+                              <code className="text-xs text-amber-200 font-mono break-all select-all block bg-slate-900 p-2 rounded-lg border border-slate-800">
+                                {team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=${teamLabel === 'Team A' ? 'TEAMA_LEADER' : 'TEAMB_LEADER'}_${activeWar.id}_${team.leaderTelegramId}`}
+                              </code>
+                              <div className="flex gap-2 pt-1">
+                                <button
+                                  onClick={() => {
+                                    const link = team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=${teamLabel === 'Team A' ? 'TEAMA_LEADER' : 'TEAMB_LEADER'}_${activeWar.id}_${team.leaderTelegramId}`;
+                                    navigator.clipboard.writeText(link);
+                                    showToast(`Copied ${teamLabel} Leader Invite Link!`, 'success');
+                                  }}
+                                  className="flex-1 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-bold border border-amber-500/30 transition flex items-center justify-center gap-1.5"
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                  <span>Copy Leader Link</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const link = team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=${teamLabel === 'Team A' ? 'TEAMA_LEADER' : 'TEAMB_LEADER'}_${activeWar.id}_${team.leaderTelegramId}`;
+                                    const shareText = `👑 Join ${team.name} led by ${team.leaderName}! Click link to join team and earn points!`;
+                                    window.open(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText)}`, '_blank');
+                                  }}
+                                  className="py-1.5 px-3 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 text-xs font-bold border border-blue-500/30 transition flex items-center justify-center gap-1.5"
+                                >
+                                  <Share2 className="w-3.5 h-3.5" />
+                                  <span>Share</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          /* BEFORE LEADER JOINED */
+                          <div className="py-6 px-4 text-center space-y-3">
+                            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-2xl">
+                              👑
+                            </div>
+                            <div>
+                              <h4 className="text-base font-black text-amber-400">
+                                👑 {teamLabel} Leader: Waiting for First User...
+                              </h4>
+                              <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1">
+                                The first verified user who registers using <strong>{teamLabel} Registration Link</strong> will automatically become the official 👑 <strong>{teamLabel} Leader</strong>!
+                              </p>
+                            </div>
+                            <span className="inline-block px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-mono">
+                              Awaiting First Registration
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* DOUBLE POINT BOOSTER BANNER (IF ACTIVE) */}
@@ -2541,28 +2689,16 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                             </div>
                           )}
 
-                          <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                            <select
-                              value={leaderAssignTgId[team.id] || ''}
-                              onChange={(e) => setLeaderAssignTgId({ ...leaderAssignTgId, [team.id]: e.target.value })}
-                              className="bg-slate-900 text-white text-xs px-3 py-2 rounded-xl border border-slate-700 w-full focus:outline-none cursor-pointer"
-                            >
-                              <option value="">-- Manual Override Leader --</option>
-                              {registeredUsers.map((u) => (
-                                <option key={u.id || u.telegramId} value={u.telegramId}>
-                                  {u.firstName || u.username || 'User'} {u.username ? `(@${u.username})` : ''} - ID: {u.telegramId}
-                                </option>
-                              ))}
-                            </select>
-                            <button
-                              type="button"
-                              onClick={() => handleAssignLeader(team.id)}
-                              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 transition flex items-center gap-1"
-                            >
-                              <UserCheck className="w-4 h-4" />
-                              <span>{team.leaderTelegramId ? 'Change Leader' : 'Assign Leader'}</span>
-                            </button>
-                          </div>
+                          {team.leaderTelegramId ? (
+                            <div className="flex items-center justify-between text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 p-2.5 rounded-xl">
+                              <span>👑 Leader Assigned: {team.leaderName} ({team.leaderTelegramId})</span>
+                              <span className="text-[10px] bg-emerald-500/20 px-2 py-0.5 rounded-full uppercase font-bold">Locked</span>
+                            </div>
+                          ) : (
+                            <div className="text-[11px] font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-xl text-center">
+                              ⚡ Auto-assign active: First verified join becomes Leader automatically
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -3391,6 +3527,48 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
               className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
             >
               Understood! Back to Command Center
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* QR CODE MODAL DIALOG */}
+      {activeQrLink && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 max-w-sm w-full text-center shadow-2xl relative">
+            <button
+              onClick={() => setActiveQrLink(null)}
+              className="absolute top-4 right-4 p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="space-y-1 pt-2">
+              <h4 className="text-base font-black text-white">{activeQrLink.title}</h4>
+              <p className="text-xs text-slate-400">Scan QR Code with phone camera to open Telegram Bot link</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white mx-auto inline-block shadow-inner">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(activeQrLink.link)}`}
+                alt="QR Code"
+                className="w-48 h-48 mx-auto"
+              />
+            </div>
+
+            <div className="p-2.5 rounded-xl bg-slate-800 border border-slate-700 font-mono text-[10px] text-amber-300 break-all select-all">
+              {activeQrLink.link}
+            </div>
+
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(activeQrLink.link);
+                showToast('Link copied to clipboard!', 'success');
+              }}
+              className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition flex items-center justify-center gap-1.5"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              <span>Copy Registration Link</span>
             </button>
           </div>
         </div>
