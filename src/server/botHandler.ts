@@ -525,65 +525,93 @@ async function verifyUserSmartJoin(
   }
 }
 
-async function parseWarStartParam(startParam: string): Promise<{ warId: string; teamId: string; inviterTgId: string } | null> {
+function logTelegramPayload(payload: string, detectedType: string, warId: string, userId: string, action: string) {
+  console.log(`========================================`);
+  console.log(`Received payload:\n${payload || 'none'}\n`);
+  console.log(`Detected type:\n${detectedType || 'NONE'}\n`);
+  console.log(`War ID:\n${warId || 'none'}\n`);
+  console.log(`User ID:\n${userId}\n`);
+  console.log(`Action:\n${action}`);
+  console.log(`========================================`);
+}
+
+interface ParsedWarParam {
+  type: 'TEAM_A' | 'TEAM_B' | 'WAR';
+  warId: string;
+  teamId: string;
+  teamName: string;
+  inviterTgId: string;
+}
+
+async function parseWarStartParam(startParam: string): Promise<ParsedWarParam | null> {
   if (!startParam) return null;
-  const lower = startParam.toLowerCase().trim();
-  const isWarParam = lower.startsWith('war_') || lower.includes('team') || lower.startsWith('team');
-  if (!isWarParam) return null;
+  const raw = startParam.trim();
+  const lower = raw.toLowerCase();
 
-  let warId = '';
-  let teamId = '';
-  let inviterTgId = '';
+  let detectedType: 'TEAM_A' | 'TEAM_B' | 'WAR' | null = null;
+  let teamAlias = '';
 
-  if (lower.startsWith('teama_leader_') || lower.startsWith('teamb_leader_')) {
-    const parts = startParam.split('_');
-    const alias = parts[0];
-    warId = parts[2] || '';
-    inviterTgId = parts[3] || '';
-    const res = await getActiveWarAndTeamByAlias(alias, warId);
-    if (res) {
-      return { warId: res.warId, teamId: res.teamId, inviterTgId };
-    }
-  } else if (lower.startsWith('war_')) {
-    const parts = startParam.split('_');
-    warId = parts[1] || '';
-    for (let i = 2; i < parts.length; i++) {
-      if (parts[i].toLowerCase() === 'team' && parts[i + 1]) {
-        teamId = parts[i + 1];
-      }
-      if ((parts[i].toLowerCase() === 'ref' || parts[i].toLowerCase() === 'lead') && parts[i + 1]) {
-        inviterTgId = parts[i + 1];
-      }
-    }
-    if (warId && teamId) {
-      return { warId, teamId, inviterTgId };
-    }
-    if (warId && !teamId) {
-      const res = await getActiveWarAndTeamByAlias('teamA', warId);
-      if (res) return { warId: res.warId, teamId: res.teamId, inviterTgId };
-    }
-  } else {
-    // Formats e.g. teamA_warId, teamB_warId, teamA_warId_inviterTgId, team_teamA_warId
-    const parts = startParam.split('_');
-    let teamAlias = parts[0];
-    let possibleWarId = '';
-
-    if (teamAlias.toLowerCase() === 'team' && parts[1]) {
-      teamAlias = parts[1];
-      possibleWarId = parts[2] || '';
-      inviterTgId = parts[3] || '';
-    } else {
-      possibleWarId = parts[1] || '';
-      inviterTgId = parts[2] || '';
-    }
-
-    const res = await getActiveWarAndTeamByAlias(teamAlias, possibleWarId);
-    if (res) {
-      return { warId: res.warId, teamId: res.teamId, inviterTgId };
-    }
+  if (lower.startsWith('teama_') || lower === 'teama') {
+    detectedType = 'TEAM_A';
+    teamAlias = 'teamA';
+  } else if (lower.startsWith('teamb_') || lower === 'teamb') {
+    detectedType = 'TEAM_B';
+    teamAlias = 'teamB';
+  } else if (lower.startsWith('war_') || lower.includes('team') || lower.startsWith('team')) {
+    detectedType = lower.includes('teamb') ? 'TEAM_B' : 'TEAM_A';
+    teamAlias = lower.includes('teamb') ? 'teamB' : 'teamA';
   }
 
-  return null;
+  if (!detectedType) return null;
+
+  const parts = raw.split('_');
+  let warId = '';
+  let inviterTgId = '';
+
+  const tokens = [...parts];
+  if (tokens.length > 0 && (tokens[0].toLowerCase() === 'teama' || tokens[0].toLowerCase() === 'teamb')) {
+    tokens.shift();
+  }
+
+  if (tokens.length > 0 && (tokens[0].toLowerCase() === 'war' || tokens[0].toLowerCase() === 'leader' || tokens[0].toLowerCase() === 'team')) {
+    tokens.shift();
+  }
+
+  if (tokens.length > 0 && tokens[0]) {
+    warId = tokens[0];
+    tokens.shift();
+  }
+
+  if (tokens.length > 0 && (tokens[0].toLowerCase() === 'ref' || tokens[0].toLowerCase() === 'lead')) {
+    tokens.shift();
+  }
+
+  if (tokens.length > 0 && tokens[0]) {
+    inviterTgId = tokens[0];
+  }
+
+  const resolved = await getActiveWarAndTeamByAlias(teamAlias, warId);
+  if (!resolved) {
+    const fallback = await getActiveWarAndTeamByAlias(teamAlias);
+    if (fallback) {
+      return {
+        type: detectedType,
+        warId: fallback.warId,
+        teamId: fallback.teamId,
+        teamName: fallback.teamName,
+        inviterTgId,
+      };
+    }
+    return null;
+  }
+
+  return {
+    type: detectedType,
+    warId: resolved.warId,
+    teamId: resolved.teamId,
+    teamName: resolved.teamName,
+    inviterTgId,
+  };
 }
 
 /**
@@ -1240,17 +1268,24 @@ export async function processTelegramUpdate(token: string, update: any) {
       const vParts = startParam.split('_');
       if (vParts[1] && vParts[2]) {
         pendingVote = { contestId: vParts[1], contestantId: vParts[2] };
+        logTelegramPayload(startParam, 'VOTE', 'none', chatId, 'Pending Vote Registration Initiated');
       }
     } else if (startParam) {
       const warRes = await parseWarStartParam(startParam);
       if (warRes) {
-        pendingWarJoin = warRes;
+        pendingWarJoin = { warId: warRes.warId, teamId: warRes.teamId, inviterTgId: warRes.inviterTgId };
+        logTelegramPayload(startParam, warRes.type, warRes.warId, chatId, 'Pending Team Join Registration Initiated');
       } else {
         const referrer = await getUserByUid(startParam);
         if (referrer && String(referrer.telegramId) !== String(chatId)) {
           referrerUid = String(referrer.uid);
+          logTelegramPayload(startParam, 'REFERRAL', 'none', chatId, 'Pending Referral Registration Initiated');
+        } else {
+          logTelegramPayload(startParam, 'UNKNOWN', 'none', chatId, 'Unrecognized Payload');
         }
       }
+    } else {
+      logTelegramPayload('none', 'NONE', 'none', chatId, 'Normal Welcome Flow');
     }
 
     const existingSess = userSessions.get(chatId);
@@ -1402,6 +1437,8 @@ export async function processTelegramUpdate(token: string, update: any) {
       const contestId = voteParts[1];
       const contestantId = voteParts[2];
 
+      logTelegramPayload(startParam, 'VOTE', 'none', chatId, 'Vote Flow Initiated');
+
       const contests = await getContests();
       const contest = contests.find((c) => c.id === contestId);
       const now = new Date();
@@ -1450,16 +1487,10 @@ export async function processTelegramUpdate(token: string, update: any) {
       }
     }
 
-    let warParam = await parseWarStartParam(startParam);
-    if (!warParam && (startParam.startsWith('war_') || startParam.toLowerCase().includes('team') || startParam.toLowerCase().startsWith('team'))) {
-      const resolved = await getActiveWarAndTeamByAlias(startParam);
-      if (resolved) {
-        warParam = { warId: resolved.warId, teamId: resolved.teamId, inviterTgId: '' };
-      }
-    }
+    const warParam = await parseWarStartParam(startParam);
 
     if (warParam) {
-      const { warId, teamId, inviterTgId } = warParam;
+      const { type, warId, teamId, inviterTgId } = warParam;
       if (existingUser) {
         const result = await joinWarTeam(
           warId,
@@ -1475,6 +1506,9 @@ export async function processTelegramUpdate(token: string, update: any) {
         if (result.success && result.team) {
           const botUsername = 'Roy_wallett_bot';
           const isLeader = result.member?.isTeamLeader || String(result.team.leaderTelegramId) === String(chatId);
+          const actionText = isLeader ? 'Leader Created' : 'Team Joined';
+
+          logTelegramPayload(startParam, type, warId, chatId, actionText);
 
           if (isLeader) {
             const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${warId}_${chatId}`;
@@ -1501,6 +1535,7 @@ export async function processTelegramUpdate(token: string, update: any) {
             });
           }
         } else {
+          logTelegramPayload(startParam, type, warId, chatId, `Team Join Status: ${result.message}`);
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
             text: `⚔️ <b>Giveaway War Team Status:</b>\n\n${result.message}`,
@@ -1509,6 +1544,7 @@ export async function processTelegramUpdate(token: string, update: any) {
         }
         return;
       } else {
+        logTelegramPayload(startParam, type, warId, chatId, 'Pending Team Join Registration Initiated');
         const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
         session.pendingWarJoin = { warId, teamId, inviterTgId };
         userSessions.set(chatId, session);
