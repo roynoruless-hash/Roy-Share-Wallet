@@ -493,73 +493,56 @@ async function startServer() {
       }
 
       const prompt = `You are an expert Telegram Marketing AI for a Telegram Rewards Bot called "Roy Share".
-Generate 3 distinct broadcast message variants AND optimization metrics.
+Generate ONLY the final, clean, Telegram-ready broadcast message.
 
 Context:
 - Type: ${type === 'active_alert' ? 'Active User Urgency Alert (Code Coming Soon)' : 'Live Redeem Code Announcement'}
 - Redeem Code: ${type === 'redeem_code' ? codeText : 'N/A'}
 - Additional Details: ${extraContext || 'None'}
 
-Return ONLY a strict JSON object with NO markdown wrapper:
-{
-  "variantA": "Text for Variant A (🔥 Ultra Hype & High Urgency, 30-50 words)",
-  "variantB": "Text for Variant B (⚡ Clean, Direct & Professional, 30-50 words)",
-  "variantC": "Text for Variant C (🎉 Community Focused & Emoji Heavy, 30-50 words)",
-  "aiScores": {
-    "engagementScore": 4.8,
-    "urgencyScore": 92,
-    "estimatedClickRate": 38.5,
-    "suggestions": [
-      "Include clear deadline to boost immediate clicks",
-      "Keep code on a single prominent line for quick copy"
-    ]
-  }
-}`;
+STRICT RULES:
+1. Output ONLY the plain final Telegram-ready broadcast message.
+2. DO NOT include "Drafting Variant A/B", "Idea:", "Professional Version:", "Variant 1:", markdown bullets (* or -), markdown codeblock backticks (\`\`\`), or any explanations or JSON wrappers.
+3. Use HTML tags where appropriate for Telegram: <code>${codeText}</code> for the redeem code, and <b>bold</b> for titles or key callouts.
+4. Keep it clear, energetic, and ready to send.
+
+Example format:
+🎁 Redeem Code is Live!
+
+Code:
+<code>${codeText}</code>
+
+⏰ Valid: ${redeemSettings?.expiryTime || '15 Minutes'}
+👤 First Come First Serve
+
+Claim now and don't forget to share your screenshot!`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-3.6-flash',
         contents: prompt,
         config: {
           temperature: 0.7,
-          maxOutputTokens: 800,
+          maxOutputTokens: 600,
         },
       });
 
       let responseText = (response.text || '').trim();
       responseText = responseText.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
 
-      let parsed: any = null;
-      try {
-        parsed = JSON.parse(responseText);
-      } catch (pErr) {
-        // Fallback if AI output is plain text
-        parsed = {
-          variantA: responseText || '🔥 Get ready Roy Share users! Big Redeem Code is coming soon!',
-          variantB: `⚡ New Redeem Code ${codeText} is now active in Roy Share Bot!`,
-          variantC: `🎉 Exciting reward alert! Use code ${codeText} right now!`,
-          aiScores: {
-            engagementScore: 4.5,
-            urgencyScore: 88,
-            estimatedClickRate: 32.0,
-            suggestions: ['Use bold formatting for the redeem code.'],
-          },
-        };
-      }
+      // Clean any potential "Idea:" or "Variant:" prefixes
+      responseText = responseText
+        .replace(/^(Drafting Variant|Variant|Idea|Professional Version|Version)\s*[A-C1-9]*\s*:\s*/i, '')
+        .trim();
 
       return res.json({
         success: true,
         type,
         redeemCode: type === 'redeem_code' ? codeText : 'N/A',
+        message: responseText,
         variants: {
-          variantA: parsed.variantA || '🔥 High Hype Alert!',
-          variantB: parsed.variantB || '⚡ Direct Alert!',
-          variantC: parsed.variantC || '🎉 Community Alert!',
-        },
-        aiScores: parsed.aiScores || {
-          engagementScore: 4.7,
-          urgencyScore: 90,
-          estimatedClickRate: 35.0,
-          suggestions: ['Add bold text and clear action buttons.'],
+          variantA: responseText,
+          variantB: responseText,
+          variantC: responseText,
         },
       });
     } catch (err: any) {
@@ -937,16 +920,20 @@ Return ONLY a strict JSON object with NO markdown wrapper:
       if (rawDestinations.length > 0) {
         // Send to each selected destination individually
         for (const dest of rawDestinations) {
-          const target = dest.chatId?.trim() || (dest.username ? `@${dest.username.replace(/^@/, '')}` : null);
+          let target = dest.chatId?.trim() || (dest.username ? `@${dest.username.replace(/^@/, '')}` : null);
+          if (dest.type === 'bot' || target === 'bot') {
+            target = dest.chatId && dest.chatId !== 'bot' ? dest.chatId : (adminConfig?.adminTelegramId || adminConfig?.adminChatId || '');
+          }
+
           if (!target) {
             destinationResults.push({
               id: dest.id || 'unknown',
-              displayName: dest.displayName || 'Unnamed Destination',
+              displayName: dest.displayName || 'Telegram Bot',
               username: dest.username || '',
               chatId: dest.chatId || '',
-              type: dest.type || 'channel',
+              type: dest.type || 'bot',
               success: false,
-              error: 'Invalid Chat ID / Username missing',
+              error: 'Bot Admin Telegram Chat ID not configured',
             });
             continue;
           }
