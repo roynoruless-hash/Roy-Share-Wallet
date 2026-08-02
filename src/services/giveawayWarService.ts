@@ -19,7 +19,13 @@ import {
   WarActivityLog,
   WarTeam,
   WarPointRules,
-  WarRewardConfig
+  WarRewardConfig,
+  WarChallenge,
+  WarSecretMission,
+  WarAirdrop,
+  WarTimelineEvent,
+  WarPendingReward,
+  WarPointBooster
 } from '../types';
 
 const WARS_COLLECTION = 'giveawayWars';

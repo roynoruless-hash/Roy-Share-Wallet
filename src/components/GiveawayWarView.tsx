@@ -40,7 +40,8 @@ import {
   Tv,
   ListOrdered,
   Eye,
-  EyeOff
+  EyeOff,
+  X
 } from 'lucide-react';
 import {
   BarChart,

@@ -26,13 +26,59 @@ import { AdminLoginView } from './components/AdminLoginView';
 import { VotingContestsView } from './components/VotingContestsView';
 import { GiveawayWarView } from './components/GiveawayWarView';
 import { ContestRegistrationView } from './components/ContestRegistrationView';
+import { ComingSoonView } from './components/ComingSoonView';
 import { Toast, ToastMessage } from './components/Toast';
 import { Loader2 } from 'lucide-react';
 
 const SESSION_STORAGE_KEY = 'royshare_admin_session';
 
+function resolveTabFromPath(pathname: string): { tab: TabType; isUnknown: boolean } {
+  const p = pathname.toLowerCase().replace(/\/$/, '');
+  if (p === '' || p === '/' || p === '/dashboard') return { tab: 'dashboard', isUnknown: false };
+  if (p.startsWith('/giveaway-war') || p.startsWith('/giveaway_war') || p.startsWith('/war') || p.startsWith('/lucky-spin') || p.startsWith('/claim-rewards') || p.startsWith('/event-replay') || p.startsWith('/new-war')) return { tab: 'giveaway_war', isUnknown: false };
+  if (p.startsWith('/users') || p.startsWith('/user-management')) return { tab: 'users', isUnknown: false };
+  if (p.startsWith('/transactions')) return { tab: 'transactions', isUnknown: false };
+  if (p.startsWith('/telegram')) return { tab: 'telegram', isUnknown: false };
+  if (p.startsWith('/channel')) return { tab: 'channel', isUnknown: false };
+  if (p.startsWith('/wallet')) return { tab: 'wallet', isUnknown: false };
+  if (p.startsWith('/withdrawal')) return { tab: 'withdrawal', isUnknown: false };
+  if (p.startsWith('/referral')) return { tab: 'referral', isUnknown: false };
+  if (p.startsWith('/milestones')) return { tab: 'milestones', isUnknown: false };
+  if (p.startsWith('/feedback-campaigns') || p.startsWith('/feedback_campaigns')) return { tab: 'feedback_campaigns', isUnknown: false };
+  if (p.startsWith('/feedback-reviews') || p.startsWith('/feedback_reviews')) return { tab: 'feedback_reviews', isUnknown: false };
+  if (p.startsWith('/voting-contests') || p.startsWith('/voting_contests') || p.startsWith('/contests')) return { tab: 'voting_contests', isUnknown: false };
+  if (p.startsWith('/support')) return { tab: 'support', isUnknown: false };
+  if (p.startsWith('/security') || p.startsWith('/system')) return { tab: 'security', isUnknown: false };
+  if (p.startsWith('/diagnostics')) return { tab: 'diagnostics', isUnknown: false };
+  if (p.startsWith('/logs')) return { tab: 'logs', isUnknown: false };
+
+  // Public views handled separately
+  if (p.startsWith('/claim-reward') || p.startsWith('/referral-verify') || p.startsWith('/feedback') || p.startsWith('/register-contest')) {
+    return { tab: 'dashboard', isUnknown: false };
+  }
+
+  return { tab: 'dashboard', isUnknown: true };
+}
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  const initialRoute = resolveTabFromPath(window.location.pathname);
+  const [activeTab, setActiveTabState] = useState<TabType>(initialRoute.tab);
+  const [isUnknownRoute, setIsUnknownRoute] = useState<boolean>(initialRoute.isUnknown);
+
+  const setActiveTab = (tab: TabType) => {
+    setActiveTabState(tab);
+    setIsUnknownRoute(false);
+  };
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const res = resolveTabFromPath(window.location.pathname);
+      setActiveTabState(res.tab);
+      setIsUnknownRoute(res.isUnknown);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
   const [config, setConfig] = useState<AdminConfig>(DEFAULT_CONFIG);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -495,123 +541,135 @@ export default function App() {
 
         {/* Dynamic Body Content View */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
-          {activeTab === 'dashboard' && (
-            <DashboardView config={config} setActiveTab={setActiveTab} />
-          )}
-
-          {activeTab === 'users' && (
-            <UserManagementView config={config} showToast={showToast} />
-          )}
-
-          {activeTab === 'transactions' && (
-            <TransactionsView />
-          )}
-
-          {activeTab === 'telegram' && (
-            <TelegramConfigView
-              config={config}
-              updateConfig={updateConfig}
-              onSave={handleSaveConfiguration}
-              isSaving={isSaving}
-              showToast={showToast}
+          {isUnknownRoute ? (
+            <ComingSoonView
+              path={window.location.pathname}
+              onGoHome={() => {
+                window.history.pushState({}, '', '/');
+                setActiveTab('dashboard');
+              }}
             />
+          ) : (
+            <>
+              {activeTab === 'dashboard' && (
+                <DashboardView config={config} setActiveTab={setActiveTab} />
+              )}
+
+              {activeTab === 'users' && (
+                <UserManagementView config={config} showToast={showToast} />
+              )}
+
+              {activeTab === 'transactions' && (
+                <TransactionsView />
+              )}
+
+              {activeTab === 'telegram' && (
+                <TelegramConfigView
+                  config={config}
+                  updateConfig={updateConfig}
+                  onSave={handleSaveConfiguration}
+                  isSaving={isSaving}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'channel' && (
+                <ChannelGroupView
+                  config={config}
+                  updateConfig={updateConfig}
+                  onSave={handleSaveConfiguration}
+                  isSaving={isSaving}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'wallet' && (
+                <WalletSettingsView
+                  config={config}
+                  updateConfig={updateConfig}
+                  onSave={handleSaveConfiguration}
+                  isSaving={isSaving}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'withdrawal' && (
+                <WithdrawalSettingsView
+                  config={config}
+                  updateConfig={updateConfig}
+                  onSave={handleSaveConfiguration}
+                  isSaving={isSaving}
+                />
+              )}
+
+              {activeTab === 'referral' && (
+                <ReferralSettingsView
+                  config={config}
+                  updateConfig={updateConfig}
+                  onSave={handleSaveConfiguration}
+                  isSaving={isSaving}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'milestones' && (
+                <ReferralMilestonesView
+                  config={config}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'feedback_campaigns' && (
+                <FeedbackCampaignsView
+                  config={config}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'feedback_reviews' && (
+                <FeedbackReviewsView
+                  config={config}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'voting_contests' && (
+                <VotingContestsView
+                  config={config}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'giveaway_war' && (
+                <GiveawayWarView
+                  config={config}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'support' && (
+                <SupportSettingsView
+                  config={config}
+                  updateConfig={updateConfig}
+                  onSave={handleSaveConfiguration}
+                  isSaving={isSaving}
+                />
+              )}
+
+              {activeTab === 'security' && (
+                <SecurityView
+                  config={config}
+                  updateConfig={updateConfig}
+                  onSave={handleSaveConfiguration}
+                  isSaving={isSaving}
+                />
+              )}
+
+              {activeTab === 'diagnostics' && <DiagnosticsView config={config} />}
+
+              {activeTab === 'logs' && <LogsView showToast={showToast} />}
+            </>
           )}
-
-          {activeTab === 'channel' && (
-            <ChannelGroupView
-              config={config}
-              updateConfig={updateConfig}
-              onSave={handleSaveConfiguration}
-              isSaving={isSaving}
-              showToast={showToast}
-            />
-          )}
-
-          {activeTab === 'wallet' && (
-            <WalletSettingsView
-              config={config}
-              updateConfig={updateConfig}
-              onSave={handleSaveConfiguration}
-              isSaving={isSaving}
-              showToast={showToast}
-            />
-          )}
-
-          {activeTab === 'withdrawal' && (
-            <WithdrawalSettingsView
-              config={config}
-              updateConfig={updateConfig}
-              onSave={handleSaveConfiguration}
-              isSaving={isSaving}
-            />
-          )}
-
-          {activeTab === 'referral' && (
-            <ReferralSettingsView
-              config={config}
-              updateConfig={updateConfig}
-              onSave={handleSaveConfiguration}
-              isSaving={isSaving}
-              showToast={showToast}
-            />
-          )}
-
-          {activeTab === 'milestones' && (
-            <ReferralMilestonesView
-              config={config}
-              showToast={showToast}
-            />
-          )}
-
-          {activeTab === 'feedback_campaigns' && (
-            <FeedbackCampaignsView
-              config={config}
-              showToast={showToast}
-            />
-          )}
-
-          {activeTab === 'feedback_reviews' && (
-            <FeedbackReviewsView
-              config={config}
-              showToast={showToast}
-            />
-          )}
-
-          {activeTab === 'voting_contests' && (
-            <VotingContestsView
-              config={config}
-              showToast={showToast}
-            />
-          )}
-
-          {activeTab === 'giveaway_war' && (
-            <GiveawayWarView
-              config={config}
-              showToast={showToast}
-            />
-          )}
-
-          {activeTab === 'support' && (
-            <SupportSettingsView
-              config={config}
-              updateConfig={updateConfig}
-              onSave={handleSaveConfiguration}
-              isSaving={isSaving}
-            />
-          )}
-
-          {activeTab === 'security' && (
-            <SecurityView
-              config={config}
-              updateConfig={updateConfig}
-              onSave={handleSaveConfiguration}
-              isSaving={isSaving}
-            />
-          )}
-
-          {activeTab === 'diagnostics' && <DiagnosticsView config={config} />}
-
-          {activeTab === 'logs' && <LogsView showToast={showToast} />}
         </main>
       </div>
 
