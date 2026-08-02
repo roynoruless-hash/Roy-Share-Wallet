@@ -306,6 +306,43 @@ async function startServer() {
     }
   });
 
+  // 5B. GIVEAWAY WAR TELEGRAM NOTIFICATIONS ENDPOINT
+  app.post('/api/telegram/war-notify', async (req, res) => {
+    try {
+      const { type, payload } = req.body;
+      console.log(`[War Notification] Event: ${type}`, JSON.stringify(payload));
+
+      // Fetch Bot Token & Main Channel/Group from admin config in Firestore
+      const configDoc = await getDoc(doc(db, 'settings', 'adminConfig'));
+      const adminConfig = configDoc.exists() ? configDoc.data() : null;
+      const botToken = adminConfig?.botToken;
+      const targetChat = adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername || adminConfig?.adminTelegramId;
+
+      if (!botToken || !targetChat) {
+        return res.json({ success: false, reason: 'No bot token or target chat configured for broadcasting' });
+      }
+
+      let text = '';
+      if (type === 'TEAM_JOINED') {
+        text = `⚔️ <b>New Warrior Joined!</b>\n\n👤 <b>${payload.userName}</b> has joined <b>${payload.teamName}</b> in <i>${payload.warTitle}</i>!\n\nJoin your team now to claim the prize pool!`;
+      } else if (type === 'DAILY_MVP') {
+        text = `👑 <b>DAILY MVP ANNOUNCEMENT!</b>\n\n⭐ <b>${payload.mvpName}</b> (${payload.teamName}) is today's top contributor with <b>${payload.points} Points</b>!\n🎁 Rewarded: <b>₹${payload.rewardAmount}</b>!`;
+      } else if (type === 'WINNER_ANNOUNCEMENT') {
+        text = `🏆 <b>GIVEAWAY WAR ENDED - WINNER DECLARED!</b>\n\n🥇 <b>Winning Team:</b> ${payload.winningTeamName} (${payload.winningTeamScore} Pts)\n👑 <b>War MVP:</b> ${payload.mvpName} (${payload.mvpPoints} Pts)\n💰 <b>Total Rewards Credited:</b> ₹${payload.totalRewardsCredited} across ${payload.creditedCount} warriors!`;
+      } else if (type === 'WAR_STARTED') {
+        text = `🔥 <b>GIVEAWAY WAR IS NOW LIVE!</b>\n\n⚔️ <b>${payload.title}</b>\n💰 Prize Pool: <b>₹${payload.prizePool}</b>\n\nChoose your team and start completing daily tasks now!`;
+      } else {
+        text = `⚔️ <b>Giveaway War Update:</b> ${type}`;
+      }
+
+      await sendTelegramMessage(botToken, targetChat, text);
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error in /api/telegram/war-notify:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // 6. ANTI SELF-REFERRAL VERIFICATION ENDPOINTS
   app.get('/api/referral/token-info', async (req, res) => {
     try {
@@ -1639,6 +1676,80 @@ async function startServer() {
         return res.status(500).json({ success: false, error: `Telegram Bot API Error: ${resJson.description || 'Unknown'}` });
       }
     } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Giveaway War Telegram Notification Endpoint
+  app.post('/api/telegram/war-notify', async (req, res) => {
+    try {
+      const { type, payload } = req.body;
+      const config = await getDecryptedConfig();
+      if (!config || !config.botToken) {
+        return res.status(400).json({ success: false, error: 'Bot token not configured' });
+      }
+
+      const botToken = config.botToken;
+      const adminChatId = config.adminTelegramId || config.adminChatId;
+
+      let messageText = '';
+      let targetChatId = payload?.telegramId || adminChatId;
+
+      switch (type) {
+        case 'WAR_STARTED':
+          messageText =
+            `⚔️ <b>GIVEAWAY WAR IS LIVE!</b> ⚔️\n\n` +
+            `🏆 <b>${payload?.title || 'Giveaway War'}</b>\n` +
+            `📝 ${payload?.description || 'Join a team and complete tasks to lead your team to victory!'}\n\n` +
+            `💰 <b>Prize Pool:</b> ₹${payload?.prizePool || 0}\n\n` +
+            `🔴 🔵 Pick your team now in the app to start earning points!`;
+          break;
+
+        case 'TEAM_JOINED':
+          messageText =
+            `⚔️ <b>GIVEAWAY WAR UPDATE</b>\n\n` +
+            `👤 <b>${payload?.userName}</b> has joined <b>${payload?.teamName}</b> in "<i>${payload?.warTitle}</i>"!\n\n` +
+            `🔥 Complete daily activities, referrals, and votes to power your team score!`;
+          break;
+
+        case 'POINTS_EARNED':
+          messageText =
+            `🎉 <b>GIVEAWAY WAR POINTS EARNED!</b>\n\n` +
+            `👤 <b>${payload?.userName}</b> earned <b>+${payload?.pointsEarned} Points</b> for <i>${payload?.activityType}</i>!\n` +
+            `🛡️ <b>Team:</b> ${payload?.teamName}\n` +
+            `⭐ <b>Total Contribution:</b> ${payload?.newTotalPoints} Points`;
+          break;
+
+        case 'WINNER_ANNOUNCEMENT':
+          messageText =
+            `🏆 <b>GIVEAWAY WAR WINNERS ANNOUNCEMENT!</b> 🏆\n\n` +
+            `👑 <b>Winning Team:</b> ${payload?.winningTeamName} (Score: ${payload?.winningTeamScore})\n` +
+            `🥈 <b>Runner Up:</b> ${payload?.runnerUpTeamName}\n\n` +
+            `🌟 <b>MVP Contributor:</b> ${payload?.mvpName} (${payload?.mvpPoints} Pts)\n\n` +
+            `💰 <b>Total Rewards Credited:</b> ₹${payload?.totalRewardsCredited} to ${payload?.creditedCount} winner(s)!\n\n` +
+            `Check the app results page for detailed team rankings and contributor breakdowns.`;
+          break;
+
+        default:
+          messageText = `⚔️ <b>Giveaway War Update:</b> ${JSON.stringify(payload)}`;
+      }
+
+      // Send to user/admin if targetChatId exists
+      if (targetChatId) {
+        await sendTelegramMessage(botToken, targetChatId, messageText);
+      }
+
+      // Optionally notify main channel if configured
+      if (config.mainChannelUsername) {
+        const channelId = config.mainChannelUsername.startsWith('@')
+          ? config.mainChannelUsername
+          : `@${config.mainChannelUsername}`;
+        await sendTelegramMessage(botToken, channelId, messageText);
+      }
+
+      return res.json({ success: true, message: 'Notification sent successfully' });
+    } catch (err: any) {
+      console.error('Error in /api/telegram/war-notify:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });

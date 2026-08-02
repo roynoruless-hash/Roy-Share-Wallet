@@ -3,6 +3,7 @@ import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
 import { getContests, getContestants, submitVote } from '../services/contestService';
 import { sendAdminWithdrawalNotification, handleAdminWithdrawalCallback } from './adminWithdrawalBot';
+import { getWarStatsForTelegram } from '../services/giveawayWarService';
 
 interface UserSession {
   step: 'FORCE_JOIN' | 'WAITING_NAME' | 'WAITING_MOBILE' | 'WAITING_CONTACT' | 'WITHDRAW_METHOD_SELECT' | 'WITHDRAW_AMOUNT' | 'WITHDRAW_DETAILS' | 'WITHDRAW_CONFIRM';
@@ -1693,6 +1694,49 @@ export async function processTelegramUpdate(token: string, update: any) {
         text: listText,
         parse_mode: 'HTML',
         reply_markup: { inline_keyboard }
+      });
+      return;
+    }
+
+    if (text === '/war' || text === '⚔️ Giveaway War' || text.startsWith('/war')) {
+      const warStats = await getWarStatsForTelegram(chatId);
+
+      if (!warStats.hasActiveWar) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `⚔️ <b>Giveaway War System</b>\n\nThere is currently no live Giveaway War running. Check back soon for the next event!`,
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      let warMsg = `⚔️ <b>${warStats.warTitle || 'Giveaway War'}</b>\n\n`;
+      if (warStats.teamName && warStats.teamName !== 'None') {
+        warMsg += `🛡 <b>Your Team:</b> <b>${warStats.teamName}</b>\n`;
+        warMsg += `⭐ <b>Your Contribution:</b> <b>${warStats.points} Pts</b>\n`;
+        warMsg += `🏅 <b>Your Rank:</b> #${warStats.userRank || '-'}\n`;
+        warMsg += `📊 <b>Team Rank:</b> #${warStats.teamRank || '-'}\n\n`;
+      } else {
+        warMsg += `⚠️ <b>You haven't joined a team yet!</b>\nOpen the Mini App to choose your team and earn points.\n\n`;
+      }
+
+      warMsg += `👑 <b>Top Team:</b> ${warStats.topTeamName} (${warStats.topTeamScore} Pts)\n\n`;
+
+      if (warStats.leaderboardTop3 && warStats.leaderboardTop3.length > 0) {
+        warMsg += `🏆 <b>Top Contributors:</b>\n`;
+        warStats.leaderboardTop3.forEach((m, idx) => {
+          const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉';
+          warMsg += `${medal} ${m.name} (${m.teamName}) - <b>${m.points} Pts</b>\n`;
+        });
+        warMsg += `\n`;
+      }
+
+      warMsg += `⏱ <b>End Date / Status:</b> ${warStats.remainingTime}`;
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: warMsg,
+        parse_mode: 'HTML',
       });
       return;
     }

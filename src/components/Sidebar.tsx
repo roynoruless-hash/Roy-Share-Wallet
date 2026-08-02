@@ -21,6 +21,7 @@ import {
   MessageSquare,
   Star,
   ThumbsUp,
+  Swords,
 } from 'lucide-react';
 import { TabType } from '../types';
 
@@ -137,6 +138,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'feedback_campaigns' as TabType, label: '⭐ Feedback Campaigns', icon: MessageSquare },
     { id: 'feedback_reviews' as TabType, label: 'Feedback Reviews', icon: Star },
     { id: 'voting_contests' as TabType, label: '🏆 Voting Contests', icon: ThumbsUp, badge: 'Contest' },
+    { id: 'giveaway_war' as TabType, label: '⚔️ Giveaway War', icon: Swords, badge: 'WAR' },
     { id: 'support' as TabType, label: 'Support Settings', icon: Headphones },
     { id: 'security' as TabType, label: 'System Settings', icon: ShieldAlert },
     { id: 'diagnostics' as TabType, label: 'Diagnostics', icon: Activity, badge: 'Live' },
