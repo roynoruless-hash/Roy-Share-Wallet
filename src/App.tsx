@@ -25,6 +25,7 @@ import { ClaimRewardView } from './components/ClaimRewardView';
 import { AdminLoginView } from './components/AdminLoginView';
 import { VotingContestsView } from './components/VotingContestsView';
 import { GiveawayWarView } from './components/GiveawayWarView';
+import { AIBroadcastView } from './components/AIBroadcastView';
 import { GiveawayWarPublicView } from './components/GiveawayWarPublicView';
 import { ContestRegistrationView } from './components/ContestRegistrationView';
 import { ComingSoonView } from './components/ComingSoonView';
@@ -37,6 +38,7 @@ function resolveTabFromPath(pathname: string): { tab: TabType; isUnknown: boolea
   const p = pathname.toLowerCase().replace(/\/$/, '');
   if (p === '' || p === '/' || p === '/dashboard') return { tab: 'dashboard', isUnknown: false };
   if (p.startsWith('/giveaway-war') || p.startsWith('/giveaway_war') || p.startsWith('/war') || p.startsWith('/lucky-spin') || p.startsWith('/claim-rewards') || p.startsWith('/event-replay') || p.startsWith('/new-war')) return { tab: 'giveaway_war', isUnknown: false };
+  if (p.startsWith('/ai-broadcast') || p.startsWith('/ai_broadcast') || p.startsWith('/broadcast')) return { tab: 'ai_broadcast', isUnknown: false };
   if (p.startsWith('/users') || p.startsWith('/user-management')) return { tab: 'users', isUnknown: false };
   if (p.startsWith('/transactions')) return { tab: 'transactions', isUnknown: false };
   if (p.startsWith('/telegram')) return { tab: 'telegram', isUnknown: false };
@@ -443,6 +445,10 @@ export default function App() {
         return 'Feedback Reviews';
       case 'voting_contests':
         return '🏆 Voting Contest System';
+      case 'giveaway_war':
+        return '⚔️ Giveaway War';
+      case 'ai_broadcast':
+        return '🎁 AI Redeem Code Broadcast';
       case 'support':
         return 'Support Settings';
       case 'security':
@@ -648,6 +654,13 @@ export default function App() {
 
               {activeTab === 'giveaway_war' && (
                 <GiveawayWarView
+                  config={config}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'ai_broadcast' && (
+                <AIBroadcastView
                   config={config}
                   showToast={showToast}
                 />

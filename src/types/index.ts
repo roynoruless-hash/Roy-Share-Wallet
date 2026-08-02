@@ -121,7 +121,48 @@ export type TabType =
   | 'feedback_campaigns'
   | 'feedback_reviews'
   | 'voting_contests'
-  | 'giveaway_war';
+  | 'giveaway_war'
+  | 'ai_broadcast';
+
+export interface AIBroadcastConfig {
+  geminiApiKey: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface AIBroadcastItem {
+  id: string;
+  type: 'active_alert' | 'redeem_code';
+  redeemCode?: string;
+  message: string;
+  sentByAdmin: string;
+  targetChat?: string;
+  targetAudience?: string;
+  telegramMessageId?: string | number | null;
+  status: 'Success' | 'Failed' | 'Scheduled';
+  errorMessage?: string;
+  timestamp: string;
+  isScheduled?: boolean;
+  scheduledFor?: string;
+  inlineButtons?: { text: string; url: string; enabled: boolean }[];
+  redeemSettings?: {
+    expiryTime?: string;
+    maxUses?: number;
+    remainingUses?: number;
+  };
+  deliveryStats?: {
+    totalSent: number;
+    delivered: number;
+    failed: number;
+    successRate: number;
+  };
+  aiScores?: {
+    engagementScore: number;
+    urgencyScore: number;
+    estimatedClickRate: number;
+    suggestions: string[];
+  };
+}
 
 export interface BotUser {
   id: string;

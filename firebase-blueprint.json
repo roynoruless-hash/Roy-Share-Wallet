@@ -172,12 +172,48 @@
         "processedAt": { "type": "string" }
       },
       "required": ["withdrawalId", "uid", "amount", "method", "status", "createdAt"]
+    },
+    "aiBroadcastConfig": {
+      "title": "AI Broadcast Configuration",
+      "description": "Gemini API key and AI Broadcast settings",
+      "type": "object",
+      "properties": {
+        "geminiApiKey": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "aiBroadcastHistory": {
+      "title": "AI Broadcast History",
+      "description": "History of AI generated Telegram broadcast messages",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "redeemCode": { "type": "string" },
+        "message": { "type": "string" },
+        "sentByAdmin": { "type": "string" },
+        "targetChat": { "type": "string" },
+        "telegramMessageId": { "type": "string" },
+        "status": { "type": "string" },
+        "errorMessage": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "type", "message", "status", "timestamp"]
     }
   },
   "firestore": {
     "/settings/admin_config": {
       "schema": "settings",
       "description": "Admin configuration settings"
+    },
+    "/settings/ai_broadcast": {
+      "schema": "aiBroadcastConfig",
+      "description": "AI Broadcast Gemini API configuration"
+    },
+    "/aiBroadcastHistory/{broadcastId}": {
+      "schema": "aiBroadcastHistory",
+      "description": "History of sent AI Telegram broadcasts"
     },
     "/logs/{logId}": {
       "schema": "logs",
