@@ -1297,41 +1297,53 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                   </div>
 
                   {/* Metrics Grid */}
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                    <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                    <div className="p-3.5 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
                       <span className="text-[10px] font-bold text-slate-400 uppercase block">👥 Total Members</span>
-                      <p className="text-xl font-black text-white">{leaderDashboardStats.stats?.totalTeamMembers || 0}</p>
+                      <p className="text-xl font-black text-white">{leaderDashboardStats.stats?.totalMembers || leaderDashboardStats.stats?.totalJoined || 0}</p>
                       <span className="text-[10px] text-slate-500">Joined Team</span>
                     </div>
 
-                    <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase block">⚡ Today's Joins</span>
-                      <p className="text-xl font-black text-emerald-400">+{leaderDashboardStats.stats?.todayNewMembers || 0}</p>
-                      <span className="text-[10px] text-emerald-500/80">New Members</span>
+                    <div className="p-3.5 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
+                      <span className="text-[10px] font-bold text-emerald-400 uppercase block">✅ Active Members</span>
+                      <p className="text-xl font-black text-emerald-400">{leaderDashboardStats.stats?.totalActiveMembers || 0}</p>
+                      <span className="text-[10px] text-emerald-500/80">Verified Active</span>
                     </div>
 
-                    <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase block">🎁 Total Referrals</span>
-                      <p className="text-xl font-black text-amber-400">{leaderDashboardStats.stats?.totalReferrals || 0}</p>
-                      <span className="text-[10px] text-amber-500/80">Team Invites</span>
+                    <div className="p-3.5 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
+                      <span className="text-[10px] font-bold text-amber-400 uppercase block">⏳ Pending Members</span>
+                      <p className="text-xl font-black text-amber-400">{leaderDashboardStats.stats?.pendingMembers || 0}</p>
+                      <span className="text-[10px] text-amber-500/80">Awaiting Verify</span>
                     </div>
 
-                    <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase block">🗳️ Verified Votes</span>
-                      <p className="text-xl font-black text-blue-400">{leaderDashboardStats.stats?.totalVotes || 0}</p>
-                      <span className="text-[10px] text-blue-500/80">Contest Votes</span>
+                    <div className="p-3.5 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
+                      <span className="text-[10px] font-bold text-amber-300 uppercase block">⚡ Team Points</span>
+                      <p className="text-xl font-black text-amber-300">{leaderDashboardStats.stats?.teamPoints || 0}</p>
+                      <span className="text-[10px] text-amber-500/80">Total Score</span>
                     </div>
 
-                    <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase block">💬 Total Feedbacks</span>
+                    <div className="p-3.5 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
+                      <span className="text-[10px] font-bold text-blue-400 uppercase block">🎁 Referral Count</span>
+                      <p className="text-xl font-black text-blue-400">{leaderDashboardStats.stats?.totalReferrals || 0}</p>
+                      <span className="text-[10px] text-blue-500/80">Invites Sent</span>
+                    </div>
+
+                    <div className="p-3.5 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
+                      <span className="text-[10px] font-bold text-cyan-400 uppercase block">🗳️ Votes</span>
+                      <p className="text-xl font-black text-cyan-400">{leaderDashboardStats.stats?.totalVotes || 0}</p>
+                      <span className="text-[10px] text-cyan-500/80">Contest Votes</span>
+                    </div>
+
+                    <div className="p-3.5 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
+                      <span className="text-[10px] font-bold text-purple-400 uppercase block">💬 Feedback</span>
                       <p className="text-xl font-black text-purple-400">{leaderDashboardStats.stats?.totalFeedbacks || 0}</p>
                       <span className="text-[10px] text-purple-500/80">Reviews Sent</span>
                     </div>
 
-                    <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase block">🏆 Leader Bonus</span>
-                      <p className="text-xl font-black text-amber-300">+{leaderDashboardStats.stats?.leaderPoints || 0}</p>
-                      <span className="text-[10px] text-amber-500/80">Leadership Points</span>
+                    <div className="p-3.5 rounded-2xl bg-slate-800/80 border border-slate-700/80 space-y-1">
+                      <span className="text-[10px] font-bold text-orange-400 uppercase block">🏆 Team Rank</span>
+                      <p className="text-xl font-black text-orange-400">#{leaderDashboardStats.stats?.teamRank || 1}</p>
+                      <span className="text-[10px] text-orange-500/80">Leaderboard Position</span>
                     </div>
                   </div>
 
@@ -2425,84 +2437,135 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                   </div>
                 </div>
 
-                {/* TEAM LEADER ASSIGNMENT PANEL */}
+                {/* TEAM LEADER ASSIGNMENT & REGISTRATION LINKS PANEL */}
                 <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                     <h5 className="text-xs font-black uppercase text-amber-400 flex items-center gap-1.5">
                       <Award className="w-4 h-4 text-amber-400" />
-                      <span>👑 Team Leader Selection & Management</span>
+                      <span>👑 Team Registration Links & Leader Status</span>
                     </h5>
-                    <span className="text-[10px] text-slate-400 font-bold uppercase">Admin Controlled</span>
+                    <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2.5 py-0.5 rounded-full font-bold uppercase">
+                      FIRST JOIN = AUTO LEADER
+                    </span>
                   </div>
                   <p className="text-xs text-slate-300">
-                    Manually select a Team Leader for each team from registered Firestore users. Leaders get a unique invite link and earn leadership points whenever their members complete activities!
+                    System automatically generates registration links. The <strong>FIRST verified user</strong> who joins through Team A/B Link becomes 👑 <strong>Team Leader</strong>! Once assigned, leaders receive their personal team invite link.
                   </p>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {activeWar?.teams.map((team) => (
-                      <div key={team.id} className="p-4 rounded-2xl bg-slate-800/60 border border-slate-700/60 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-black text-white flex items-center gap-2">
-                            <span className="w-3 h-3 rounded-full" style={{ backgroundColor: team.color }} />
-                            <span>{team.name}</span>
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-mono">ID: {team.id}</span>
-                        </div>
+                    {activeWar?.teams.map((team, index) => {
+                      const teamTag = index === 0 ? 'teamA' : index === 1 ? 'teamB' : team.id;
+                      const botUsername = config.botUsername || 'Roy_wallett_bot';
+                      const regLinkTg = `https://t.me/${botUsername}?start=${teamTag}_${activeWar.id}`;
+                      const regLinkWeb = `https://roy-share-wallet.onrender.com/war/${teamTag}/${activeWar.id}`;
 
-                        {team.leaderTelegramId ? (
-                          <div className="p-3 rounded-xl bg-slate-900 border border-amber-500/30 space-y-2">
-                            <div className="flex items-center justify-between text-xs font-bold text-amber-300">
-                              <span className="flex items-center gap-1">
-                                👑 Leader: {team.leaderName} {team.leaderUsername ? `(@${team.leaderUsername})` : ''}
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-mono">ID: {team.leaderTelegramId}</span>
+                      const activeMembersCount = members.filter((m) => m.teamId === team.id && m.status === 'ACTIVE').length;
+
+                      return (
+                        <div key={team.id} className="p-4 rounded-2xl bg-slate-800/60 border border-slate-700/60 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-black text-white flex items-center gap-2">
+                              <span className="w-3 h-3 rounded-full" style={{ backgroundColor: team.color }} />
+                              <span>{team.name}</span>
+                            </span>
+                            <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+                              <span>Score: <strong className="text-amber-400">{team.score || 0} Pts</strong></span>
+                              <span>•</span>
+                              <span>Members: <strong className="text-emerald-400">{activeMembersCount} Active</strong> / {team.membersCount || 0} Total</span>
                             </div>
-                            <div className="text-[11px] text-slate-400 font-mono break-all bg-slate-950 p-2 rounded-lg select-all">
-                              {team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=war_${activeWar.id}_team_${team.id}_lead_${team.leaderTelegramId}`}
+                          </div>
+
+                          {/* Initial Team Registration Link */}
+                          <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-700 space-y-1.5">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                              🔗 Initial Team Registration Link (First Join = Leader)
+                            </span>
+                            <div className="flex items-center justify-between gap-2">
+                              <code className="text-[11px] text-amber-300 font-mono truncate select-all">{regLinkTg}</code>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(regLinkTg);
+                                  showToast(`Copied ${team.name} Telegram Registration Link!`, 'success');
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 text-[10px] font-bold transition flex items-center gap-1 shrink-0"
+                              >
+                                <Copy className="w-3 h-3" />
+                                <span>Copy Telegram</span>
+                              </button>
                             </div>
+                            <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800">
+                              <code className="text-[10px] text-slate-400 font-mono truncate select-all">{regLinkWeb}</code>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(regLinkWeb);
+                                  showToast(`Copied ${team.name} Web Link!`, 'success');
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold transition flex items-center gap-1 shrink-0"
+                              >
+                                <Copy className="w-3 h-3" />
+                                <span>Copy Web</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Leader Info */}
+                          {team.leaderTelegramId ? (
+                            <div className="p-3 rounded-xl bg-slate-900 border border-amber-500/30 space-y-2">
+                              <div className="flex items-center justify-between text-xs font-bold text-amber-300">
+                                <span className="flex items-center gap-1">
+                                  👑 Leader: {team.leaderName} {team.leaderUsername ? `(@${team.leaderUsername})` : ''}
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-mono">ID: {team.leaderTelegramId}</span>
+                              </div>
+                              <div className="text-[11px] text-slate-400 font-mono break-all bg-slate-950 p-2 rounded-lg select-all">
+                                Leader Invite Link: {team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${activeWar.id}_${team.leaderTelegramId}`}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const link = team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${activeWar.id}_${team.leaderTelegramId}`;
+                                  navigator.clipboard.writeText(link);
+                                  showToast('👑 Leader Link copied!', 'success');
+                                }}
+                                className="w-full py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-bold transition flex items-center justify-center gap-1.5"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                                <span>Copy Leader Personal Invite Link</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-400 italic">
+                              ⏳ Awaiting First Verified Member to Join from Team Registration Link to automatically become 👑 Team Leader.
+                            </div>
+                          )}
+
+                          <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                            <select
+                              value={leaderAssignTgId[team.id] || ''}
+                              onChange={(e) => setLeaderAssignTgId({ ...leaderAssignTgId, [team.id]: e.target.value })}
+                              className="bg-slate-900 text-white text-xs px-3 py-2 rounded-xl border border-slate-700 w-full focus:outline-none cursor-pointer"
+                            >
+                              <option value="">-- Manual Override Leader --</option>
+                              {registeredUsers.map((u) => (
+                                <option key={u.id || u.telegramId} value={u.telegramId}>
+                                  {u.firstName || u.username || 'User'} {u.username ? `(@${u.username})` : ''} - ID: {u.telegramId}
+                                </option>
+                              ))}
+                            </select>
                             <button
                               type="button"
-                              onClick={() => {
-                                const link = team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=war_${activeWar.id}_team_${team.id}_lead_${team.leaderTelegramId}`;
-                                navigator.clipboard.writeText(link);
-                                showToast('👑 Leader Link copied!', 'success');
-                              }}
-                              className="w-full py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-bold transition flex items-center justify-center gap-1.5"
+                              onClick={() => handleAssignLeader(team.id)}
+                              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 transition flex items-center gap-1"
                             >
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Copy Invite Link</span>
+                              <UserCheck className="w-4 h-4" />
+                              <span>{team.leaderTelegramId ? 'Change Leader' : 'Assign Leader'}</span>
                             </button>
                           </div>
-                        ) : (
-                          <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-400 italic">
-                            ⚠️ No Team Leader assigned yet for this team. Select a user below:
-                          </div>
-                        )}
-
-                        <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                          <select
-                            value={leaderAssignTgId[team.id] || ''}
-                            onChange={(e) => setLeaderAssignTgId({ ...leaderAssignTgId, [team.id]: e.target.value })}
-                            className="bg-slate-900 text-white text-xs px-3 py-2 rounded-xl border border-slate-700 w-full focus:outline-none cursor-pointer"
-                          >
-                            <option value="">-- Choose Registered User --</option>
-                            {registeredUsers.map((u) => (
-                              <option key={u.id || u.telegramId} value={u.telegramId}>
-                                {u.firstName || u.username || 'User'} {u.username ? `(@${u.username})` : ''} - ID: {u.telegramId}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={() => handleAssignLeader(team.id)}
-                            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shrink-0 transition flex items-center gap-1"
-                          >
-                            <UserCheck className="w-4 h-4" />
-                            <span>{team.leaderTelegramId ? 'Change Leader' : 'Assign Leader'}</span>
-                          </button>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 

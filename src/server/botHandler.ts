@@ -1424,18 +1424,32 @@ export async function processTelegramUpdate(token: string, update: any) {
 
           if (result.success && result.team) {
             const botUsername = 'Roy_wallett_bot';
-            const myTeamRefLink = `https://t.me/${botUsername}?start=war_${warId}_team_${teamId}_ref_${chatId}`;
+            const isLeader = result.member?.isTeamLeader || String(result.team.leaderTelegramId) === String(chatId);
 
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
-                `You are now registered for <b>${result.team.name}</b> in Giveaway War!\n` +
-                `🔒 <b>Team Choice Locked.</b>\n\n` +
-                `🔗 <b>Your Unique Team Referral Link:</b>\n` +
-                `<code>${myTeamRefLink}</code>\n\n` +
-                `Share your referral link with friends! Anyone joining through your link automatically joins <b>${result.team.name}</b> and earns points for both you and your Team Leader!`,
-              parse_mode: 'HTML',
-            });
+            if (isLeader) {
+              const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${warId}_${chatId}`;
+              await sendTelegramApi(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
+                  `You are now automatically assigned as the <b>👑 Official Team Leader</b> for <b>${result.team.name}</b>!\n\n` +
+                  `🔗 <b>Your Personal Team Leader Invite Link:</b>\n` +
+                  `<code>${leaderLink}</code>\n\n` +
+                  `Share this link to recruit warriors directly to your team! Anyone joining through your link earns leadership bonus points for you!`,
+                parse_mode: 'HTML',
+              });
+            } else {
+              const myTeamRefLink = `https://t.me/${botUsername}?start=war_${warId}_team_${teamId}_ref_${chatId}`;
+              await sendTelegramApi(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
+                  `You are now registered for <b>${result.team.name}</b> in Giveaway War!\n` +
+                  `🔒 <b>Team Choice Locked.</b>\n\n` +
+                  `🔗 <b>Your Unique Team Referral Link:</b>\n` +
+                  `<code>${myTeamRefLink}</code>\n\n` +
+                  `Share your referral link with friends! Anyone joining through your link automatically joins <b>${result.team.name}</b> and earns points for both you and your Team Leader!`,
+                parse_mode: 'HTML',
+              });
+            }
           } else {
             await sendTelegramApi(token, 'sendMessage', {
               chat_id: chatId,
@@ -2222,18 +2236,32 @@ export async function processTelegramUpdate(token: string, update: any) {
 
       if (result.success && result.team) {
         const botUsername = 'Roy_wallett_bot';
-        const myTeamRefLink = `https://t.me/${botUsername}?start=war_${pendingWarJoin.warId}_team_${pendingWarJoin.teamId}_ref_${chatId}`;
+        const isLeader = result.member?.isTeamLeader || String(result.team.leaderTelegramId) === String(chatId);
 
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
-            `You are now officially registered for <b>${result.team.name}</b> in Giveaway War!\n` +
-            `🔒 <b>Team Choice Locked.</b>\n\n` +
-            `🔗 <b>Your Unique Team Referral Link:</b>\n` +
-            `<code>${myTeamRefLink}</code>\n\n` +
-            `Share your link with friends! Anyone joining through your link automatically joins <b>${result.team.name}</b> and earns points for both you and your Team Leader!`,
-          parse_mode: 'HTML',
-        });
+        if (isLeader) {
+          const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${pendingWarJoin.warId}_${chatId}`;
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
+              `You are now automatically assigned as the <b>👑 Official Team Leader</b> for <b>${result.team.name}</b>!\n\n` +
+              `🔗 <b>Your Personal Team Leader Invite Link:</b>\n` +
+              `<code>${leaderLink}</code>\n\n` +
+              `Share this link to recruit warriors directly to your team! Anyone joining through your link earns leadership bonus points for you!`,
+            parse_mode: 'HTML',
+          });
+        } else {
+          const myTeamRefLink = `https://t.me/${botUsername}?start=war_${pendingWarJoin.warId}_team_${pendingWarJoin.teamId}_ref_${chatId}`;
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
+              `You are now officially registered for <b>${result.team.name}</b> in Giveaway War!\n` +
+              `🔒 <b>Team Choice Locked.</b>\n\n` +
+              `🔗 <b>Your Unique Team Referral Link:</b>\n` +
+              `<code>${myTeamRefLink}</code>\n\n` +
+              `Share your link with friends! Anyone joining through your link automatically joins <b>${result.team.name}</b> and earns points for both you and your Team Leader!`,
+            parse_mode: 'HTML',
+          });
+        }
       }
     }
 

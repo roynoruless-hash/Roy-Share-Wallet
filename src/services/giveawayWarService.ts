@@ -528,6 +528,11 @@ export async function joinWarTeam(
       }
     }
 
+    // First Join Leader Check
+    const isFirstJoinLeader = !team.leaderTelegramId || team.leaderTelegramId === '';
+    const botUsername = 'Roy_wallett_bot';
+    const leaderLink = `https://t.me/${botUsername}?start=TEAMA_LEADER_${warId}_${user.telegramId}`;
+
     const nowIso = new Date().toISOString();
     const newMember: WarMember = {
       id: memberDocId,
@@ -538,6 +543,7 @@ export async function joinWarTeam(
       teamId: team.id,
       teamName: team.name,
       points: 0,
+      isTeamLeader: isFirstJoinLeader,
       invitedByTelegramId: options?.invitedByTelegramId || '',
       deviceFingerprint: options?.deviceFingerprint || '',
       ipHash: options?.ipHash || '',
@@ -559,7 +565,7 @@ export async function joinWarTeam(
     const valResult = await validateAndActivateMember(warId, String(user.telegramId), options);
     const activeMember = valResult.member || newMember;
 
-    // Update team member count and totalParticipants in War doc
+    // Update team member count, leader, and totalParticipants in War doc
     const updatedTeams = war.teams.map((t) => {
       if (t.id === teamId) {
         return {
@@ -567,7 +573,14 @@ export async function joinWarTeam(
           membersCount: (t.membersCount || 0) + 1,
           totalReferrals: options?.invitedByTelegramId
             ? (t.totalReferrals || 0) + 1
-            : t.totalReferrals || 0
+            : t.totalReferrals || 0,
+          ...(isFirstJoinLeader ? {
+            leaderTelegramId: String(user.telegramId),
+            leaderName: user.name || 'Team Leader',
+            leaderUsername: user.username || '',
+            leaderInviteLink: leaderLink,
+            leaderPoints: 0
+          } : {})
         };
       }
       return t;
@@ -588,7 +601,9 @@ export async function joinWarTeam(
       teamId: team.id,
       activityType: 'user_joined',
       pointsEarned: 0,
-      description: `Joined ${team.name}${options?.invitedByTelegramId ? ` (Invited by ${options.invitedByTelegramId})` : ''}`,
+      description: isFirstJoinLeader
+        ? `👑 FIRST JOIN: Assigned as Team Leader of ${team.name}`
+        : `Joined ${team.name}${options?.invitedByTelegramId ? ` (Invited by ${options.invitedByTelegramId})` : ''}`,
       deviceFingerprint: options?.deviceFingerprint || '',
       ipHash: options?.ipHash || '',
       isValid: true,
@@ -605,13 +620,17 @@ export async function joinWarTeam(
       teamName: team.name
     });
 
+    const updatedTeam = updatedTeams.find((t) => t.id === teamId) || team;
+
     return {
       success: true,
-      message: valResult.isActive
-        ? `Successfully joined ${team.name} as an ACTIVE member!`
-        : `Joined ${team.name}! Status: PENDING verification. Complete channel join and bot onboarding to activate points.`,
-      member: activeMember,
-      team
+      message: isFirstJoinLeader
+        ? `👑 CONGRATULATIONS! You are the FIRST user to join ${team.name}! You are now automatically assigned as 👑 Team Leader!`
+        : (valResult.isActive
+            ? `Successfully joined ${team.name} as an ACTIVE member!`
+            : `Joined ${team.name}! Status: PENDING verification. Complete channel join and bot onboarding to activate points.`),
+      member: { ...activeMember, isTeamLeader: isFirstJoinLeader },
+      team: updatedTeam
     };
   } catch (err: any) {
     console.error('Error joining war team:', err);
