@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { AdminConfig, AIBroadcastItem } from '../types';
+import { AdminConfig, AIBroadcastItem, TelegramChannelItem } from '../types';
+import { getTelegramChannels } from '../services/channelService';
 import {
   Sparkles,
   Key,
@@ -118,6 +119,11 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [testApproved, setTestApproved] = useState(false);
 
+  // Dynamic Telegram Destinations State
+  const [destinations, setDestinations] = useState<TelegramChannelItem[]>([]);
+  const [selectedDestinationIds, setSelectedDestinationIds] = useState<string[]>([]);
+  const [isLoadingDestinations, setIsLoadingLoadingDestinations] = useState(false);
+
   // Feature 7: Live Delivery Report
   const [selectedTargetChat, setSelectedTargetChat] = useState<string>('');
   const [isSending, setIsSending] = useState(false);
@@ -129,6 +135,15 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     telegramMessageId?: string | number;
     isTest?: boolean;
     isScheduled?: boolean;
+    destinationResults?: Array<{
+      id: string;
+      displayName: string;
+      username: string;
+      chatId: string;
+      type: 'channel' | 'group';
+      success: boolean;
+      error?: string;
+    }>;
   } | null>(null);
 
   const [copiedCodeState, setCopiedCodeState] = useState(false);
@@ -197,6 +212,70 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     }
   };
 
+  // Fetch dynamic destinations from Firestore
+  const fetchDestinations = async () => {
+    setIsLoadingLoadingDestinations(true);
+    try {
+      let list = await getTelegramChannels();
+      if (list.length === 0 && (config.mainChannelUsername || config.mainGroupUsername)) {
+        list = [];
+        if (config.mainChannelUsername) {
+          list.push({
+            id: 'channel_1',
+            type: 'channel',
+            displayName: 'Main Channel',
+            username: config.mainChannelUsername,
+            chatId: config.mainChannelUsername,
+            required: true,
+            active: true,
+            position: 0,
+            createdAt: new Date().toISOString(),
+            status: 'verified',
+          });
+        }
+        if (config.mainGroupUsername) {
+          list.push({
+            id: 'group_1',
+            type: 'group',
+            displayName: 'Main Group',
+            username: config.mainGroupUsername,
+            chatId: config.mainGroupUsername,
+            required: true,
+            active: true,
+            position: 1,
+            createdAt: new Date().toISOString(),
+            status: 'verified',
+          });
+        }
+      }
+
+      setDestinations(list);
+      // Select active destinations by default
+      const activeIds = list.filter((d) => d.active).map((d) => d.id);
+      setSelectedDestinationIds(activeIds);
+    } catch (err: any) {
+      console.error('Error loading destinations for broadcast:', err);
+    } finally {
+      setIsLoadingLoadingDestinations(false);
+    }
+  };
+
+  const handleToggleSelectAllDestinations = (selectAll: boolean) => {
+    if (selectAll) {
+      setSelectedDestinationIds(destinations.map((d) => d.id));
+    } else {
+      setSelectedDestinationIds([]);
+    }
+  };
+
+  const handleToggleDestination = (id: string) => {
+    if (selectedDestinationIds.includes(id)) {
+      setSelectedDestinationIds(selectedDestinationIds.filter((dId) => dId !== id));
+    } else {
+      setSelectedDestinationIds([...selectedDestinationIds, id]);
+    }
+  };
+
   // Default target chat options from config
   const channelOption = config.mainChannelUsername ? `@${config.mainChannelUsername.replace(/^@/, '')}` : '';
   const groupOption = config.mainGroupUsername ? `@${config.mainGroupUsername.replace(/^@/, '')}` : '';
@@ -205,6 +284,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
   useEffect(() => {
     fetchConfig();
     fetchHistory();
+    fetchDestinations();
     handleTestTelegramConnection();
     if (channelOption) {
       setSelectedTargetChat(channelOption);
@@ -463,6 +543,8 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     setIsSending(true);
     setLastDeliveryReport(null);
     try {
+      const targetDestinations = destinations.filter((d) => selectedDestinationIds.includes(d.id));
+
       const res = await fetch('/api/ai-broadcast/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -471,6 +553,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
           redeemCode: broadcastType === 'redeem_code' ? redeemCodeInput.trim().toUpperCase() : 'N/A',
           message: editableMessage.trim(),
           targetChat: selectedTargetChat || channelOption || groupOption,
+          selectedDestinations: targetDestinations,
           sentByAdmin: 'Admin',
           targetAudience,
           customUserIds: customTelegramIds,
@@ -504,11 +587,21 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
             failed: data.deliveryStats?.failed || 12,
             successRate: data.deliveryStats?.successRate || 99.0,
             telegramMessageId: data.telegramMessageId,
+            destinationResults: data.destinationResults || [],
           });
         }
         fetchHistory(); // Refresh history
       } else {
         showToast(data.error || 'Failed to send broadcast message to Telegram', 'error');
+        if (data.destinationResults) {
+          setLastDeliveryReport({
+            totalSent: data.deliveryStats?.totalSent || 0,
+            delivered: data.deliveryStats?.delivered || 0,
+            failed: data.deliveryStats?.failed || 0,
+            successRate: data.deliveryStats?.successRate || 0,
+            destinationResults: data.destinationResults,
+          });
+        }
       }
     } catch (err: any) {
       showToast(err.message || 'Network error sending broadcast', 'error');
@@ -810,6 +903,88 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
             >
               Test Now
             </button>
+          </div>
+        )}
+      </div>
+
+      {/* Dynamic Telegram Broadcast Destinations Selection Card */}
+      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+              <Radio className="w-4.5 h-4.5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span>📢 Telegram Destinations</span>
+                <span className="px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 text-[10px] font-mono font-bold">
+                  {selectedDestinationIds.length} Selected
+                </span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Select target Telegram channels and groups to receive this broadcast.
+              </p>
+            </div>
+          </div>
+
+          {/* Send to All Destinations Checkbox toggle */}
+          <div className="flex items-center gap-2 p-2 rounded-xl bg-slate-950 border border-slate-800 shrink-0">
+            <input
+              type="checkbox"
+              id="send-to-all-destinations"
+              checked={destinations.length > 0 && selectedDestinationIds.length === destinations.length}
+              onChange={(e) => handleToggleSelectAllDestinations(e.target.checked)}
+              className="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-sky-500/20 cursor-pointer"
+            />
+            <label htmlFor="send-to-all-destinations" className="text-xs font-bold text-white cursor-pointer select-none">
+              ☑ Send to All Destinations
+            </label>
+          </div>
+        </div>
+
+        {/* Individual Destination Checkboxes */}
+        {isLoadingDestinations ? (
+          <p className="text-xs text-slate-400 flex items-center gap-2 py-2">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-400" />
+            <span>Loading configured destinations...</span>
+          </p>
+        ) : destinations.length === 0 ? (
+          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-400 text-center">
+            No destinations configured yet. Go to <span className="text-sky-400 font-bold">Telegram Settings</span> to add channels & groups.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {destinations.map((dest) => {
+              const isChecked = selectedDestinationIds.includes(dest.id);
+              return (
+                <label
+                  key={dest.id}
+                  className={`p-3.5 rounded-xl border flex items-center gap-3 cursor-pointer transition ${
+                    isChecked
+                      ? 'bg-sky-500/15 border-sky-500/50 text-white shadow-sm'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => handleToggleDestination(dest.id)}
+                    className="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-sky-500/20 shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-1">
+                      <p className="text-xs font-bold truncate text-slate-100">{dest.displayName}</p>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${dest.type === 'channel' ? 'bg-sky-500/20 text-sky-300' : 'bg-indigo-500/20 text-indigo-300'}`}>
+                        {dest.type === 'channel' ? 'Channel' : 'Group'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] font-mono text-slate-400 truncate mt-0.5">
+                      {dest.username ? `@${dest.username.replace(/^@/, '')}` : dest.chatId}
+                    </p>
+                  </div>
+                </label>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1458,6 +1633,31 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                 <p className="text-sm font-black text-sky-400 font-mono">{lastDeliveryReport.successRate}%</p>
               </div>
             </div>
+
+            {/* Per-Destination Live Delivery Status */}
+            {lastDeliveryReport.destinationResults && lastDeliveryReport.destinationResults.length > 0 && (
+              <div className="space-y-2 pt-3 border-t border-emerald-500/20">
+                <p className="text-xs font-bold text-white uppercase tracking-wider">Per-Destination Status:</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {lastDeliveryReport.destinationResults.map((dest, idx) => (
+                    <div key={idx} className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-slate-950/80 border border-slate-800">
+                      <span className="font-bold text-slate-200 truncate mr-2">
+                        {dest.type === 'channel' ? '📢' : '👥'} {dest.displayName} ({dest.username ? `@${dest.username.replace(/^@/, '')}` : dest.chatId})
+                      </span>
+                      {dest.success ? (
+                        <span className="text-emerald-400 font-bold flex items-center gap-1 shrink-0">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Sent Successfully
+                        </span>
+                      ) : (
+                        <span className="text-rose-400 font-bold flex items-center gap-1 shrink-0" title={dest.error}>
+                          <XCircle className="w-3.5 h-3.5" /> Failed
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -152,21 +152,39 @@ export async function setAllChannelsActiveStatus(
   return updatedList;
 }
 
+export interface ChannelVerificationResult {
+  success: boolean;
+  status: 'Connected' | 'Chat Not Found' | 'Bot is not Admin' | 'Invalid Chat ID';
+  statusMessage: string;
+  error?: string;
+  details?: any;
+}
+
 /**
- * Verify bot admin permissions for a single channel or group
+ * Verify bot admin permissions for a single channel or group with detailed status codes
  */
 export async function verifySingleChannelGroup(
   token: string,
   item: TelegramChannelItem
-): Promise<{ success: boolean; error?: string }> {
+): Promise<ChannelVerificationResult> {
   const cleanToken = token.trim();
   if (!cleanToken) {
-    return { success: false, error: 'Bot Token is required for testing.' };
+    return {
+      success: false,
+      status: 'Bot is not Admin',
+      statusMessage: '❌ Bot Token Required',
+      error: 'Bot Token is required for testing.',
+    };
   }
 
-  const targetIdentifier = item.chatId || formatTelegramUsername(item.username);
+  const targetIdentifier = item.chatId?.trim() || formatTelegramUsername(item.username);
   if (!targetIdentifier) {
-    return { success: false, error: 'Channel/Group Username or Chat ID is missing.' };
+    return {
+      success: false,
+      status: 'Invalid Chat ID',
+      statusMessage: '❌ Invalid Chat ID',
+      error: 'Channel/Group Username or Chat ID is missing.',
+    };
   }
 
   let cleanTarget = targetIdentifier.trim();
@@ -182,10 +200,29 @@ export async function verifySingleChannelGroup(
     const getChatData = await getChatRes.json();
 
     if (!getChatData.ok) {
-      return {
-        success: false,
-        error: `GetChat Failed: ${getChatData.description || 'Target chat not found or private.'}`,
-      };
+      const desc = (getChatData.description || '').toLowerCase();
+      if (desc.includes('not found') || desc.includes('chat not found')) {
+        return {
+          success: false,
+          status: 'Chat Not Found',
+          statusMessage: '❌ Chat Not Found',
+          error: `Telegram Chat Not Found: ${getChatData.description || 'Target chat not found or private.'}`,
+        };
+      } else if (desc.includes('invalid') || desc.includes('wrong') || desc.includes('format')) {
+        return {
+          success: false,
+          status: 'Invalid Chat ID',
+          statusMessage: '❌ Invalid Chat ID',
+          error: `Invalid Chat ID: ${getChatData.description}`,
+        };
+      } else {
+        return {
+          success: false,
+          status: 'Chat Not Found',
+          statusMessage: `❌ Chat Not Found (${getChatData.description || 'Chat unavailable'})`,
+          error: getChatData.description,
+        };
+      }
     }
 
     // 2. Check Bot Admin status via getChatMember
@@ -199,24 +236,43 @@ export async function verifySingleChannelGroup(
       if (memberData.ok && memberData.result) {
         const status = memberData.result.status;
         if (status === 'administrator' || status === 'creator' || (item.type === 'group' && status === 'member')) {
-          return { success: true };
+          return {
+            success: true,
+            status: 'Connected',
+            statusMessage: '✅ Connected',
+            details: getChatData.result,
+          };
         } else {
           return {
             success: false,
-            error: `Bot status is "${status}". Please promote Bot to Admin in ${cleanTarget}.`,
+            status: 'Bot is not Admin',
+            statusMessage: `❌ Bot is not Admin (Current Status: "${status}")`,
+            error: `Please promote Bot to Admin in ${cleanTarget}.`,
           };
         }
       } else {
         return {
           success: false,
+          status: 'Bot is not Admin',
+          statusMessage: '❌ Bot is not Admin',
           error: `Bot is not in ${cleanTarget}: ${memberData.description || 'Add Bot to chat'}`,
         };
       }
     }
 
-    return { success: true };
+    return {
+      success: true,
+      status: 'Connected',
+      statusMessage: '✅ Connected',
+      details: getChatData.result,
+    };
   } catch (err: any) {
-    return { success: false, error: err.message || 'Network error during test.' };
+    return {
+      success: false,
+      status: 'Invalid Chat ID',
+      statusMessage: `❌ Test Failed (${err.message || 'Network error'})`,
+      error: err.message || 'Network error during test.',
+    };
   }
 }
 

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Send, Key, User, Shield, CheckCircle2, XCircle, RefreshCw, Save, Lock, Bot, Radio, Zap } from 'lucide-react';
 import { AdminConfig } from '../types';
 import { testBotToken, testBotBackend, registerWebhook, getWebhookInfo } from '../services/telegramService';
+import { TelegramDestinationManager } from './TelegramDestinationManager';
 
 interface TelegramConfigViewProps {
   config: AdminConfig;
@@ -372,6 +373,9 @@ export const TelegramConfigView: React.FC<TelegramConfigViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Dynamic Destination Manager */}
+      <TelegramDestinationManager config={config} showToast={showToast} />
     </div>
   );
 };

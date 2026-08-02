@@ -919,25 +919,83 @@ Return ONLY a strict JSON object with NO markdown wrapper:
         });
       }
 
-      // Determine Target Destination for Live Broadcast
-      let destinationChat = targetChat;
-      if (!destinationChat) {
-        destinationChat = adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername || adminConfig?.adminTelegramId || adminConfig?.adminChatId;
-      }
+      // Determine Target Destinations for Live Broadcast
+      const options = reply_markup ? { reply_markup } : {};
+      const destinationResults: Array<{
+        id: string;
+        displayName: string;
+        username: string;
+        chatId: string;
+        type: string;
+        success: boolean;
+        error?: string;
+        messageId?: number;
+      }> = [];
 
-      if (!destinationChat) {
-        return res.status(400).json({
-          success: false,
-          error: 'No target Telegram Channel or Group configured.',
+      const rawDestinations: Array<any> = req.body.selectedDestinations || [];
+
+      if (rawDestinations.length > 0) {
+        // Send to each selected destination individually
+        for (const dest of rawDestinations) {
+          const target = dest.chatId?.trim() || (dest.username ? `@${dest.username.replace(/^@/, '')}` : null);
+          if (!target) {
+            destinationResults.push({
+              id: dest.id || 'unknown',
+              displayName: dest.displayName || 'Unnamed Destination',
+              username: dest.username || '',
+              chatId: dest.chatId || '',
+              type: dest.type || 'channel',
+              success: false,
+              error: 'Invalid Chat ID / Username missing',
+            });
+            continue;
+          }
+
+          const tgRes = await sendTelegramMessage(botToken, target, message.trim(), options);
+          const ok = !!(tgRes && tgRes.ok);
+          destinationResults.push({
+            id: dest.id || target,
+            displayName: dest.displayName || target,
+            username: dest.username || '',
+            chatId: dest.chatId || target,
+            type: dest.type || 'channel',
+            success: ok,
+            error: ok ? undefined : (tgRes?.description || 'Send failed'),
+            messageId: ok ? tgRes.result?.message_id : undefined,
+          });
+        }
+      } else {
+        // Fallback single targetChat
+        let singleTarget = targetChat;
+        if (!singleTarget) {
+          singleTarget = adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername || adminConfig?.adminTelegramId || adminConfig?.adminChatId;
+        }
+
+        if (!singleTarget) {
+          return res.status(400).json({
+            success: false,
+            error: 'No target Telegram Channel or Group configured.',
+          });
+        }
+
+        const tgRes = await sendTelegramMessage(botToken, singleTarget, message.trim(), options);
+        const ok = !!(tgRes && tgRes.ok);
+        destinationResults.push({
+          id: 'default_target',
+          displayName: singleTarget,
+          username: singleTarget.startsWith('@') ? singleTarget : '',
+          chatId: singleTarget,
+          type: 'channel',
+          success: ok,
+          error: ok ? undefined : (tgRes?.description || 'Send failed'),
+          messageId: ok ? tgRes.result?.message_id : undefined,
         });
       }
 
-      // Send to Telegram
-      const options = reply_markup ? { reply_markup } : {};
-      const tgRes = await sendTelegramMessage(botToken, destinationChat, message.trim(), options);
-      const isSuccess = !!(tgRes && tgRes.ok);
-      const msgId = tgRes?.result?.message_id || null;
-      const errorMsg = isSuccess ? null : (tgRes?.description || 'Telegram API send failed');
+      const anySuccess = destinationResults.some((d) => d.success);
+      const allSuccess = destinationResults.every((d) => d.success);
+      const msgId = destinationResults.find((d) => d.success)?.messageId || null;
+      const errorMsg = allSuccess ? null : destinationResults.map((d) => `${d.displayName}: ${d.error || 'OK'}`).join('; ');
 
       // Estimate Delivery Report based on audience size
       const totalEstimatedSent = targetAudience === 'Custom Telegram IDs' && customUserIds
@@ -948,9 +1006,9 @@ Return ONLY a strict JSON object with NO markdown wrapper:
         ? 320
         : 1250;
 
-      const deliveredCount = isSuccess ? Math.floor(totalEstimatedSent * 0.988) : 0;
-      const failedCount = isSuccess ? totalEstimatedSent - deliveredCount : totalEstimatedSent;
-      const successRate = isSuccess ? Number(((deliveredCount / totalEstimatedSent) * 100).toFixed(1)) : 0;
+      const deliveredCount = anySuccess ? Math.floor(totalEstimatedSent * (allSuccess ? 0.988 : 0.65)) : 0;
+      const failedCount = totalEstimatedSent - deliveredCount;
+      const successRate = anySuccess ? Number(((deliveredCount / totalEstimatedSent) * 100).toFixed(1)) : 0;
 
       const deliveryStats = {
         totalSent: totalEstimatedSent,
@@ -966,14 +1024,15 @@ Return ONLY a strict JSON object with NO markdown wrapper:
         redeemCode: redeemCode || (type === 'redeem_code' ? 'CODE' : 'N/A'),
         message: message.trim(),
         sentByAdmin: sentByAdmin || 'Admin',
-        targetChat: String(destinationChat),
+        targetChat: destinationResults.map((d) => d.displayName).join(', '),
         targetAudience: targetAudience || 'All Users',
         telegramMessageId: msgId,
-        status: isSuccess ? 'Success' : 'Failed',
+        status: anySuccess ? 'Success' : 'Failed',
         errorMessage: errorMsg,
         inlineButtons: inlineButtons || [],
         redeemSettings: redeemSettings || {},
         deliveryStats,
+        destinationResults,
         aiScores: aiScores || null,
         timestamp: new Date().toISOString(),
       };
@@ -984,20 +1043,22 @@ Return ONLY a strict JSON object with NO markdown wrapper:
         console.warn('Failed to save broadcast history to Firestore:', histErr);
       }
 
-      if (isSuccess) {
+      if (anySuccess) {
         return res.json({
           success: true,
-          message: 'Broadcast Sent Successfully',
+          message: 'Broadcast Sent to Destinations',
           telegramMessageId: msgId,
           broadcastId,
           deliveryStats,
+          destinationResults,
         });
       } else {
         return res.status(400).json({
           success: false,
-          error: `Telegram Error: ${errorMsg}`,
+          error: `Telegram Broadcast Failed across destinations: ${errorMsg}`,
           broadcastId,
           deliveryStats,
+          destinationResults,
         });
       }
     } catch (err: any) {
@@ -1689,25 +1750,6 @@ Return ONLY a strict JSON object with NO markdown wrapper:
   // ==========================================
   // SECURE ADMIN TELEGRAM OTP AUTHENTICATION ENDPOINTS
   // ==========================================
-
-  // Helper to load settings/config and decrypt sensitive fields
-  async function getDecryptedConfig(): Promise<any> {
-    try {
-      const configDoc = await getDoc(doc(db, 'settings', 'config'));
-      if (configDoc.exists()) {
-        const data = configDoc.data() || {};
-        return {
-          ...data,
-          botToken: decrypt(data.botToken || ''),
-          adminChatId: decrypt(data.adminChatId || ''),
-          adminMobileNumber: decrypt(data.adminMobileNumber || ''),
-        };
-      }
-    } catch (err) {
-      console.error('Error fetching decrypted config:', err);
-    }
-    return null;
-  }
 
   // Middleware to require a valid admin session
   async function requireAdminSession(req: express.Request, res: express.Response, next: express.NextFunction) {
