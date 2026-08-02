@@ -56,6 +56,269 @@ export const DEFAULT_REWARD_CONFIG: WarRewardConfig = {
 };
 
 /**
+ * Resolve Active War and Team by alias e.g. teamA, teamB, team_teamA
+ */
+export async function getActiveWarAndTeamByAlias(alias: string): Promise<{ warId: string; teamId: string; teamName: string } | null> {
+  try {
+    const warsQuery = query(collection(db, WARS_COLLECTION), where('status', '==', 'live'), limit(1));
+    const warsSnap = await getDocs(warsQuery);
+    if (warsSnap.empty) return null;
+
+    const war = warsSnap.docs[0].data() as GiveawayWar;
+    const cleanAlias = alias.toLowerCase().trim();
+
+    const matchedTeam = war.teams.find((t) =>
+      t.id.toLowerCase() === cleanAlias ||
+      t.name.toLowerCase().replace(/\s+/g, '') === cleanAlias ||
+      t.id.toLowerCase().includes(cleanAlias) ||
+      cleanAlias.includes(t.id.toLowerCase())
+    );
+
+    if (matchedTeam) {
+      return { warId: war.id, teamId: matchedTeam.id, teamName: matchedTeam.name };
+    }
+    if (war.teams.length > 0) {
+      return { warId: war.id, teamId: war.teams[0].id, teamName: war.teams[0].name };
+    }
+    return null;
+  } catch (err) {
+    console.error('Error resolving team alias:', err);
+    return null;
+  }
+}
+
+/**
+ * ACTIVE MEMBER VALIDATION SYSTEM
+ * Validates whether a user meets all 5 Active criteria:
+ * 1. Registered successfully
+ * 2. Telegram account verified
+ * 3. Joined all required channels/groups
+ * 4. Completed bot verification
+ * 5. Account is not blocked or banned
+ */
+export async function validateAndActivateMember(
+  warId: string,
+  telegramId: string,
+  options?: { deviceFingerprint?: string; ipHash?: string }
+): Promise<{ isActive: boolean; member?: WarMember; reason?: string }> {
+  try {
+    const memberDocId = `${warId}_${telegramId}`;
+    const memberRef = doc(db, MEMBERS_COLLECTION, memberDocId);
+    const memberSnap = await getDoc(memberRef);
+
+    if (!memberSnap.exists()) {
+      return { isActive: false, reason: 'Member not found in Giveaway War' };
+    }
+
+    const member = memberSnap.data() as WarMember;
+
+    // Fetch user record from Firestore
+    const qTg = query(collection(db, 'users'), where('telegramId', '==', String(telegramId)), limit(1));
+    const snapTg = await getDocs(qTg);
+
+    let isRegistered = false;
+    let isTelegramVerified = false;
+    let isChannelJoined = false;
+    let isBotVerified = false;
+    let isNotBanned = true;
+
+    if (!snapTg.empty) {
+      const uData = snapTg.docs[0].data();
+      isRegistered = true;
+      isTelegramVerified = Boolean(uData.telegramId && String(uData.telegramId) === String(telegramId));
+      isChannelJoined = uData.mustJoinGroup === false || uData.isForceJoined === true || uData.forceJoined === true;
+      isBotVerified = uData.verificationStatus === 'verified' || uData.isVerified === true || Boolean(uData.firstName && uData.phoneNumber);
+      isNotBanned = uData.isBlocked !== true && uData.isBanned !== true && uData.status !== 'blocked';
+    }
+
+    // Anti-fraud checks
+    let isNotDuplicateDevice = true;
+    const deviceFp = options?.deviceFingerprint || member.deviceFingerprint;
+    if (deviceFp) {
+      const qDev = query(
+        collection(db, MEMBERS_COLLECTION),
+        where('warId', '==', warId),
+        where('deviceFingerprint', '==', deviceFp)
+      );
+      const devSnap = await getDocs(qDev);
+      if (devSnap.size > 3) {
+        isNotDuplicateDevice = false;
+      }
+    }
+
+    const isNotSelfReferral = member.invitedByTelegramId
+      ? String(member.invitedByTelegramId) !== String(telegramId)
+      : true;
+
+    const isActive =
+      isRegistered &&
+      isTelegramVerified &&
+      isChannelJoined &&
+      isBotVerified &&
+      isNotBanned &&
+      isNotDuplicateDevice &&
+      isNotSelfReferral;
+
+    const nowIso = new Date().toISOString();
+
+    if (isActive) {
+      if (member.status !== 'ACTIVE') {
+        await updateDoc(memberRef, {
+          status: 'ACTIVE',
+          activationDetails: {
+            isRegistered,
+            isTelegramVerified,
+            isChannelJoined,
+            isBotVerified,
+            isNotBanned,
+            activatedAt: nowIso
+          },
+          rejectionReason: ''
+        });
+
+        // Credit Active registration & referral points
+        await creditActiveMemberPoints(warId, member);
+      }
+      return { isActive: true, member: { ...member, status: 'ACTIVE' } };
+    } else {
+      let reason = 'Incomplete verification steps';
+      if (!isNotBanned) reason = 'Account blocked or banned';
+      else if (!isNotDuplicateDevice) reason = 'Multiple accounts on same device';
+      else if (!isNotSelfReferral) reason = 'Self-referral fraud';
+      else if (!isChannelJoined) reason = 'Required Telegram channels not joined';
+      else if (!isBotVerified) reason = 'Bot verification incomplete';
+
+      await updateDoc(memberRef, {
+        status: 'PENDING',
+        rejectionReason: reason,
+        activationDetails: {
+          isRegistered,
+          isTelegramVerified,
+          isChannelJoined,
+          isBotVerified,
+          isNotBanned
+        }
+      });
+
+      return { isActive: false, member: { ...member, status: 'PENDING' }, reason };
+    }
+  } catch (err: any) {
+    console.error('Error validating member:', err);
+    return { isActive: false, reason: err.message || 'Validation error' };
+  }
+}
+
+/**
+ * Helper to credit points upon active verification
+ */
+async function creditActiveMemberPoints(warId: string, member: WarMember) {
+  try {
+    const warDoc = await getDoc(doc(db, WARS_COLLECTION, warId));
+    if (!warDoc.exists()) return;
+    const war = warDoc.data() as GiveawayWar;
+    const rules = war.pointRules || DEFAULT_POINT_RULES;
+
+    const nowIso = new Date().toISOString();
+    const regPts = rules.registrationEnabled ? rules.registrationPoints : 0;
+    const refPts = rules.referralEnabled ? rules.referralPoints : 0;
+
+    // 1. Credit Active Member's Registration Points
+    if (regPts > 0) {
+      const memberRef = doc(db, MEMBERS_COLLECTION, `${warId}_${member.telegramId}`);
+      await updateDoc(memberRef, {
+        points: (member.points || 0) + regPts,
+        'activityBreakdown.registration': regPts,
+        lastActivityAt: nowIso
+      });
+
+      const logId = 'log_act_reg_' + Date.now();
+      await setDoc(doc(db, LOGS_COLLECTION, logId), {
+        id: logId,
+        warId,
+        telegramId: String(member.telegramId),
+        teamId: member.teamId,
+        activityType: 'registration',
+        pointsEarned: regPts,
+        description: `✅ Active Registration Verified (+${regPts} Pts)`,
+        isValid: true,
+        createdAt: nowIso
+      });
+    }
+
+    // 2. Credit Referrer (+Configured Referral Points) if invited
+    if (member.invitedByTelegramId) {
+      const refDocId = `${warId}_${member.invitedByTelegramId}`;
+      const refRef = doc(db, MEMBERS_COLLECTION, refDocId);
+      const refSnap = await getDoc(refRef);
+
+      if (refSnap.exists()) {
+        const referrer = refSnap.data() as WarMember;
+        const newRefPts = (referrer.points || 0) + refPts;
+        const currentBreakdown = referrer.activityBreakdown || {};
+
+        await updateDoc(refRef, {
+          points: newRefPts,
+          activityBreakdown: {
+            ...currentBreakdown,
+            referral: (currentBreakdown.referral || 0) + refPts
+          },
+          lastActivityAt: nowIso
+        });
+
+        const logIdRef = 'log_act_ref_' + Date.now();
+        await setDoc(doc(db, LOGS_COLLECTION, logIdRef), {
+          id: logIdRef,
+          warId,
+          telegramId: String(member.invitedByTelegramId),
+          teamId: referrer.teamId,
+          activityType: 'referral',
+          pointsEarned: refPts,
+          description: `🎁 Active Referral Bonus (+${refPts} Pts): ${member.name} completed active verification`,
+          isValid: true,
+          createdAt: nowIso
+        });
+      }
+    }
+
+    // 3. Credit Team Leader Bonus (+2 Leader Pts)
+    const team = war.teams.find((t) => t.id === member.teamId);
+    if (team?.leaderTelegramId && String(team.leaderTelegramId) !== String(member.telegramId)) {
+      const leaderDocId = `${warId}_${team.leaderTelegramId}`;
+      const leaderRef = doc(db, MEMBERS_COLLECTION, leaderDocId);
+      const leaderSnap = await getDoc(leaderRef);
+
+      if (leaderSnap.exists()) {
+        const leader = leaderSnap.data() as WarMember;
+        const leaderAddPts = 2;
+        await updateDoc(leaderRef, {
+          points: (leader.points || 0) + leaderAddPts,
+          leaderPoints: (leader.leaderPoints || 0) + leaderAddPts,
+          lastActivityAt: nowIso
+        });
+      }
+    }
+
+    // 4. Update Team Score & Active Members Count in War doc
+    const updatedTeams = war.teams.map((t) => {
+      if (t.id === member.teamId) {
+        return {
+          ...t,
+          score: (t.score || 0) + regPts + (member.invitedByTelegramId ? refPts : 0)
+        };
+      }
+      return t;
+    });
+
+    await updateDoc(doc(db, WARS_COLLECTION, warId), {
+      teams: updatedTeams,
+      updatedAt: nowIso
+    });
+  } catch (err) {
+    console.error('Error crediting active member points:', err);
+  }
+}
+
+/**
   * Fetch all Giveaway Wars
   */
 export async function getGiveawayWars(): Promise<GiveawayWar[]> {
@@ -213,7 +476,7 @@ export async function joinWarTeam(
     deviceFingerprint?: string;
     ipHash?: string;
   }
-): Promise<{ success: boolean; message: string; member?: WarMember }> {
+): Promise<{ success: boolean; message: string; member?: WarMember; team?: WarTeam }> {
   try {
     const war = await getGiveawayWarById(warId);
     if (!war) {
@@ -292,6 +555,10 @@ export async function joinWarTeam(
 
     await setDoc(memberRef, newMember);
 
+    // Validate Active Member Status immediately
+    const valResult = await validateAndActivateMember(warId, String(user.telegramId), options);
+    const activeMember = valResult.member || newMember;
+
     // Update team member count and totalParticipants in War doc
     const updatedTeams = war.teams.map((t) => {
       if (t.id === teamId) {
@@ -329,26 +596,23 @@ export async function joinWarTeam(
     };
     await setDoc(doc(db, LOGS_COLLECTION, logId), joinLog);
 
-    // If invited by someone, reward referrer automatically if referral points enabled
-    if (options?.invitedByTelegramId) {
-      addWarPointsForActivity({
-        telegramId: options.invitedByTelegramId,
-        activityType: 'referral',
-        description: `Referred ${newMember.name} to ${team.name}`,
-        referralTargetTgId: String(user.telegramId)
-      }).catch((e) => console.warn('Error adding referral points for war join:', e));
-    }
-
     // Notify Telegram
     notifyTelegramWarEvent('TEAM_JOINED', {
       warId,
       warTitle: war.title,
-      userName: newMember.name,
+      userName: activeMember.name,
       telegramId: user.telegramId,
       teamName: team.name
     });
 
-    return { success: true, message: `Successfully joined ${team.name}!`, member: newMember };
+    return {
+      success: true,
+      message: valResult.isActive
+        ? `Successfully joined ${team.name} as an ACTIVE member!`
+        : `Joined ${team.name}! Status: PENDING verification. Complete channel join and bot onboarding to activate points.`,
+      member: activeMember,
+      team
+    };
   } catch (err: any) {
     console.error('Error joining war team:', err);
     return { success: false, message: err.message || 'Failed to join team' };
@@ -550,10 +814,43 @@ export async function addWarPointsForActivity(params: {
         activityBreakdown: updatedBreakdown
       });
 
-      // Update War Team Score, Team Wallet & Sub-counts
+      // --- TEAM LEADER SYSTEM: Credit points to Team Leader as well ---
       const freshWarDoc = await getDoc(doc(db, WARS_COLLECTION, warId));
       if (freshWarDoc.exists()) {
         const freshWar = freshWarDoc.data() as GiveawayWar;
+        const targetTeam = freshWar.teams.find((t) => t.id === member.teamId);
+
+        if (targetTeam?.leaderTelegramId && String(targetTeam.leaderTelegramId) !== String(params.telegramId)) {
+          const leaderMemberDocId = `${warId}_${targetTeam.leaderTelegramId}`;
+          const leaderMemberRef = doc(db, MEMBERS_COLLECTION, leaderMemberDocId);
+          const leaderSnap = await getDoc(leaderMemberRef);
+
+          if (leaderSnap.exists()) {
+            const leaderMember = leaderSnap.data() as WarMember;
+            const newLeaderPoints = (leaderMember.points || 0) + pts;
+            const newLeadershipPoints = (leaderMember.leaderPoints || 0) + pts;
+
+            await updateDoc(leaderMemberRef, {
+              points: newLeaderPoints,
+              leaderPoints: newLeadershipPoints,
+              lastActivityAt: nowIso
+            });
+
+            // Log Team Leader leadership credit
+            const leaderLogId = 'war_log_lead_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+            await setDoc(doc(db, LOGS_COLLECTION, leaderLogId), {
+              id: leaderLogId,
+              warId,
+              telegramId: String(targetTeam.leaderTelegramId),
+              teamId: member.teamId,
+              activityType: 'admin_action',
+              pointsEarned: pts,
+              description: `👑 Team Leader Bonus (+${pts} Pts): Member ${member.name} completed ${params.activityType}`,
+              isValid: true,
+              createdAt: nowIso
+            });
+          }
+        }
 
         // Calculate Team Wallet Bonus Contribution
         let teamWalletAdd = 0;
@@ -723,19 +1020,42 @@ export async function endGiveawayWar(warId: string): Promise<{
       return { success: false, message: 'Giveaway War is already ended' };
     }
 
-    // 1. Fetch all members
-    const members = await getWarMembers(warId);
+    // 1. Fetch all members and filter strictly to ACTIVE MEMBERS
+    const allMembers = await getWarMembers(warId);
+    
+    // Validate each member to ensure status is up to date
+    const activeMembers: WarMember[] = [];
+    for (const m of allMembers) {
+      if (m.status === 'ACTIVE') {
+        activeMembers.push(m);
+      } else {
+        const valRes = await validateAndActivateMember(warId, m.telegramId);
+        if (valRes.isActive && valRes.member) {
+          activeMembers.push(valRes.member);
+        }
+      }
+    }
 
-    // 2. Determine Winning Team
-    const sortedTeams = [...war.teams].sort((a, b) => (b.score || 0) - (a.score || 0));
+    // 2. Re-calculate Team Scores based strictly on ACTIVE MEMBERS & VALID POINTS
+    const teamScoresMap: { [teamId: string]: number } = {};
+    activeMembers.forEach((m) => {
+      teamScoresMap[m.teamId] = (teamScoresMap[m.teamId] || 0) + (m.points || 0);
+    });
+
+    const calculatedTeams = war.teams.map((t) => ({
+      ...t,
+      score: teamScoresMap[t.id] ?? t.score ?? 0
+    }));
+
+    const sortedTeams = [...calculatedTeams].sort((a, b) => (b.score || 0) - (a.score || 0));
     const winningTeam = sortedTeams[0] || war.teams[0];
     const runnerUpTeam = sortedTeams[1];
 
-    // 3. Determine MVP (Highest Point Contributor across all teams)
-    const sortedMembers = [...members].sort((a, b) => (b.points || 0) - (a.points || 0));
+    // 3. Determine MVP & Top Contributors strictly from ACTIVE MEMBERS
+    const sortedMembers = [...activeMembers].sort((a, b) => (b.points || 0) - (a.points || 0));
     const mvpMember = sortedMembers[0] || null;
 
-    // Top 5 Contributors
+    // Top 5 Contributors (Active Only)
     const topContributors = sortedMembers.slice(0, 5);
 
     // 4. Calculate & Credit Rewards
@@ -808,7 +1128,7 @@ export async function endGiveawayWar(warId: string): Promise<{
 
     // Credit Winning Team Members
     if (rewardConfig.winningTeamReward > 0 && winningTeam) {
-      const winningMembers = members.filter((m) => m.teamId === winningTeam.id);
+      const winningMembers = activeMembers.filter((m) => m.teamId === winningTeam.id);
       for (const m of winningMembers) {
         await creditWallet(
           m.telegramId,
@@ -1891,6 +2211,269 @@ export async function getWarStatsForTelegram(telegramId: string): Promise<{
   } catch (err) {
     console.error('Error fetching war stats for telegram:', err);
     return { hasActiveWar: false };
+  }
+}
+
+/**
+ * TEAM LEADER SYSTEM: Assign Team Leader
+ */
+export async function assignTeamLeader(
+  warId: string,
+  teamId: string,
+  leader: { telegramId: string; name: string; username?: string; botUsername?: string }
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const war = await getGiveawayWarById(warId);
+    if (!war) return { success: false, message: 'Giveaway War not found' };
+
+    const team = war.teams.find((t) => t.id === teamId);
+    if (!team) return { success: false, message: 'Team not found' };
+
+    const botUser = leader.botUsername || 'Roy_wallett_bot';
+    const leaderInviteLink = `https://t.me/${botUser.replace(/^@/, '')}?start=war_${warId}_team_${teamId}_lead_${leader.telegramId}`;
+
+    const updatedTeams = war.teams.map((t) => {
+      if (t.id === teamId) {
+        return {
+          ...t,
+          leaderTelegramId: String(leader.telegramId),
+          leaderName: leader.name,
+          leaderUsername: leader.username || '',
+          leaderInviteLink
+        };
+      }
+      return t;
+    });
+
+    const nowIso = new Date().toISOString();
+    await updateDoc(doc(db, WARS_COLLECTION, warId), {
+      teams: updatedTeams,
+      updatedAt: nowIso
+    });
+
+    // Also register or update leader in War Members collection as team leader
+    const memberDocId = `${warId}_${leader.telegramId}`;
+    const memberRef = doc(db, MEMBERS_COLLECTION, memberDocId);
+    const memberSnap = await getDoc(memberRef);
+
+    if (memberSnap.exists()) {
+      await updateDoc(memberRef, {
+        teamId,
+        teamName: team.name,
+        isTeamLeader: true,
+        lastActivityAt: nowIso
+      });
+    } else {
+      const newLeaderMember: WarMember = {
+        id: memberDocId,
+        warId,
+        telegramId: String(leader.telegramId),
+        username: leader.username || '',
+        name: leader.name,
+        teamId,
+        teamName: team.name,
+        points: 0,
+        isTeamLeader: true,
+        leaderPoints: 0,
+        joinedAt: nowIso,
+        lastActivityAt: nowIso,
+        activityBreakdown: {
+          registration: 0,
+          referral: 0,
+          verifiedVote: 0,
+          feedback: 0,
+          dailyLogin: 0,
+          walletTask: 0
+        }
+      };
+      await setDoc(memberRef, newLeaderMember);
+    }
+
+    // Audit Log
+    const logId = 'log_admin_assign_leader_' + Date.now();
+    await setDoc(doc(db, LOGS_COLLECTION, logId), {
+      id: logId,
+      warId,
+      telegramId: 'ADMIN',
+      teamId,
+      activityType: 'admin_action',
+      pointsEarned: 0,
+      description: `👑 Assigned ${leader.name} (ID: ${leader.telegramId}) as Team Leader for ${team.name}`,
+      isValid: true,
+      createdAt: nowIso
+    });
+
+    return {
+      success: true,
+      message: `👑 ${leader.name} assigned as Team Leader for ${team.name}!`
+    };
+  } catch (err: any) {
+    console.error('Error assigning team leader:', err);
+    return { success: false, message: err.message || 'Failed to assign team leader' };
+  }
+}
+
+/**
+ * ADMIN MANUAL POINTS: Add manual points to Leader or Member
+ */
+export async function addManualWarPoints(params: {
+  warId: string;
+  telegramId: string;
+  points: number;
+  reason: string;
+  adminTgId?: string;
+}): Promise<{ success: boolean; message: string; newPoints?: number }> {
+  try {
+    const war = await getGiveawayWarById(params.warId);
+    if (!war) return { success: false, message: 'War not found' };
+
+    const memberDocId = `${params.warId}_${params.telegramId}`;
+    const memberRef = doc(db, MEMBERS_COLLECTION, memberDocId);
+    const memberSnap = await getDoc(memberRef);
+
+    if (!memberSnap.exists()) {
+      return { success: false, message: 'User is not a member of this Giveaway War.' };
+    }
+
+    const member = memberSnap.data() as WarMember;
+    const nowIso = new Date().toISOString();
+    const pts = Number(params.points);
+    const newMemberPts = (member.points || 0) + pts;
+
+    await updateDoc(memberRef, {
+      points: newMemberPts,
+      lastActivityAt: nowIso
+    });
+
+    // Update Team Total Score in War doc
+    const updatedTeams = war.teams.map((t) => {
+      if (t.id === member.teamId) {
+        return { ...t, score: (t.score || 0) + pts };
+      }
+      return t;
+    });
+
+    await updateDoc(doc(db, WARS_COLLECTION, params.warId), {
+      teams: updatedTeams,
+      totalPoints: (war.totalPoints || 0) + pts,
+      updatedAt: nowIso
+    });
+
+    // Audit Log
+    const logId = 'log_admin_manual_pts_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    await setDoc(doc(db, LOGS_COLLECTION, logId), {
+      id: logId,
+      warId: params.warId,
+      telegramId: String(params.telegramId),
+      teamId: member.teamId,
+      activityType: 'admin_action',
+      pointsEarned: pts,
+      description: `🎁 Manual Admin Award (+${pts} Pts) to ${member.name} - Reason: ${params.reason || 'Special Bonus'}`,
+      isValid: true,
+      createdAt: nowIso
+    });
+
+    return {
+      success: true,
+      message: `✅ Added +${pts} manual points to ${member.name}. Reason: ${params.reason}`,
+      newPoints: newMemberPts
+    };
+  } catch (err: any) {
+    console.error('Error adding manual war points:', err);
+    return { success: false, message: err.message || 'Failed to add manual points' };
+  }
+}
+
+/**
+ * TEAM LEADER DASHBOARD DATA
+ */
+export async function getTeamLeaderDashboardData(warId: string, leaderTelegramId: string): Promise<{
+  team?: WarTeam;
+  leaderMember?: WarMember;
+  totalMembers: number;
+  todayNewMembers: number;
+  totalReferrals: number;
+  totalVotes: number;
+  totalFeedbacks: number;
+  totalActiveMembers?: number;
+  pendingMembers?: number;
+  rejectedMembers?: number;
+  totalJoined?: number;
+  conversionRate?: string;
+  teamPoints: number;
+  teamRank: number;
+  topContributors: WarMember[];
+  recentMembers: WarMember[];
+}> {
+  try {
+    const war = await getGiveawayWarById(warId);
+    if (!war) throw new Error('War not found');
+
+    const sortedTeams = [...war.teams].sort((a, b) => (b.score || 0) - (a.score || 0));
+    const team = war.teams.find((t) => String(t.leaderTelegramId) === String(leaderTelegramId));
+
+    const members = await getWarMembers(warId);
+    const teamMembers = team ? members.filter((m) => m.teamId === team.id) : [];
+
+    const todayStr = new Date().toISOString().substring(0, 10);
+    const todayNewMembers = teamMembers.filter((m) => m.joinedAt && m.joinedAt.substring(0, 10) === todayStr).length;
+
+    let totalReferrals = 0;
+    let totalVotes = 0;
+    let totalFeedbacks = 0;
+
+    teamMembers.forEach((m) => {
+      const b = m.activityBreakdown || {};
+      totalReferrals += b.referral || 0;
+      totalVotes += b.verifiedVote || 0;
+      totalFeedbacks += b.feedback || 0;
+    });
+
+    const totalActiveMembers = teamMembers.filter((m) => m.status === 'ACTIVE').length;
+    const pendingMembers = teamMembers.filter((m) => m.status === 'PENDING' || !m.status).length;
+    const rejectedMembers = teamMembers.filter((m) => m.status === 'REJECTED').length;
+    const totalJoined = teamMembers.length;
+    const conversionRate = totalJoined > 0 ? ((totalActiveMembers / totalJoined) * 100).toFixed(1) : '0';
+
+    const rankIndex = team ? sortedTeams.findIndex((t) => t.id === team.id) : -1;
+    const teamRank = rankIndex >= 0 ? rankIndex + 1 : 1;
+
+    const topContributors = [...teamMembers].sort((a, b) => (b.points || 0) - (a.points || 0)).slice(0, 10);
+    const recentMembers = [...teamMembers].sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime()).slice(0, 10);
+
+    const leaderMember = members.find((m) => String(m.telegramId) === String(leaderTelegramId));
+
+    return {
+      team,
+      leaderMember,
+      totalMembers: teamMembers.length,
+      todayNewMembers,
+      totalReferrals,
+      totalVotes,
+      totalFeedbacks,
+      totalActiveMembers,
+      pendingMembers,
+      rejectedMembers,
+      totalJoined,
+      conversionRate,
+      teamPoints: team?.score || 0,
+      teamRank,
+      topContributors,
+      recentMembers
+    };
+  } catch (err) {
+    console.error('Error fetching team leader dashboard data:', err);
+    return {
+      totalMembers: 0,
+      todayNewMembers: 0,
+      totalReferrals: 0,
+      totalVotes: 0,
+      totalFeedbacks: 0,
+      teamPoints: 0,
+      teamRank: 1,
+      topContributors: [],
+      recentMembers: []
+    };
   }
 }
 

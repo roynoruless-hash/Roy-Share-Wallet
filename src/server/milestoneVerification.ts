@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
+import { addWarPointsForActivity } from '../services/giveawayWarService';
 
 async function sendTelegramMessage(token: string, chatId: string | number, text: string) {
   if (!token || !chatId) return;
@@ -378,6 +379,20 @@ export async function processMilestoneClaim(params: VerifyMilestoneClaimParams) 
         });
       } catch (e) {
         console.warn('Error saving transaction record:', e);
+      }
+
+      // Automatically award Giveaway War wallet task points if active war exists
+      try {
+        if (telegramId) {
+          await addWarPointsForActivity({
+            telegramId: String(telegramId),
+            activityType: 'wallet_task',
+            description: `Completed Milestone Reward (${requiredReferrals} Referrals)`,
+            deviceFingerprint,
+          });
+        }
+      } catch (warErr) {
+        console.warn('Error adding Giveaway War wallet task points:', warErr);
       }
 
       // Record System Log

@@ -399,6 +399,12 @@ export interface WarTeam {
   totalVerifiedVotes?: number;
   totalFeedbacks?: number;
   teamWalletBalance?: number; // Shared Team Wallet Balance
+  // Team Leader System
+  leaderTelegramId?: string;
+  leaderName?: string;
+  leaderUsername?: string;
+  leaderInviteLink?: string;
+  leaderPoints?: number;
 }
 
 export interface WarPointRules {
@@ -596,6 +602,8 @@ export interface WarMember {
   teamName: string;
   points: number;
   invitedByTelegramId?: string;
+  isTeamLeader?: boolean;
+  leaderPoints?: number;
   deviceFingerprint?: string;
   ipHash?: string;
   joinedAt: string;
@@ -620,6 +628,17 @@ export interface WarMember {
     claimedCombos: string[]; // e.g. ['5_REF_COMBO', '10_VOTE_COMBO']
   };
   pendingRewards?: WarPendingReward[];
+  // Active Member Validation & Fraud Control
+  status?: 'ACTIVE' | 'PENDING' | 'REJECTED';
+  activationDetails?: {
+    isRegistered?: boolean;
+    isTelegramVerified?: boolean;
+    isChannelJoined?: boolean;
+    isBotVerified?: boolean;
+    isNotBanned?: boolean;
+    activatedAt?: string;
+  };
+  rejectionReason?: string;
 }
 
 export interface WarActivityLog {
