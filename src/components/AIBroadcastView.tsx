@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AdminConfig, AIBroadcastItem, TelegramChannelItem } from '../types';
 import { getTelegramChannels } from '../services/channelService';
+import { TelegramDestinationManager } from './TelegramDestinationManager';
 import {
   Sparkles,
   Key,
@@ -10,7 +11,6 @@ import {
   RefreshCw,
   Copy,
   Clock,
-  MessageSquare,
   Gift,
   Radio,
   AlertCircle,
@@ -18,21 +18,10 @@ import {
   Zap,
   Check,
   ExternalLink,
-  Info,
   Calendar,
-  Users,
-  MousePointer,
-  BarChart3,
-  TrendingUp,
-  Sliders,
-  ShieldAlert,
-  ChevronRight,
   Eye,
-  Flame,
-  Award,
-  Lock,
-  Layers,
-  FileText,
+  EyeOff,
+  ShieldAlert,
 } from 'lucide-react';
 
 interface AIBroadcastViewProps {
@@ -41,7 +30,7 @@ interface AIBroadcastViewProps {
 }
 
 export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showToast }) => {
-  // Step 1: Gemini Key State
+  // 1. Gemini Key State
   const [geminiKey, setGeminiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [isSavingKey, setIsSavingKey] = useState(false);
@@ -49,47 +38,27 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connected' | 'invalid'>('idle');
   const [connectionError, setConnectionError] = useState('');
 
-  // Step 2: Broadcast Type & Inputs
-  const [broadcastType, setBroadcastType] = useState<'active_alert' | 'redeem_code'>('active_alert');
+  // 2. Broadcast Type & Redeem Code Inputs
+  const [broadcastType, setBroadcastType] = useState<'redeem_code' | 'active_alert'>('redeem_code');
   const [redeemCodeInput, setRedeemCodeInput] = useState('ROY500');
   const [customInstructions, setCustomInstructions] = useState('');
 
-  // Feature 6: Redeem Code Settings
+  // Redeem Code Settings
   const [expiryTime, setExpiryTime] = useState('30 Mins');
   const [maxUses, setMaxUses] = useState<number>(500);
   const [remainingUses, setRemainingUses] = useState<number>(230);
   const [showLimitBadges, setShowLimitBadges] = useState(true);
 
-  // Feature 1: Schedule Broadcast State
+  // 3. Schedule Broadcast State
   const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now');
   const [scheduledDateTime, setScheduledDateTime] = useState<string>('');
   const [countdownText, setCountdownText] = useState<string>('');
 
-  // Feature 2: Target Audience State
-  const [targetAudience, setTargetAudience] = useState<
-    'All Users' | 'Active Users' | 'New Users (Last 7 Days)' | 'Inactive Users' | 'Custom Telegram IDs'
-  >('All Users');
-  const [customTelegramIds, setCustomTelegramIds] = useState<string>('');
-
-  // Feature 3: Message Variants & AI Scores
+  // 4. Message Generation & Editing
   const [isGenerating, setIsGenerating] = useState(false);
-  const [variants, setVariants] = useState<{ variantA: string; variantB: string; variantC: string }>({
-    variantA: '',
-    variantB: '',
-    variantC: '',
-  });
-  const [selectedVariantKey, setSelectedVariantKey] = useState<'variantA' | 'variantB' | 'variantC'>('variantA');
   const [editableMessage, setEditableMessage] = useState('');
 
-  // Feature 9: AI Optimization Scores
-  const [aiScores, setAiScores] = useState<{
-    engagementScore: number;
-    urgencyScore: number;
-    estimatedClickRate: number;
-    suggestions: string[];
-  } | null>(null);
-
-  // Feature 5: Inline Buttons State
+  // Inline Buttons State
   const botUsername = config.botUsername || 'RoyShareBot';
   const mainChannel = config.mainChannelUsername ? config.mainChannelUsername.replace(/^@/, '') : 'RoyShareOfficial';
 
@@ -114,18 +83,17 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     },
   ]);
 
-  // Feature 10: Test Broadcast State
+  // 5. Test Broadcast State
   const [testTelegramId, setTestTelegramId] = useState<string>(config.adminTelegramId || '');
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [testApproved, setTestApproved] = useState(false);
 
-  // Dynamic Telegram Destinations State
+  // 6. Telegram Destinations Selection
   const [destinations, setDestinations] = useState<TelegramChannelItem[]>([]);
   const [selectedDestinationIds, setSelectedDestinationIds] = useState<string[]>([]);
-  const [isLoadingDestinations, setIsLoadingLoadingDestinations] = useState(false);
+  const [isLoadingDestinations, setIsLoadingDestinations] = useState(false);
 
-  // Feature 7: Live Delivery Report
-  const [selectedTargetChat, setSelectedTargetChat] = useState<string>('');
+  // 7. Live Delivery Report
   const [isSending, setIsSending] = useState(false);
   const [lastDeliveryReport, setLastDeliveryReport] = useState<{
     totalSent: number;
@@ -148,73 +116,13 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
 
   const [copiedCodeState, setCopiedCodeState] = useState(false);
 
-  // History & Analytics
+  // 8. History Log
   const [historyList, setHistoryList] = useState<AIBroadcastItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
-  // Requirement 5 & 6: Telegram Connection Verification State
-  const [isTestingTgConnection, setIsTestingTgConnection] = useState(false);
-  const [tgConnectionStatus, setTgConnectionStatus] = useState<{
-    tested: boolean;
-    success: boolean;
-    failingStep?: string;
-    errorMessage?: string;
-    checks: Array<{ step: string; passed: boolean; message: string }>;
-    botUsername?: string;
-  }>({
-    tested: false,
-    success: false,
-    checks: [],
-  });
-
-  const handleTestTelegramConnection = async () => {
-    setIsTestingTgConnection(true);
-    try {
-      const res = await fetch('/api/ai-broadcast/test-connection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chatId: testTelegramId || config.adminTelegramId || config.adminChatId,
-          channelOrGroup: selectedTargetChat || channelOption || groupOption,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setTgConnectionStatus({
-          tested: true,
-          success: true,
-          checks: data.checks || [],
-          botUsername: data.botInfo?.username,
-        });
-        showToast('✅ Telegram Connection Verified: All Checks Passed!', 'success');
-      } else {
-        setTgConnectionStatus({
-          tested: true,
-          success: false,
-          failingStep: data.failingStep,
-          errorMessage: data.error || 'Telegram connection check failed',
-          checks: data.checks || [],
-        });
-        showToast(data.error || 'Telegram connection test failed', 'error');
-      }
-    } catch (err: any) {
-      setTgConnectionStatus({
-        tested: true,
-        success: false,
-        errorMessage: err.message || 'Network error testing Telegram connection',
-        checks: [
-          { step: 'network', passed: false, message: `❌ Network Error: ${err.message}` },
-        ],
-      });
-      showToast('Network error testing Telegram connection', 'error');
-    } finally {
-      setIsTestingTgConnection(false);
-    }
-  };
-
   // Fetch dynamic destinations from Firestore
   const fetchDestinations = async () => {
-    setIsLoadingLoadingDestinations(true);
+    setIsLoadingDestinations(true);
     try {
       let list = await getTelegramChannels();
       if (list.length === 0 && (config.mainChannelUsername || config.mainGroupUsername)) {
@@ -250,13 +158,12 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
       }
 
       setDestinations(list);
-      // Select active destinations by default
       const activeIds = list.filter((d) => d.active).map((d) => d.id);
       setSelectedDestinationIds(activeIds);
     } catch (err: any) {
       console.error('Error loading destinations for broadcast:', err);
     } finally {
-      setIsLoadingLoadingDestinations(false);
+      setIsLoadingDestinations(false);
     }
   };
 
@@ -276,7 +183,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     }
   };
 
-  // Default target chat options from config
+  // Channel fallback options from config
   const channelOption = config.mainChannelUsername ? `@${config.mainChannelUsername.replace(/^@/, '')}` : '';
   const groupOption = config.mainGroupUsername ? `@${config.mainGroupUsername.replace(/^@/, '')}` : '';
 
@@ -285,12 +192,6 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     fetchConfig();
     fetchHistory();
     fetchDestinations();
-    handleTestTelegramConnection();
-    if (channelOption) {
-      setSelectedTargetChat(channelOption);
-    } else if (groupOption) {
-      setSelectedTargetChat(groupOption);
-    }
   }, []);
 
   // Update button URLs when redeem code or bot username changes
@@ -330,7 +231,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     return () => clearInterval(interval);
   }, [scheduleMode, scheduledDateTime]);
 
-  // Feature 11: Check for Duplicate Redeem Code in History
+  // Check for duplicate code in history
   const duplicateBroadcast = historyList.find(
     (item) =>
       broadcastType === 'redeem_code' &&
@@ -420,10 +321,10 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     }
   };
 
-  // Feature 3 & 9: Generate 3 AI Variants + AI Scores
-  const handleGenerateMessageVariants = async () => {
+  // Generate AI Message
+  const handleGenerateMessage = async () => {
     if (broadcastType === 'redeem_code' && !redeemCodeInput.trim()) {
-      showToast('Please enter or paste a Redeem Code', 'error');
+      showToast('Please enter a Redeem Code', 'error');
       return;
     }
 
@@ -447,24 +348,14 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
       });
       const data = await res.json();
       if (res.ok && data.success && data.variants) {
-        setVariants(data.variants);
-        setSelectedVariantKey('variantA');
-
-        // Feature 4: Append Badges if enabled
-        let initialText = data.variants.variantA || '';
+        let initialText = data.variants.variantA || data.variants.variantB || '';
         if (broadcastType === 'redeem_code' && showLimitBadges) {
           initialText += `\n\n⚠️ <b>Limited Code:</b> ${remainingUses} Uses Left!\n🔥 <b>Expires:</b> ${expiryTime}`;
         }
-
         setEditableMessage(initialText);
-
-        if (data.aiScores) {
-          setAiScores(data.aiScores);
-        }
-
-        showToast('✨ 3 AI Message Variants Generated Successfully!', 'success');
+        showToast('✨ AI Message Generated Successfully!', 'success');
       } else {
-        showToast(data.error || 'Failed to generate variants using Gemini', 'error');
+        showToast(data.error || 'Failed to generate message using Gemini API', 'error');
       }
     } catch (err: any) {
       showToast(err.message || 'Error calling AI generator', 'error');
@@ -473,17 +364,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     }
   };
 
-  // Handle selecting a variant tab
-  const handleSelectVariant = (key: 'variantA' | 'variantB' | 'variantC') => {
-    setSelectedVariantKey(key);
-    let text = variants[key] || '';
-    if (broadcastType === 'redeem_code' && showLimitBadges) {
-      text += `\n\n⚠️ <b>Limited Code:</b> ${remainingUses} Uses Left!\n🔥 <b>Expires:</b> ${expiryTime}`;
-    }
-    setEditableMessage(text);
-  };
-
-  // Feature 10: Test Broadcast to Admin Bot First
+  // Test Broadcast to Admin Bot
   const handleSendTestBroadcast = async () => {
     if (!editableMessage.trim()) {
       showToast('Cannot send an empty broadcast message', 'error');
@@ -499,7 +380,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
           type: broadcastType,
           redeemCode: broadcastType === 'redeem_code' ? redeemCodeInput.trim().toUpperCase() : 'N/A',
           message: editableMessage.trim(),
-          targetChat: testTelegramId || selectedTargetChat,
+          targetChat: testTelegramId || channelOption || groupOption,
           sentByAdmin: 'Admin (Test)',
           inlineButtons: inlineButtons.filter((b) => b.enabled),
           isTestSend: true,
@@ -517,7 +398,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
           telegramMessageId: data.telegramMessageId,
           isTest: true,
         });
-        showToast('🧪 Test Broadcast Sent to Admin Bot Successfully!', 'success');
+        showToast('🧪 Test Broadcast Sent to Admin Bot!', 'success');
       } else {
         showToast(data.error || 'Failed to send test broadcast', 'error');
       }
@@ -528,7 +409,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     }
   };
 
-  // Feature 1, 2, 5, 7: Send Live Broadcast / Schedule
+  // Send Live Broadcast
   const handleSendLiveBroadcast = async () => {
     if (!editableMessage.trim()) {
       showToast('Cannot send an empty broadcast message', 'error');
@@ -552,11 +433,10 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
           type: broadcastType,
           redeemCode: broadcastType === 'redeem_code' ? redeemCodeInput.trim().toUpperCase() : 'N/A',
           message: editableMessage.trim(),
-          targetChat: selectedTargetChat || channelOption || groupOption,
+          targetChat: channelOption || groupOption,
           selectedDestinations: targetDestinations,
           sentByAdmin: 'Admin',
-          targetAudience,
-          customUserIds: customTelegramIds,
+          targetAudience: 'All Users',
           inlineButtons: inlineButtons.filter((b) => b.enabled),
           scheduleMode,
           scheduledFor: scheduledDateTime,
@@ -565,7 +445,6 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
             maxUses,
             remainingUses,
           },
-          aiScores,
         }),
       });
       const data = await res.json();
@@ -582,15 +461,15 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
         } else {
           showToast('🚀 Broadcast Sent Successfully to Telegram!', 'success');
           setLastDeliveryReport({
-            totalSent: data.deliveryStats?.totalSent || 1250,
-            delivered: data.deliveryStats?.delivered || 1238,
-            failed: data.deliveryStats?.failed || 12,
-            successRate: data.deliveryStats?.successRate || 99.0,
+            totalSent: data.deliveryStats?.totalSent || targetDestinations.length || 1,
+            delivered: data.deliveryStats?.delivered || targetDestinations.length || 1,
+            failed: data.deliveryStats?.failed || 0,
+            successRate: data.deliveryStats?.successRate || 100,
             telegramMessageId: data.telegramMessageId,
             destinationResults: data.destinationResults || [],
           });
         }
-        fetchHistory(); // Refresh history
+        fetchHistory();
       } else {
         showToast(data.error || 'Failed to send broadcast message to Telegram', 'error');
         if (data.destinationResults) {
@@ -623,176 +502,98 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
       setRedeemCodeInput(item.redeemCode);
     }
     setEditableMessage(item.message);
-    if (item.inlineButtons) {
-      setInlineButtons((prev) =>
-        prev.map((btn) => {
-          const match = item.inlineButtons?.find((ib) => ib.text === btn.label);
-          if (match) return { ...btn, enabled: match.enabled, url: match.url };
-          return btn;
-        })
-      );
-    }
     setTestApproved(false);
     setLastDeliveryReport(null);
     showToast('Loaded message into Broadcast Preview', 'info');
-    window.scrollTo({ top: 500, behavior: 'smooth' });
+    window.scrollTo({ top: 300, behavior: 'smooth' });
   };
 
-  // Feature 8: Calculate Broadcast Analytics
-  const totalBroadcastsCount = historyList.length;
-  const successfulBroadcasts = historyList.filter((h) => h.status === 'Success');
-  const avgSuccessRate =
-    successfulBroadcasts.length > 0
-      ? (
-          successfulBroadcasts.reduce((acc, curr) => acc + (curr.deliveryStats?.successRate || 98.5), 0) /
-          successfulBroadcasts.length
-        ).toFixed(1)
-      : '99.2';
-
-  const mostRecentSuccessCode =
-    historyList.find((h) => h.type === 'redeem_code' && h.redeemCode && h.redeemCode !== 'N/A')?.redeemCode ||
-    'ROY500';
-
   return (
-    <div className="space-y-8 pb-12 font-sans">
-      {/* Header & Quick Analytics Dashboard */}
-      <div className="p-6 rounded-2xl bg-gradient-to-r from-sky-950/90 via-slate-900 to-indigo-950/90 border border-sky-500/30 shadow-2xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-sky-500/10 rounded-full blur-3xl -z-10 pointer-events-none" />
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="flex items-start gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-sky-500 to-indigo-600 p-0.5 shadow-xl shadow-sky-500/30 shrink-0">
-              <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center text-sky-400">
-                <Gift className="w-7 h-7 animate-pulse" />
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                  🎁 AI Redeem Code Broadcast Studio
-                </h1>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-gradient-to-r from-sky-500 to-indigo-500 text-white shadow-sm uppercase tracking-wider">
-                  Gemini AI 3.6
-                </span>
-              </div>
-              <p className="text-xs sm:text-sm text-slate-300 mt-1">
-                Multi-variant AI content generation, Telegram inline keyboard buttons, audience targeting, schedule delivery, and live reports.
-              </p>
-            </div>
+    <div className="w-full max-w-full overflow-hidden space-y-4 sm:space-y-6 box-border">
+      {/* View Title */}
+      <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-800">
+        <div className="flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-white shadow-md">
+            <Sparkles className="w-5 h-5 text-amber-300" />
           </div>
-        </div>
-
-        {/* Feature 8: Analytics Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mt-6 pt-6 border-t border-slate-800/80">
-          <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800/80 flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-sky-500/10 text-sky-400">
-              <BarChart3 className="w-4 h-4" />
-            </div>
-            <div>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total Broadcasts</p>
-              <p className="text-base font-black text-white font-mono">{totalBroadcastsCount}</p>
-            </div>
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800/80 flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-emerald-500/10 text-emerald-400">
-              <TrendingUp className="w-4 h-4" />
-            </div>
-            <div>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Avg Success Rate</p>
-              <p className="text-base font-black text-emerald-400 font-mono">{avgSuccessRate}%</p>
-            </div>
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800/80 flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-amber-500/10 text-amber-400">
-              <Award className="w-4 h-4" />
-            </div>
-            <div>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Top Redeem Code</p>
-              <p className="text-base font-black text-amber-400 font-mono">{mostRecentSuccessCode}</p>
-            </div>
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800/80 flex items-center gap-3">
-            <div className="p-2.5 rounded-lg bg-purple-500/10 text-purple-400">
-              <Clock className="w-4 h-4" />
-            </div>
-            <div>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Best Sending Time</p>
-              <p className="text-xs font-bold text-slate-200">08:00 PM - Peak</p>
-            </div>
+          <div>
+            <h1 className="text-base sm:text-lg font-bold text-white tracking-tight">
+              AI Redeem Code Broadcast
+            </h1>
+            <p className="text-xs text-slate-400">
+              Clean mobile-first generator & broadcast station
+            </p>
           </div>
         </div>
       </div>
 
-      {/* STEP 1: Gemini API Key Setup */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+      {/* SECTION 1: Gemini API Settings */}
+      <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
+        <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
+            <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 font-bold text-xs">
               1
             </div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Key className="w-4 h-4 text-sky-400" />
-              <span>Step 1: Gemini API Key Configuration</span>
+            <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+              <Key className="w-4 h-4 text-amber-400" />
+              <span>Gemini API Settings</span>
             </h2>
           </div>
 
-          <div className="flex items-center gap-2">
-            {connectionStatus === 'connected' && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-sm">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>✅ Gemini Connected</span>
-              </span>
+          {/* Connection Status Pill */}
+          <span
+            className={`px-2.5 py-1 rounded-full text-[11px] font-bold flex items-center gap-1.5 ${
+              connectionStatus === 'connected'
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : connectionStatus === 'invalid'
+                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                : 'bg-slate-800 text-slate-400 border border-slate-700'
+            }`}
+          >
+            {connectionStatus === 'connected' ? (
+              <>
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Connected
+              </>
+            ) : connectionStatus === 'invalid' ? (
+              <>
+                <XCircle className="w-3.5 h-3.5 text-rose-400" /> Invalid Key
+              </>
+            ) : (
+              <>Unconfigured</>
             )}
-            {connectionStatus === 'invalid' && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30 shadow-sm">
-                <XCircle className="w-3.5 h-3.5 text-rose-400" />
-                <span>❌ Invalid API Key</span>
-              </span>
-            )}
-            {connectionStatus === 'idle' && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">
-                <Info className="w-3.5 h-3.5" />
-                <span>Not Verified</span>
-              </span>
-            )}
-          </div>
+          </span>
         </div>
 
         <div className="space-y-3">
-          <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+          <label className="text-xs font-bold text-slate-300 block">
             Gemini API Key
           </label>
-          <div className="flex flex-col sm:flex-row items-stretch gap-3">
-            <div className="relative flex-1">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <div className="relative flex-1 min-w-0">
               <input
                 type={showKey ? 'text' : 'password'}
                 value={geminiKey}
-                onChange={(e) => {
-                  setGeminiKey(e.target.value);
-                  setConnectionStatus('idle');
-                }}
+                onChange={(e) => setGeminiKey(e.target.value)}
                 placeholder="AIzaSy..."
-                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-sm focus:outline-none focus:border-sky-500 transition font-mono pr-12"
+                className="w-full pl-3 pr-10 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs sm:text-sm font-mono focus:outline-none focus:border-amber-500 box-border"
               />
               <button
                 type="button"
                 onClick={() => setShowKey(!showKey)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-200"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
               >
-                {showKey ? 'Hide' : 'Show'}
+                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={handleSaveKey}
                 disabled={isSavingKey || !geminiKey.trim()}
-                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 text-slate-950 transition shadow-sm disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 transition disabled:opacity-50 flex items-center justify-center gap-1.5"
               >
-                {isSavingKey ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                {isSavingKey ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Key className="w-3.5 h-3.5" />}
                 <span>Save Key</span>
               </button>
 
@@ -800,16 +601,16 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                 type="button"
                 onClick={() => testKeyConnection()}
                 disabled={isTestingKey || !geminiKey.trim()}
-                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 transition shadow-sm disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 transition disabled:opacity-50 flex items-center justify-center gap-1.5"
               >
                 {isTestingKey ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5 text-amber-400" />}
-                <span>Test Connection</span>
+                <span>Test Key</span>
               </button>
             </div>
           </div>
 
           {connectionError && (
-            <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-lg flex items-center gap-2">
+            <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-xl flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{connectionError}</span>
             </p>
@@ -817,720 +618,205 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
         </div>
       </div>
 
-      {/* Requirement 5 & 6: Telegram Bot Connection Status & Verification Card */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-              <Bot className="w-4.5 h-4.5" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>Telegram Bot Connection & Permissions</span>
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Using shared Telegram Bot instance ({tgConnectionStatus.botUsername ? `@${tgConnectionStatus.botUsername}` : config.botUsername ? `@${config.botUsername}` : 'Bot'})
-              </p>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleTestTelegramConnection}
-            disabled={isTestingTgConnection}
-            className="px-4 py-2.5 rounded-xl text-xs font-bold bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 transition flex items-center gap-2 shrink-0 disabled:opacity-50"
-          >
-            {isTestingTgConnection ? (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Zap className="w-3.5 h-3.5 text-amber-400" />
-            )}
-            <span>Test Telegram Connection</span>
-          </button>
-        </div>
-
-        {/* Detailed Status Breakdown */}
-        {tgConnectionStatus.tested ? (
-          <div className="space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              {tgConnectionStatus.checks.map((check, idx) => (
-                <div
-                  key={idx}
-                  className={`p-3.5 rounded-xl border flex items-start gap-2.5 text-xs font-medium ${
-                    check.passed
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                      : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                  }`}
-                >
-                  {check.passed ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                  ) : (
-                    <XCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                  )}
-                  <div>
-                    <p className="font-bold">{check.message}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {tgConnectionStatus.success ? (
-              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>✅ Bot Connected & Ready to Send Broadcast Messages</span>
-              </div>
-            ) : (
-              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-1">
-                <p className="font-bold flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                  <span>Failing Step: {tgConnectionStatus.failingStep || 'Connection Verification Failed'}</span>
-                </p>
-                <p className="text-slate-300 text-[11px] pl-6">{tgConnectionStatus.errorMessage}</p>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4 text-sky-400 shrink-0" />
-              <span>Verifying Bot Token, Chat ID, Channel/Group ID, and Send Message permissions...</span>
-            </div>
-            <button
-              type="button"
-              onClick={handleTestTelegramConnection}
-              disabled={isTestingTgConnection}
-              className="text-xs text-sky-400 font-bold hover:underline shrink-0"
-            >
-              Test Now
-            </button>
-          </div>
-        )}
+      {/* SECTION 2: Telegram Destinations (Add / Edit / Delete / Test) */}
+      <div className="w-full max-w-full overflow-hidden box-border">
+        <TelegramDestinationManager
+          config={config}
+          showToast={showToast}
+          onDestinationsUpdated={fetchDestinations}
+        />
       </div>
 
-      {/* Dynamic Telegram Broadcast Destinations Selection Card */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-              <Radio className="w-4.5 h-4.5" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>📢 Telegram Destinations</span>
-                <span className="px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 text-[10px] font-mono font-bold">
-                  {selectedDestinationIds.length} Selected
-                </span>
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Select target Telegram channels and groups to receive this broadcast.
-              </p>
-            </div>
-          </div>
-
-          {/* Send to All Destinations Checkbox toggle */}
-          <div className="flex items-center gap-2 p-2 rounded-xl bg-slate-950 border border-slate-800 shrink-0">
-            <input
-              type="checkbox"
-              id="send-to-all-destinations"
-              checked={destinations.length > 0 && selectedDestinationIds.length === destinations.length}
-              onChange={(e) => handleToggleSelectAllDestinations(e.target.checked)}
-              className="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-sky-500/20 cursor-pointer"
-            />
-            <label htmlFor="send-to-all-destinations" className="text-xs font-bold text-white cursor-pointer select-none">
-              ☑ Send to All Destinations
-            </label>
-          </div>
-        </div>
-
-        {/* Individual Destination Checkboxes */}
-        {isLoadingDestinations ? (
-          <p className="text-xs text-slate-400 flex items-center gap-2 py-2">
-            <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-400" />
-            <span>Loading configured destinations...</span>
-          </p>
-        ) : destinations.length === 0 ? (
-          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-400 text-center">
-            No destinations configured yet. Go to <span className="text-sky-400 font-bold">Telegram Settings</span> to add channels & groups.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {destinations.map((dest) => {
-              const isChecked = selectedDestinationIds.includes(dest.id);
-              return (
-                <label
-                  key={dest.id}
-                  className={`p-3.5 rounded-xl border flex items-center gap-3 cursor-pointer transition ${
-                    isChecked
-                      ? 'bg-sky-500/15 border-sky-500/50 text-white shadow-sm'
-                      : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isChecked}
-                    onChange={() => handleToggleDestination(dest.id)}
-                    className="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-sky-500/20 shrink-0"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-1">
-                      <p className="text-xs font-bold truncate text-slate-100">{dest.displayName}</p>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${dest.type === 'channel' ? 'bg-sky-500/20 text-sky-300' : 'bg-indigo-500/20 text-indigo-300'}`}>
-                        {dest.type === 'channel' ? 'Channel' : 'Group'}
-                      </span>
-                    </div>
-                    <p className="text-[11px] font-mono text-slate-400 truncate mt-0.5">
-                      {dest.username ? `@${dest.username.replace(/^@/, '')}` : dest.chatId}
-                    </p>
-                  </div>
-                </label>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* STEP 2: Broadcast Type & Redeem Code Settings */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-5">
+      {/* SECTION 3: Redeem Code Input */}
+      <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
         <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
-          <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
-            2
-          </div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <Radio className="w-4 h-4 text-sky-400" />
-            <span>Step 2: Select Broadcast Type & Code Settings</span>
-          </h2>
-        </div>
-
-        {/* Broadcast Type Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <button
-            type="button"
-            onClick={() => {
-              setBroadcastType('active_alert');
-              setLastDeliveryReport(null);
-            }}
-            className={`p-5 rounded-xl text-left border transition-all duration-200 relative ${
-              broadcastType === 'active_alert'
-                ? 'bg-gradient-to-br from-sky-500/20 to-blue-600/10 border-sky-500 shadow-lg shadow-sky-500/10'
-                : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 text-slate-400'
-            }`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className={`p-2.5 rounded-xl ${broadcastType === 'active_alert' ? 'bg-sky-500 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>
-                  <Radio className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    📢 Active Users Alert
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Hype message telling users to stay active right now for an upcoming secret redeem code.
-                  </p>
-                </div>
-              </div>
-              {broadcastType === 'active_alert' && (
-                <span className="w-2.5 h-2.5 rounded-full bg-sky-400 shadow-sm shadow-sky-400 shrink-0" />
-              )}
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setBroadcastType('redeem_code');
-              setLastDeliveryReport(null);
-            }}
-            className={`p-5 rounded-xl text-left border transition-all duration-200 relative ${
-              broadcastType === 'redeem_code'
-                ? 'bg-gradient-to-br from-emerald-500/20 to-teal-600/10 border-emerald-500 shadow-lg shadow-emerald-500/10'
-                : 'bg-slate-950/60 border-slate-800 hover:border-slate-700 text-slate-400'
-            }`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className={`p-2.5 rounded-xl ${broadcastType === 'redeem_code' ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>
-                  <Gift className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    🎁 Redeem Code Broadcast
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Announce a live redeem code with expiry, max uses, and instant inline redemption keyboard.
-                  </p>
-                </div>
-              </div>
-              {broadcastType === 'redeem_code' && (
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400 shrink-0" />
-              )}
-            </div>
-          </button>
-        </div>
-
-        {/* Feature 6: Redeem Code Inputs & Expiry/Limit Controls */}
-        {broadcastType === 'redeem_code' && (
-          <div className="space-y-4 bg-slate-950/60 p-5 rounded-xl border border-slate-800">
-            {/* Feature 11: Duplicate Code Protection Warning Banner */}
-            {duplicateBroadcast && (
-              <div className="p-3.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
-                  <div>
-                    <span className="font-bold">⚠️ Duplicate Redeem Code Warning:</span>
-                    <span className="ml-1 text-slate-200">
-                      "{redeemCodeInput.trim().toUpperCase()}" was already broadcasted on{' '}
-                      {new Date(duplicateBroadcast.timestamp).toLocaleDateString()}.
-                    </span>
-                  </div>
-                </div>
-                <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded text-[10px] font-bold uppercase shrink-0">
-                  Already Sent
-                </span>
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="sm:col-span-1">
-                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1">
-                  Redeem Code
-                </label>
-                <input
-                  type="text"
-                  value={redeemCodeInput}
-                  onChange={(e) => setRedeemCodeInput(e.target.value.toUpperCase())}
-                  placeholder="e.g. ROY500"
-                  className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-sm font-mono font-bold tracking-wider focus:outline-none focus:border-emerald-500 uppercase"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1">
-                  Code Expiry Time
-                </label>
-                <select
-                  value={expiryTime}
-                  onChange={(e) => setExpiryTime(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs font-medium focus:outline-none focus:border-emerald-500"
-                >
-                  <option value="15 Mins">⚡ 15 Minutes</option>
-                  <option value="30 Mins">🔥 30 Minutes</option>
-                  <option value="1 Hour">⏰ 1 Hour</option>
-                  <option value="6 Hours">🕒 6 Hours</option>
-                  <option value="24 Hours">📅 24 Hours</option>
-                  <option value="No Expiry">♾️ No Expiry</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1">
-                  Max Uses / Remaining
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    value={maxUses}
-                    onChange={(e) => setMaxUses(Number(e.target.value))}
-                    placeholder="Max"
-                    className="w-1/2 px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs font-mono font-bold focus:outline-none focus:border-emerald-500"
-                  />
-                  <input
-                    type="number"
-                    value={remainingUses}
-                    onChange={(e) => setRemainingUses(Number(e.target.value))}
-                    placeholder="Left"
-                    className="w-1/2 px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-emerald-400 text-xs font-mono font-bold focus:outline-none focus:border-emerald-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Badges Preview */}
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800/80">
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="showLimitBadges"
-                  checked={showLimitBadges}
-                  onChange={(e) => setShowLimitBadges(e.target.checked)}
-                  className="rounded bg-slate-900 border-slate-700 text-emerald-500 focus:ring-emerald-500/20"
-                />
-                <label htmlFor="showLimitBadges" className="text-xs text-slate-300 cursor-pointer">
-                  Auto-append limit badges (<span className="text-amber-400 font-mono">⚠️ Limited Code</span> &{' '}
-                  <span className="text-rose-400 font-mono">🔥 Ending Soon</span>)
-                </label>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-slate-400">Quick Codes:</span>
-                {['ROY500', 'FREE100', 'WELCOME50', 'LUCKY888'].map((code) => (
-                  <button
-                    key={code}
-                    type="button"
-                    onClick={() => setRedeemCodeInput(code)}
-                    className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 transition"
-                  >
-                    {code}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* STEP 3: Target Audience & Schedule Broadcast */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-5">
-        <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
-          <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
+          <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-xs">
             3
           </div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <Users className="w-4 h-4 text-sky-400" />
-            <span>Step 3: Target Audience & Schedule Options</span>
+          <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+            <Gift className="w-4 h-4 text-emerald-400" />
+            <span>Redeem Code Settings</span>
           </h2>
         </div>
 
-        {/* Feature 2: Target Audience Selection */}
-        <div className="space-y-3">
-          <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
-            Target Audience Segment
+        {duplicateBroadcast && (
+          <div className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Warning:</strong> Code "{redeemCodeInput.trim().toUpperCase()}" was already broadcasted.
+            </span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs font-bold text-slate-300 block mb-1">
+              Redeem Code
+            </label>
+            <input
+              type="text"
+              value={redeemCodeInput}
+              onChange={(e) => setRedeemCodeInput(e.target.value.toUpperCase())}
+              placeholder="ROY500"
+              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs sm:text-sm font-mono font-bold uppercase focus:outline-none focus:border-emerald-500 box-border"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-300 block mb-1">
+              Code Expiry Time
+            </label>
+            <select
+              value={expiryTime}
+              onChange={(e) => setExpiryTime(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-emerald-500 box-border"
+            >
+              <option value="15 Mins">⚡ 15 Minutes</option>
+              <option value="30 Mins">🔥 30 Minutes</option>
+              <option value="1 Hour">⏰ 1 Hour</option>
+              <option value="6 Hours">🕒 6 Hours</option>
+              <option value="24 Hours">📅 24 Hours</option>
+              <option value="No Expiry">♾️ No Expiry</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-300 block mb-1">
+              Max / Remaining Uses
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                value={maxUses}
+                onChange={(e) => setMaxUses(Number(e.target.value))}
+                placeholder="Max"
+                className="w-1/2 px-2.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono font-bold focus:outline-none focus:border-emerald-500 box-border"
+              />
+              <input
+                type="number"
+                value={remainingUses}
+                onChange={(e) => setRemainingUses(Number(e.target.value))}
+                placeholder="Left"
+                className="w-1/2 px-2.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-400 text-xs font-mono font-bold focus:outline-none focus:border-emerald-500 box-border"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Preset Codes & Limit Badge Checkbox */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 pt-2 border-t border-slate-800/80">
+          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showLimitBadges}
+              onChange={(e) => setShowLimitBadges(e.target.checked)}
+              className="rounded bg-slate-950 border-slate-700 text-emerald-500 focus:ring-emerald-500/20 cursor-pointer"
+            />
+            <span>Auto-append limit badges in message</span>
           </label>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
-            {[
-              { id: 'All Users', label: '👥 All Users', count: '~1,250' },
-              { id: 'Active Users', label: '🔥 Active Users', count: '~850' },
-              { id: 'New Users (Last 7 Days)', label: '🌟 New Users', count: '~320' },
-              { id: 'Inactive Users', label: '💤 Inactive Users', count: '~80' },
-              { id: 'Custom Telegram IDs', label: '🎯 Custom IDs', count: 'Manual' },
-            ].map((aud) => (
+
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] text-slate-400 mr-1">Presets:</span>
+            {['ROY500', 'FREE100', 'WELCOME50', 'LUCKY888'].map((code) => (
               <button
-                key={aud.id}
+                key={code}
                 type="button"
-                onClick={() => setTargetAudience(aud.id as any)}
-                className={`p-3 rounded-xl border text-left transition ${
-                  targetAudience === aud.id
-                    ? 'bg-sky-500/20 border-sky-500 text-white shadow-sm'
-                    : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700'
-                }`}
+                onClick={() => setRedeemCodeInput(code)}
+                className="px-2 py-1 rounded-lg text-[11px] font-mono font-bold bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 transition"
               >
-                <p className="text-xs font-bold text-white">{aud.label}</p>
-                <p className="text-[10px] text-slate-400 font-mono mt-0.5">{aud.count}</p>
+                {code}
               </button>
             ))}
           </div>
-
-          {targetAudience === 'Custom Telegram IDs' && (
-            <input
-              type="text"
-              value={customTelegramIds}
-              onChange={(e) => setCustomTelegramIds(e.target.value)}
-              placeholder="Enter comma-separated Telegram IDs e.g. 123456789, 987654321"
-              className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs font-mono focus:outline-none focus:border-sky-500 mt-2"
-            />
-          )}
-        </div>
-
-        {/* Feature 1: Schedule Broadcast (Send Now vs Schedule Later) */}
-        <div className="space-y-3 pt-3 border-t border-slate-800">
-          <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
-            Delivery Schedule
-          </label>
-
-          <div className="flex flex-col sm:flex-row items-stretch gap-4">
-            <div className="flex items-center gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800 shrink-0">
-              <button
-                type="button"
-                onClick={() => setScheduleMode('now')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                  scheduleMode === 'now'
-                    ? 'bg-sky-500 text-slate-950 shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Zap className="w-3.5 h-3.5" />
-                <span>Send Now</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setScheduleMode('later')}
-                className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                  scheduleMode === 'later'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Calendar className="w-3.5 h-3.5" />
-                <span>Schedule Later</span>
-              </button>
-            </div>
-
-            {scheduleMode === 'later' && (
-              <div className="flex-1 flex flex-col sm:flex-row items-center gap-3">
-                <input
-                  type="datetime-local"
-                  value={scheduledDateTime}
-                  onChange={(e) => setScheduledDateTime(e.target.value)}
-                  className="w-full sm:w-auto px-4 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs font-mono focus:outline-none focus:border-indigo-500"
-                />
-
-                {countdownText && (
-                  <span className="text-xs font-mono font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-lg">
-                    {countdownText}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
-      {/* STEP 4: AI Multi-Variant Generator & AI Optimization Scores */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-6">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
-              4
-            </div>
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-sky-400" />
-              <span>Step 4: AI Message Variants & Optimization</span>
-            </h2>
+      {/* SECTION 4: Generate AI Message */}
+      <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
+        <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
+          <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
+            4
           </div>
+          <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-sky-400" />
+            <span>Generate AI Broadcast Message</span>
+          </h2>
         </div>
 
-        {/* Custom Instructions Input */}
         <div>
-          <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block mb-1">
-            Custom AI Note / Context (Optional)
+          <label className="text-xs font-bold text-slate-300 block mb-1">
+            Custom Instructions / Prompt Note (Optional)
           </label>
           <input
             type="text"
             value={customInstructions}
             onChange={(e) => setCustomInstructions(e.target.value)}
-            placeholder="e.g. Add extra excitement, mention 500 bonus points for first 50 claimers..."
-            className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-sky-500"
+            placeholder="e.g. Highlight 500 bonus points for first 50 claimers..."
+            className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-sky-500 box-border"
           />
         </div>
 
-        {/* Generate Button */}
-        <div className="flex justify-center pt-1">
-          <button
-            type="button"
-            onClick={handleGenerateMessageVariants}
-            disabled={isGenerating}
-            className="px-6 py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white shadow-xl shadow-sky-500/25 transition-all duration-200 disabled:opacity-50 flex items-center gap-2"
-          >
-            {isGenerating ? (
-              <RefreshCw className="w-4 h-4 animate-spin text-white" />
-            ) : (
-              <Sparkles className="w-4 h-4 text-amber-300" />
-            )}
-            <span>{isGenerating ? 'Generating 3 AI Message Variants...' : 'Generate 3 AI Message Variants'}</span>
-          </button>
+        <button
+          type="button"
+          onClick={handleGenerateMessage}
+          disabled={isGenerating}
+          className="w-full py-3 rounded-xl text-xs sm:text-sm font-bold bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white shadow-lg shadow-sky-500/20 transition disabled:opacity-50 flex items-center justify-center gap-2"
+        >
+          {isGenerating ? (
+            <RefreshCw className="w-4 h-4 animate-spin" />
+          ) : (
+            <Sparkles className="w-4 h-4 text-amber-300" />
+          )}
+          <span>{isGenerating ? 'Generating AI Broadcast Message...' : '✨ Generate AI Message'}</span>
+        </button>
+
+        {/* Message Editor */}
+        <div className="space-y-1.5 pt-2">
+          <label className="text-xs font-bold text-slate-300 block">
+            Generated Broadcast Message (Editable)
+          </label>
+          <textarea
+            rows={5}
+            value={editableMessage}
+            onChange={(e) => setEditableMessage(e.target.value)}
+            placeholder="AI message preview will appear here..."
+            className="w-full p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs sm:text-sm leading-relaxed focus:outline-none focus:border-sky-500 box-border"
+          />
         </div>
-
-        {/* Feature 3: Variant Selection Tabs & Editable Textarea */}
-        {(variants.variantA || editableMessage) && (
-          <div className="space-y-4 pt-4 border-t border-slate-800">
-            {/* Variant Selector Tabs */}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-bold text-slate-400 mr-2">Select Variant:</span>
-
-              <button
-                type="button"
-                onClick={() => handleSelectVariant('variantA')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                  selectedVariantKey === 'variantA'
-                    ? 'bg-sky-500 text-slate-950 shadow-sm'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                <span>🔥 Variant A (Ultra Hype)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleSelectVariant('variantB')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                  selectedVariantKey === 'variantB'
-                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                <span>⚡ Variant B (Direct & Clean)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleSelectVariant('variantC')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                  selectedVariantKey === 'variantC'
-                    ? 'bg-purple-500 text-white shadow-sm'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                <span>🎉 Variant C (Community)</span>
-              </button>
-            </div>
-
-            <textarea
-              rows={6}
-              value={editableMessage}
-              onChange={(e) => setEditableMessage(e.target.value)}
-              className="w-full p-4 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs sm:text-sm font-sans focus:outline-none focus:border-sky-500 leading-relaxed transition"
-              placeholder="Broadcast message content..."
-            />
-
-            {/* Feature 9: AI Optimization Rating Card */}
-            {aiScores && (
-              <div className="p-4 rounded-xl bg-slate-950/80 border border-indigo-500/30 space-y-3">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                  <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5 uppercase tracking-wider">
-                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" /> AI Optimization Score
-                  </span>
-                  <span className="text-[10px] text-slate-400">Gemini Marketing Evaluation</span>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">Engagement Score</p>
-                    <p className="text-sm font-black text-amber-400 font-mono mt-0.5">
-                      ⭐ {aiScores.engagementScore} / 5.0
-                    </p>
-                  </div>
-
-                  <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">Urgency Score</p>
-                    <p className="text-sm font-black text-sky-400 font-mono mt-0.5">
-                      ⚡ {aiScores.urgencyScore} / 100
-                    </p>
-                  </div>
-
-                  <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">Est. Click Rate</p>
-                    <p className="text-sm font-black text-emerald-400 font-mono mt-0.5">
-                      📈 {aiScores.estimatedClickRate}%
-                    </p>
-                  </div>
-                </div>
-
-                {aiScores.suggestions && aiScores.suggestions.length > 0 && (
-                  <div className="space-y-1 text-xs text-slate-300">
-                    <p className="text-[11px] font-bold text-indigo-300">💡 AI Suggestions:</p>
-                    {aiScores.suggestions.map((sug, idx) => (
-                      <p key={idx} className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                        <span className="text-indigo-400">•</span> {sug}
-                      </p>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
-      {/* STEP 5: Telegram Inline Keyboard Buttons */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4">
+      {/* SECTION 5: Telegram Preview */}
+      <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
         <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
           <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
             5
           </div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <MousePointer className="w-4 h-4 text-sky-400" />
-            <span>Step 5: Feature 5 - Telegram Inline Keyboard Buttons</span>
-          </h2>
-        </div>
-
-        <div className="space-y-3">
-          {inlineButtons.map((btn, idx) => (
-            <div
-              key={btn.id}
-              className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3"
-            >
-              <div className="flex items-center gap-3">
-                <input
-                  type="checkbox"
-                  checked={btn.enabled}
-                  onChange={(e) => {
-                    const updated = [...inlineButtons];
-                    updated[idx].enabled = e.target.checked;
-                    setInlineButtons(updated);
-                  }}
-                  className="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-sky-500/20"
-                />
-
-                <input
-                  type="text"
-                  value={btn.label}
-                  onChange={(e) => {
-                    const updated = [...inlineButtons];
-                    updated[idx].label = e.target.value;
-                    setInlineButtons(updated);
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-xs font-bold w-44 focus:outline-none focus:border-sky-500"
-                />
-              </div>
-
-              <input
-                type="text"
-                value={btn.url}
-                onChange={(e) => {
-                  const updated = [...inlineButtons];
-                  updated[idx].url = e.target.value;
-                  setInlineButtons(updated);
-                }}
-                className="flex-1 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-300 text-xs font-mono focus:outline-none focus:border-sky-500"
-                placeholder="https://t.me/..."
-              />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* STEP 6: Feature 12 - Dark Premium Telegram Preview & Action Station */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-6">
-        <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
-          <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
-            6
-          </div>
-          <h2 className="text-base font-bold text-white flex items-center gap-2">
+          <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
             <Bot className="w-4 h-4 text-sky-400" />
-            <span>Step 6: Telegram Live Dark Preview & Send Station</span>
+            <span>Telegram Live Preview</span>
           </h2>
         </div>
 
-        {/* Telegram Message Dark Preview Card */}
-        <div className="p-5 rounded-2xl bg-[#0b1329] border border-sky-500/30 shadow-2xl space-y-4 max-w-xl mx-auto relative">
-          {/* Telegram Header */}
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800/80">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center text-white font-bold shadow-md">
-                <Bot className="w-5 h-5" />
+        {/* Mobile-style Telegram Preview Frame */}
+        <div className="p-4 rounded-2xl bg-[#0b1329] border border-sky-500/30 shadow-inner space-y-3 w-full max-w-full overflow-hidden box-border">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-full bg-sky-500 flex items-center justify-center text-slate-950 font-bold shrink-0">
+                <Bot className="w-4 h-4" />
               </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-sm font-bold text-white">Roy Share Official Bot</span>
-                  <CheckCircle2 className="w-4 h-4 text-sky-400 fill-sky-400/20" />
-                </div>
-                <p className="text-[10px] text-slate-400">Telegram Channel Broadcast • Live Preview</p>
-              </div>
+              <span className="text-xs font-bold text-white truncate">Roy Share Bot</span>
             </div>
-
-            <span className="px-2 py-0.5 bg-sky-500/20 text-sky-300 rounded text-[10px] font-mono font-bold">
+            <span className="text-[10px] font-mono font-bold text-sky-400 px-2 py-0.5 rounded bg-sky-500/20 shrink-0">
               HTML Format
             </span>
           </div>
 
-          {/* Formatted Message Body */}
-          <div className="p-4 rounded-xl bg-[#131d38] border border-slate-800 text-xs sm:text-sm text-slate-100 whitespace-pre-wrap leading-relaxed font-sans shadow-inner">
-            {editableMessage || 'Generated AI Telegram message preview will appear here...'}
+          <div className="p-3 rounded-xl bg-[#131d38] text-xs text-slate-100 whitespace-pre-wrap leading-relaxed break-words font-sans">
+            {editableMessage || 'Generated Telegram message preview will appear here...'}
           </div>
 
-          {/* Rendered Telegram Inline Action Buttons */}
-          <div className="space-y-2 pt-1">
+          {/* Inline Buttons Preview */}
+          <div className="space-y-1.5 pt-1">
             {inlineButtons
               .filter((b) => b.enabled)
               .map((btn) => (
@@ -1539,48 +825,57 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                   href={btn.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-800/90 hover:bg-slate-700/90 text-sky-300 border border-sky-500/20 transition flex items-center justify-center gap-2 shadow-sm text-center"
+                  className="w-full py-2 px-3 rounded-xl text-xs font-bold bg-slate-800/90 hover:bg-slate-700/90 text-sky-300 border border-sky-500/20 transition flex items-center justify-center gap-1.5 text-center truncate box-border"
                 >
                   <span>{btn.label}</span>
-                  <ExternalLink className="w-3.5 h-3.5 opacity-60" />
+                  <ExternalLink className="w-3 h-3 opacity-60 shrink-0" />
                 </a>
               ))}
           </div>
 
           {/* Quick Copy Redeem Code button */}
-          {broadcastType === 'redeem_code' && redeemCodeInput.trim() && (
+          {redeemCodeInput.trim() && (
             <button
               type="button"
               onClick={() =>
                 copyToClipboard(redeemCodeInput.trim().toUpperCase(), `Code '${redeemCodeInput.trim().toUpperCase()}' copied!`)
               }
-              className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 text-slate-950 shadow-md transition flex items-center justify-center gap-2"
+              className="w-full py-2.5 px-3 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 text-slate-950 shadow-sm transition flex items-center justify-center gap-1.5"
             >
               {copiedCodeState ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
               <span>Copy Redeem Code ({redeemCodeInput.trim().toUpperCase()})</span>
             </button>
           )}
         </div>
+      </div>
 
-        {/* Feature 10: Test Broadcast First Controls */}
-        <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-200">🧪 Feature 10: Send Test First:</span>
-              <input
-                type="text"
-                value={testTelegramId}
-                onChange={(e) => setTestTelegramId(e.target.value)}
-                placeholder="Admin Telegram Chat ID"
-                className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-xs font-mono w-48 focus:outline-none focus:border-amber-500"
-              />
-            </div>
+      {/* SECTION 6: Send Test */}
+      <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
+        <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
+          <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 font-bold text-xs">
+            6
+          </div>
+          <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+            <Zap className="w-4 h-4 text-amber-400" />
+            <span>Send Test Message</span>
+          </h2>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <input
+              type="text"
+              value={testTelegramId}
+              onChange={(e) => setTestTelegramId(e.target.value)}
+              placeholder="Admin Telegram Chat ID e.g. -1001234567"
+              className="flex-1 min-w-0 px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs font-mono focus:outline-none focus:border-amber-500 box-border"
+            />
 
             <button
               type="button"
               onClick={handleSendTestBroadcast}
               disabled={isSendingTest || !editableMessage.trim()}
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+              className="px-4 py-2.5 rounded-xl text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0"
             >
               {isSendingTest ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
               <span>Send Test to Admin Bot</span>
@@ -1588,112 +883,178 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
           </div>
 
           {testApproved && (
-            <div className="text-xs text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-lg flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>✅ Test Approved! Broadcast verified on Admin Bot. You can now send to everyone.</span>
+            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 font-bold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Test broadcast verified on Admin Bot. Ready to send live.</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* SECTION 7: Send Broadcast */}
+      <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
+        <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-xs">
+              7
+            </div>
+            <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+              <Send className="w-4 h-4 text-emerald-400" />
+              <span>Send Broadcast</span>
+            </h2>
+          </div>
+
+          {/* Send to All checkbox toggle */}
+          <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={destinations.length > 0 && selectedDestinationIds.length === destinations.length}
+              onChange={(e) => handleToggleSelectAllDestinations(e.target.checked)}
+              className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500/20 cursor-pointer"
+            />
+            <span className="font-bold">Send to All ({selectedDestinationIds.length})</span>
+          </label>
+        </div>
+
+        {/* Schedule Mode Selector */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setScheduleMode('now')}
+              className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                scheduleMode === 'now' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>Send Now</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setScheduleMode('later')}
+              className={`flex-1 sm:flex-initial px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                scheduleMode === 'later' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Schedule Later</span>
+            </button>
+          </div>
+
+          {scheduleMode === 'later' && (
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <input
+                type="datetime-local"
+                value={scheduledDateTime}
+                onChange={(e) => setScheduledDateTime(e.target.value)}
+                className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs font-mono focus:outline-none focus:border-indigo-500 box-border"
+              />
+              {countdownText && (
+                <span className="text-[11px] font-mono text-amber-400 font-bold bg-amber-500/10 p-2 rounded-lg">
+                  {countdownText}
+                </span>
+              )}
             </div>
           )}
         </div>
 
-        {/* Feature 7: Live Delivery Report Card */}
+        {/* Selected Destinations Chip Selector */}
+        {isLoadingDestinations ? (
+          <p className="text-xs text-slate-400 flex items-center gap-2 py-1">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-400" /> Loading destinations...
+          </p>
+        ) : destinations.length > 0 ? (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {destinations.map((dest) => {
+              const isChecked = selectedDestinationIds.includes(dest.id);
+              return (
+                <button
+                  key={dest.id}
+                  type="button"
+                  onClick={() => handleToggleDestination(dest.id)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 ${
+                    isChecked
+                      ? 'bg-sky-500/20 border-sky-500/50 text-sky-300'
+                      : 'bg-slate-950/60 border-slate-800 text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => {}}
+                    className="rounded bg-slate-900 border-slate-700 text-sky-500 pointer-events-none"
+                  />
+                  <span className="truncate max-w-[140px]">{dest.displayName}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-400 italic">No Telegram destinations configured yet. Add them in Section 2 above.</p>
+        )}
+
+        {/* Delivery Report Card */}
         {lastDeliveryReport && (
-          <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-3 animate-fadeIn">
-            <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
-              <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+          <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-emerald-300 flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span>
-                  {lastDeliveryReport.isScheduled ? '⏰ Broadcast Scheduled' : '🚀 Live Delivery Report'}
-                </span>
+                <span>{lastDeliveryReport.isScheduled ? '⏰ Broadcast Scheduled' : '🚀 Delivery Report'}</span>
               </span>
-              {lastDeliveryReport.telegramMessageId && (
-                <span className="text-[10px] font-mono text-emerald-400">
-                  Message ID: #{lastDeliveryReport.telegramMessageId}
-                </span>
-              )}
+              <span className="font-mono text-[11px] text-emerald-400">
+                {lastDeliveryReport.delivered} / {lastDeliveryReport.totalSent} Sent ({lastDeliveryReport.successRate}%)
+              </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-              <div className="p-2 rounded-lg bg-slate-950/60">
-                <p className="text-[10px] text-slate-400 font-bold uppercase">Total Sent</p>
-                <p className="text-sm font-black text-white font-mono">{lastDeliveryReport.totalSent}</p>
-              </div>
-
-              <div className="p-2 rounded-lg bg-slate-950/60">
-                <p className="text-[10px] text-slate-400 font-bold uppercase">Delivered</p>
-                <p className="text-sm font-black text-emerald-400 font-mono">{lastDeliveryReport.delivered}</p>
-              </div>
-
-              <div className="p-2 rounded-lg bg-slate-950/60">
-                <p className="text-[10px] text-slate-400 font-bold uppercase">Failed</p>
-                <p className="text-sm font-black text-rose-400 font-mono">{lastDeliveryReport.failed}</p>
-              </div>
-
-              <div className="p-2 rounded-lg bg-slate-950/60">
-                <p className="text-[10px] text-slate-400 font-bold uppercase">Success Rate</p>
-                <p className="text-sm font-black text-sky-400 font-mono">{lastDeliveryReport.successRate}%</p>
-              </div>
-            </div>
-
-            {/* Per-Destination Live Delivery Status */}
-            {lastDeliveryReport.destinationResults && lastDeliveryReport.destinationResults.length > 0 && (
-              <div className="space-y-2 pt-3 border-t border-emerald-500/20">
-                <p className="text-xs font-bold text-white uppercase tracking-wider">Per-Destination Status:</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {lastDeliveryReport.destinationResults.map((dest, idx) => (
-                    <div key={idx} className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-slate-950/80 border border-slate-800">
-                      <span className="font-bold text-slate-200 truncate mr-2">
-                        {dest.type === 'channel' ? '📢' : '👥'} {dest.displayName} ({dest.username ? `@${dest.username.replace(/^@/, '')}` : dest.chatId})
-                      </span>
-                      {dest.success ? (
-                        <span className="text-emerald-400 font-bold flex items-center gap-1 shrink-0">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Sent Successfully
-                        </span>
-                      ) : (
-                        <span className="text-rose-400 font-bold flex items-center gap-1 shrink-0" title={dest.error}>
-                          <XCircle className="w-3.5 h-3.5" /> Failed
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
+            {lastDeliveryReport.destinationResults && (
+              <div className="space-y-1 pt-1 border-t border-emerald-500/20">
+                {lastDeliveryReport.destinationResults.map((dest, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-300 truncate mr-2">{dest.displayName}</span>
+                    <span className={dest.success ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                      {dest.success ? '✅ Delivered' : '❌ Failed'}
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         )}
 
-        {/* Final Send / Schedule Action Button */}
-        <div className="flex justify-end pt-2">
-          <button
-            type="button"
-            onClick={handleSendLiveBroadcast}
-            disabled={isSending || !editableMessage.trim()}
-            className="w-full sm:w-auto px-8 py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-xl shadow-emerald-500/20 transition flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            {isSending ? (
-              <RefreshCw className="w-4 h-4 animate-spin" />
-            ) : scheduleMode === 'later' ? (
-              <Calendar className="w-4 h-4" />
-            ) : (
-              <Send className="w-4 h-4" />
-            )}
-            <span>
-              {scheduleMode === 'later'
-                ? '⏰ Confirm & Schedule Broadcast'
-                : '🚀 Send Broadcast to Everyone'}
-            </span>
-          </button>
-        </div>
+        {/* Action Button */}
+        <button
+          type="button"
+          onClick={handleSendLiveBroadcast}
+          disabled={isSending || !editableMessage.trim() || selectedDestinationIds.length === 0}
+          className="w-full py-3 rounded-xl text-xs sm:text-sm font-bold bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/20 transition disabled:opacity-50 flex items-center justify-center gap-2"
+        >
+          {isSending ? (
+            <RefreshCw className="w-4 h-4 animate-spin" />
+          ) : scheduleMode === 'later' ? (
+            <Calendar className="w-4 h-4" />
+          ) : (
+            <Send className="w-4 h-4" />
+          )}
+          <span>
+            {scheduleMode === 'later'
+              ? '⏰ Confirm & Schedule Broadcast'
+              : `🚀 Send Broadcast to ${selectedDestinationIds.length} Destination(s)`}
+          </span>
+        </button>
       </div>
 
-      {/* Broadcast History Log */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4">
+      {/* SECTION 8: Broadcast History */}
+      <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div className="flex items-center gap-2.5">
-            <Clock className="w-5 h-5 text-sky-400" />
-            <div>
-              <h2 className="text-base font-bold text-white">Broadcast Logs & History</h2>
-              <p className="text-xs text-slate-400">Past broadcast delivery reports, status logs, and quick resend controls</p>
+            <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
+              8
             </div>
+            <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+              <Clock className="w-4 h-4 text-sky-400" />
+              <span>Broadcast History</span>
+            </h2>
           </div>
 
           <button
@@ -1703,101 +1064,139 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
             className="p-2 rounded-lg text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition"
             title="Refresh History"
           >
-            <RefreshCw className={`w-4 h-4 ${isLoadingHistory ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingHistory ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
         {historyList.length === 0 ? (
-          <div className="p-8 text-center bg-slate-950/40 rounded-xl border border-slate-800/80 text-slate-400 text-xs space-y-1">
-            <p className="font-semibold text-slate-300">No broadcast history recorded yet.</p>
-            <p>Generate and send your first AI broadcast above.</p>
+          <div className="p-6 text-center bg-slate-950/40 rounded-xl border border-slate-800 text-slate-400 text-xs">
+            No broadcast history recorded yet.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
-                  <th className="py-3 px-3">Time</th>
-                  <th className="py-3 px-3">Type</th>
-                  <th className="py-3 px-3">Audience</th>
-                  <th className="py-3 px-3">Code</th>
-                  <th className="py-3 px-3">Message</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60 font-sans">
-                {historyList.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-800/40 transition">
-                    <td className="py-3 px-3 text-slate-400 whitespace-nowrap font-mono text-[11px]">
+          <div>
+            {/* Mobile Cards List (Visible on Mobile) */}
+            <div className="space-y-3 sm:hidden">
+              {historyList.map((item) => (
+                <div key={item.id} className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[10px] text-slate-400">
                       {new Date(item.timestamp).toLocaleString([], {
                         month: 'short',
                         day: 'numeric',
                         hour: '2-digit',
                         minute: '2-digit',
                       })}
-                    </td>
-                    <td className="py-3 px-3">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          item.type === 'redeem_code'
-                            ? 'bg-emerald-500/20 text-emerald-300'
-                            : 'bg-sky-500/20 text-sky-300'
-                        }`}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        item.status === 'Success'
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-rose-500/20 text-rose-300'
+                      }`}
+                    >
+                      {item.status}
+                    </span>
+                  </div>
+
+                  {item.redeemCode && item.redeemCode !== 'N/A' && (
+                    <div className="font-mono font-bold text-amber-400 text-xs">
+                      Code: {item.redeemCode}
+                    </div>
+                  )}
+
+                  <p className="text-slate-300 text-[11px] line-clamp-2 leading-relaxed">
+                    {item.message}
+                  </p>
+
+                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/80">
+                    {item.redeemCode && item.redeemCode !== 'N/A' && (
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(item.redeemCode!, `Copied code ${item.redeemCode}`)}
+                        className="px-2 py-1 rounded bg-slate-800 text-slate-300 text-[11px] font-bold flex items-center gap-1"
                       >
-                        {item.type === 'redeem_code' ? '🎁 Redeem Code' : '📢 Active Alert'}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-slate-300 text-[11px]">
-                      {item.targetAudience || 'All Users'}
-                    </td>
-                    <td className="py-3 px-3 font-mono font-bold text-amber-400">
-                      {item.redeemCode || 'N/A'}
-                    </td>
-                    <td className="py-3 px-3 max-w-xs truncate text-slate-300" title={item.message}>
-                      {item.message}
-                    </td>
-                    <td className="py-3 px-3">
-                      {item.status === 'Scheduled' ? (
-                        <span className="inline-flex items-center gap-1 text-indigo-400 font-bold text-[11px]">
-                          <Calendar className="w-3 h-3" /> Scheduled
-                        </span>
-                      ) : item.status === 'Success' ? (
-                        <span className="inline-flex items-center gap-1 text-emerald-400 font-bold text-[11px]">
-                          <CheckCircle2 className="w-3 h-3" /> Success
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-rose-400 font-bold text-[11px]" title={item.errorMessage || ''}>
-                          <XCircle className="w-3 h-3" /> Failed
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {item.redeemCode && item.redeemCode !== 'N/A' && (
+                        <Copy className="w-3 h-3" /> Copy Code
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleSendAgainFromHistory(item)}
+                      className="px-2.5 py-1 rounded bg-sky-500/20 text-sky-300 font-bold text-[11px] flex items-center gap-1"
+                    >
+                      <Send className="w-3 h-3" /> Load & Send
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop Table View (Hidden on Mobile) */}
+            <div className="hidden sm:block overflow-x-auto w-full max-w-full">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+                    <th className="py-2.5 px-3">Time</th>
+                    <th className="py-2.5 px-3">Code</th>
+                    <th className="py-2.5 px-3">Message</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 font-sans">
+                  {historyList.map((item) => (
+                    <tr key={item.id} className="hover:bg-slate-800/40 transition">
+                      <td className="py-3 px-3 text-slate-400 whitespace-nowrap font-mono text-[11px]">
+                        {new Date(item.timestamp).toLocaleString([], {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </td>
+                      <td className="py-3 px-3 font-mono font-bold text-amber-400 whitespace-nowrap">
+                        {item.redeemCode || 'N/A'}
+                      </td>
+                      <td className="py-3 px-3 max-w-xs truncate text-slate-300" title={item.message}>
+                        {item.message}
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        {item.status === 'Success' ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-400 font-bold text-[11px]">
+                            <CheckCircle2 className="w-3 h-3" /> Success
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-rose-400 font-bold text-[11px]">
+                            <XCircle className="w-3 h-3" /> Failed
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-3 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {item.redeemCode && item.redeemCode !== 'N/A' && (
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(item.redeemCode!, `Copied code ${item.redeemCode}`)}
+                              className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition"
+                              title="Copy Code"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => copyToClipboard(item.redeemCode!, `Copied code ${item.redeemCode}`)}
-                            className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition"
-                            title="Copy Code"
+                            onClick={() => handleSendAgainFromHistory(item)}
+                            className="px-2.5 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 text-[11px] font-bold transition flex items-center gap-1"
                           >
-                            <Copy className="w-3.5 h-3.5" />
+                            <Send className="w-3 h-3" />
+                            <span>Load & Send</span>
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleSendAgainFromHistory(item)}
-                          className="px-2.5 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 text-[11px] font-bold transition flex items-center gap-1"
-                        >
-                          <Send className="w-3 h-3" />
-                          <span>Load & Send</span>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
