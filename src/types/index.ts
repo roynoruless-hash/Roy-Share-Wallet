@@ -139,11 +139,17 @@ export interface AIBroadcastItem {
   targetChat?: string;
   targetAudience?: string;
   telegramMessageId?: string | number | null;
-  status: 'Success' | 'Failed' | 'Scheduled';
+  status: 'Success' | 'Failed' | 'Scheduled' | 'Completed';
   errorMessage?: string;
   timestamp: string;
   isScheduled?: boolean;
   scheduledFor?: string;
+  totalUsers?: number;
+  sent?: number;
+  failed?: number;
+  blocked?: number;
+  timeTaken?: string;
+  failedUsers?: Array<{ id: string; telegramId: string; name: string; error?: string }>;
   inlineButtons?: { text: string; url: string; enabled: boolean }[];
   redeemSettings?: {
     expiryTime?: string;

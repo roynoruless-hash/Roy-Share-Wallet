@@ -785,6 +785,97 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
+  // Endpoint to send to a single Telegram chat ID (used for live batching/progress)
+  app.post('/api/ai-broadcast/send-single', async (req, res) => {
+    try {
+      const { chatId, message, inlineButtons } = req.body;
+      if (!chatId || !message || !String(chatId).trim()) {
+        return res.status(400).json({ success: false, error: 'chatId and message are required' });
+      }
+
+      const adminConfig = await getDecryptedConfig();
+      const botToken = adminConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+
+      if (!botToken) {
+        return res.status(400).json({ success: false, error: 'Telegram Bot Token not configured.' });
+      }
+
+      let reply_markup: any = undefined;
+      if (Array.isArray(inlineButtons) && inlineButtons.length > 0) {
+        const activeBtns = inlineButtons.filter((btn: any) => btn.enabled && btn.text && btn.url);
+        if (activeBtns.length > 0) {
+          reply_markup = {
+            inline_keyboard: activeBtns.map((btn: any) => [
+              { text: btn.text, url: btn.url.startsWith('http') ? btn.url : `https://${btn.url}` },
+            ]),
+          };
+        }
+      }
+
+      const options = reply_markup ? { reply_markup } : {};
+      const tgRes = await sendTelegramMessage(botToken, String(chatId).trim(), message.trim(), options);
+
+      if (tgRes && tgRes.ok) {
+        return res.json({ success: true, messageId: tgRes.result?.message_id });
+      }
+
+      const description = tgRes?.description || 'Telegram send error';
+      const isBlocked =
+        tgRes?.error_code === 403 ||
+        /blocked|deactivated|Forbidden|user is deactivated/i.test(description);
+
+      return res.json({
+        success: false,
+        error: description,
+        isBlocked,
+        errorCode: tgRes?.error_code,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Get all registered users for broadcast calculation
+  app.get('/api/ai-broadcast/users', async (req, res) => {
+    try {
+      const usersRef = collection(db, 'users');
+      const querySnapshot = await getDocs(usersRef);
+      const users: any[] = [];
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        users.push({
+          id: docSnap.id,
+          uid: data.uid || '',
+          telegramId: String(data.telegramId || '').trim(),
+          username: data.username || '',
+          firstName: data.firstName || 'User',
+          status: data.status || (data.banned ? 'banned' : 'active'),
+          banned: Boolean(data.banned || data.status === 'banned' || data.status === 'blocked'),
+        });
+      });
+      return res.json({ success: true, users });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Endpoint to save/update broadcast history
+  app.post('/api/ai-broadcast/save-history', async (req, res) => {
+    try {
+      const record = req.body;
+      const broadcastId = record.id || `bc_${Date.now()}`;
+      const docRecord = {
+        id: broadcastId,
+        ...record,
+        timestamp: record.timestamp || new Date().toISOString(),
+      };
+      await setDoc(doc(db, 'aiBroadcastHistory', broadcastId), docRecord);
+      return res.json({ success: true, broadcastId });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // Send AI Broadcast to Telegram (Supports Inline Buttons, Target Audience, Test Mode & Schedule)
   app.post('/api/ai-broadcast/send', async (req, res) => {
     try {
@@ -836,9 +927,9 @@ Claim now and don't forget to share your screenshot!`;
         }
       }
 
-      // Handle Test Broadcast Mode
+      // Handle Test Broadcast Mode (ONLY sends to admin)
       if (isTestSend) {
-        const dest = testTelegramId || adminConfig?.adminTelegramId || adminConfig?.adminChatId;
+        const dest = (testTelegramId || adminConfig?.adminTelegramId || adminConfig?.adminChatId || '').trim();
         if (!dest) {
           return res.status(400).json({
             success: false,
@@ -902,8 +993,14 @@ Claim now and don't forget to share your screenshot!`;
         });
       }
 
-      // Determine Target Destinations for Live Broadcast
+      // Handle Live Broadcast to All Registered Users and Selected Destinations
       const options = reply_markup ? { reply_markup } : {};
+      const rawDestinations: Array<any> = req.body.selectedDestinations || [];
+
+      let sentCount = 0;
+      let failedCount = 0;
+      let blockedCount = 0;
+      const failedUsersList: Array<{ id: string; telegramId: string; name: string; error?: string }> = [];
       const destinationResults: Array<{
         id: string;
         displayName: string;
@@ -915,31 +1012,99 @@ Claim now and don't forget to share your screenshot!`;
         messageId?: number;
       }> = [];
 
-      const rawDestinations: Array<any> = req.body.selectedDestinations || [];
+      const startTime = Date.now();
 
-      if (rawDestinations.length > 0) {
-        // Send to each selected destination individually
-        for (const dest of rawDestinations) {
-          let target = dest.chatId?.trim() || (dest.username ? `@${dest.username.replace(/^@/, '')}` : null);
-          if (dest.type === 'bot' || target === 'bot') {
-            target = dest.chatId && dest.chatId !== 'bot' ? dest.chatId : (adminConfig?.adminTelegramId || adminConfig?.adminChatId || '');
-          }
+      // Check if Bot / Users destination is checked in selectedDestinations
+      const botDestSelected = rawDestinations.some((d) => d.type === 'bot' || d.id === 'bot_destination');
+      const channelDestinations = rawDestinations.filter((d) => d.type !== 'bot' && d.id !== 'bot_destination');
 
-          if (!target) {
-            destinationResults.push({
-              id: dest.id || 'unknown',
-              displayName: dest.displayName || 'Telegram Bot',
-              username: dest.username || '',
-              chatId: dest.chatId || '',
-              type: dest.type || 'bot',
-              success: false,
-              error: 'Bot Admin Telegram Chat ID not configured',
-            });
+      // 1. Send to all registered users from Firestore if bot option selected or default
+      if (botDestSelected || rawDestinations.length === 0) {
+        const usersRef = collection(db, 'users');
+        const userSnaps = await getDocs(usersRef);
+        const registeredUsers: any[] = [];
+
+        userSnaps.forEach((docSnap) => {
+          const u = docSnap.data();
+          registeredUsers.push({
+            id: docSnap.id,
+            telegramId: String(u.telegramId || '').trim(),
+            name: u.firstName || u.username || 'User',
+            status: u.status || (u.banned ? 'banned' : 'active'),
+            banned: Boolean(u.banned || u.status === 'banned' || u.status === 'blocked'),
+          });
+        });
+
+        for (const user of registeredUsers) {
+          // Skip users without telegramId or flagged as banned/blocked
+          if (!user.telegramId || user.banned || user.status === 'blocked' || user.status === 'banned') {
+            blockedCount++;
             continue;
           }
 
+          try {
+            // Rate limiting delay (~35ms for ~28 msgs/sec)
+            await new Promise((resolve) => setTimeout(resolve, 35));
+
+            const tgRes = await sendTelegramMessage(botToken, user.telegramId, message.trim(), options);
+            if (tgRes && tgRes.ok) {
+              sentCount++;
+            } else {
+              const description = tgRes?.description || 'Send failed';
+              const isBlocked =
+                tgRes?.error_code === 403 ||
+                /blocked|deactivated|Forbidden/i.test(description);
+
+              if (isBlocked) {
+                blockedCount++;
+              } else {
+                failedCount++;
+                failedUsersList.push({
+                  id: user.id,
+                  telegramId: user.telegramId,
+                  name: user.name,
+                  error: description,
+                });
+              }
+            }
+          } catch (err: any) {
+            failedCount++;
+            failedUsersList.push({
+              id: user.id,
+              telegramId: user.telegramId,
+              name: user.name,
+              error: err.message || 'Error sending message',
+            });
+          }
+        }
+      }
+
+      // 2. Send to Channel / Group Destinations
+      for (const dest of channelDestinations) {
+        const target = dest.chatId?.trim() || (dest.username ? `@${dest.username.replace(/^@/, '')}` : null);
+        if (!target) {
+          destinationResults.push({
+            id: dest.id || 'unknown',
+            displayName: dest.displayName || 'Channel/Group',
+            username: dest.username || '',
+            chatId: dest.chatId || '',
+            type: dest.type || 'channel',
+            success: false,
+            error: 'Invalid Chat ID / Username missing',
+          });
+          failedCount++;
+          continue;
+        }
+
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 35));
           const tgRes = await sendTelegramMessage(botToken, target, message.trim(), options);
           const ok = !!(tgRes && tgRes.ok);
+          if (ok) {
+            sentCount++;
+          } else {
+            failedCount++;
+          }
           destinationResults.push({
             id: dest.id || target,
             displayName: dest.displayName || target,
@@ -950,77 +1115,38 @@ Claim now and don't forget to share your screenshot!`;
             error: ok ? undefined : (tgRes?.description || 'Send failed'),
             messageId: ok ? tgRes.result?.message_id : undefined,
           });
-        }
-      } else {
-        // Fallback single targetChat
-        let singleTarget = targetChat;
-        if (!singleTarget) {
-          singleTarget = adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername || adminConfig?.adminTelegramId || adminConfig?.adminChatId;
-        }
-
-        if (!singleTarget) {
-          return res.status(400).json({
+        } catch (err: any) {
+          failedCount++;
+          destinationResults.push({
+            id: dest.id || target,
+            displayName: dest.displayName || target,
+            username: dest.username || '',
+            chatId: dest.chatId || target,
+            type: dest.type || 'channel',
             success: false,
-            error: 'No target Telegram Channel or Group configured.',
+            error: err.message,
           });
         }
-
-        const tgRes = await sendTelegramMessage(botToken, singleTarget, message.trim(), options);
-        const ok = !!(tgRes && tgRes.ok);
-        destinationResults.push({
-          id: 'default_target',
-          displayName: singleTarget,
-          username: singleTarget.startsWith('@') ? singleTarget : '',
-          chatId: singleTarget,
-          type: 'channel',
-          success: ok,
-          error: ok ? undefined : (tgRes?.description || 'Send failed'),
-          messageId: ok ? tgRes.result?.message_id : undefined,
-        });
       }
 
-      const anySuccess = destinationResults.some((d) => d.success);
-      const allSuccess = destinationResults.every((d) => d.success);
-      const msgId = destinationResults.find((d) => d.success)?.messageId || null;
-      const errorMsg = allSuccess ? null : destinationResults.map((d) => `${d.displayName}: ${d.error || 'OK'}`).join('; ');
+      const totalUsers = sentCount + failedCount + blockedCount;
+      const timeTaken = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
 
-      // Estimate Delivery Report based on audience size
-      const totalEstimatedSent = targetAudience === 'Custom Telegram IDs' && customUserIds
-        ? customUserIds.split(',').filter(Boolean).length
-        : targetAudience === 'Active Users'
-        ? 850
-        : targetAudience === 'New Users (Last 7 Days)'
-        ? 320
-        : 1250;
-
-      const deliveredCount = anySuccess ? Math.floor(totalEstimatedSent * (allSuccess ? 0.988 : 0.65)) : 0;
-      const failedCount = totalEstimatedSent - deliveredCount;
-      const successRate = anySuccess ? Number(((deliveredCount / totalEstimatedSent) * 100).toFixed(1)) : 0;
-
-      const deliveryStats = {
-        totalSent: totalEstimatedSent,
-        delivered: deliveredCount,
-        failed: failedCount,
-        successRate,
-      };
-
-      // Save History in Firestore
       const historyItem = {
         id: broadcastId,
         type: type || 'active_alert',
         redeemCode: redeemCode || (type === 'redeem_code' ? 'CODE' : 'N/A'),
         message: message.trim(),
         sentByAdmin: sentByAdmin || 'Admin',
-        targetChat: destinationResults.map((d) => d.displayName).join(', '),
-        targetAudience: targetAudience || 'All Users',
-        telegramMessageId: msgId,
-        status: anySuccess ? 'Success' : 'Failed',
-        errorMessage: errorMsg,
-        inlineButtons: inlineButtons || [],
-        redeemSettings: redeemSettings || {},
-        deliveryStats,
+        targetAudience: targetAudience || 'All Registered Users',
+        status: sentCount > 0 ? 'Success' : 'Failed',
+        totalUsers,
+        sent: sentCount,
+        failed: failedCount,
+        blocked: blockedCount,
+        timeTaken,
+        failedUsers: failedUsersList,
         destinationResults,
-        aiScores: aiScores || null,
         timestamp: new Date().toISOString(),
       };
 
@@ -1030,24 +1156,19 @@ Claim now and don't forget to share your screenshot!`;
         console.warn('Failed to save broadcast history to Firestore:', histErr);
       }
 
-      if (anySuccess) {
-        return res.json({
-          success: true,
-          message: 'Broadcast Sent to Destinations',
-          telegramMessageId: msgId,
-          broadcastId,
-          deliveryStats,
-          destinationResults,
-        });
-      } else {
-        return res.status(400).json({
-          success: false,
-          error: `Telegram Broadcast Failed across destinations: ${errorMsg}`,
-          broadcastId,
-          deliveryStats,
-          destinationResults,
-        });
-      }
+      return res.json({
+        success: true,
+        broadcastId,
+        report: {
+          totalUsers,
+          sent: sentCount,
+          failed: failedCount,
+          blocked: blockedCount,
+          timeTaken,
+        },
+        failedUsers: failedUsersList,
+        destinationResults,
+      });
     } catch (err: any) {
       console.error('Error sending AI Broadcast:', err);
       return res.status(500).json({

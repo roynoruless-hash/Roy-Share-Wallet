@@ -70,7 +70,22 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
   const [isSending, setIsSending] = useState(false);
   const [copiedCodeState, setCopiedCodeState] = useState(false);
 
-  // Delivery Report
+  // Delivery Report & Live Progress
+  const [broadcastProgress, setBroadcastProgress] = useState<{
+    isBroadcasting: boolean;
+    isRetrying: boolean;
+    current: number;
+    total: number;
+    statusText: string;
+    sent: number;
+    failed: number;
+    blocked: number;
+    timeTaken: string;
+    failedUsers: Array<{ id: string; telegramId: string; name: string; error?: string }>;
+    completed: boolean;
+    broadcastRecordId?: string;
+  } | null>(null);
+
   const [lastDeliveryReport, setLastDeliveryReport] = useState<{
     totalSent: number;
     delivered: number;
@@ -288,118 +303,420 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     }
   };
 
-  // Send Live Broadcast to Checked Destinations
+  // Send Live Broadcast to Checked Destinations & All Registered Users
   const handleSendLiveBroadcast = async () => {
     if (!editableMessage.trim()) {
       showToast('Cannot send an empty broadcast message', 'error');
       return;
     }
 
-    // Build target destinations list based on checkboxes
-    const targetDestinations: Array<{
-      id: string;
-      displayName: string;
-      username?: string;
-      chatId?: string;
-      type: 'channel' | 'group' | 'bot';
-    }> = [];
-
-    if (sendToBot) {
-      targetDestinations.push({
-        id: 'bot_destination',
-        displayName: 'Telegram Bot Users',
-        username: config.botUsername || 'RoyShareBot',
-        chatId: config.adminTelegramId || config.adminChatId || 'bot',
-        type: 'bot',
-      });
-    }
-
-    if (sendToMainChannel && config.mainChannelUsername) {
-      const mainChan = config.mainChannelUsername.replace(/^@/, '');
-      targetDestinations.push({
-        id: 'main_channel_dest',
-        displayName: 'Main Channel',
-        username: mainChan,
-        chatId: `@${mainChan}`,
-        type: 'channel',
-      });
-    }
-
-    if (sendToMainGroup && config.mainGroupUsername) {
-      const mainGrp = config.mainGroupUsername.replace(/^@/, '');
-      targetDestinations.push({
-        id: 'main_group_dest',
-        displayName: 'Main Group',
-        username: mainGrp,
-        chatId: `@${mainGrp}`,
-        type: 'group',
-      });
-    }
-
-    if (sendToAdditionalChannels && destinations.length > 0) {
-      destinations.forEach((dest) => {
-        if (selectedAdditionalChannelIds.includes(dest.id)) {
-          // Avoid duplicate main channel/group if already added above
-          const cleanUser = dest.username ? dest.username.replace(/^@/, '') : '';
-          const isMainChan = config.mainChannelUsername && cleanUser === config.mainChannelUsername.replace(/^@/, '');
-          const isMainGrp = config.mainGroupUsername && cleanUser === config.mainGroupUsername.replace(/^@/, '');
-
-          if (!isMainChan && !isMainGrp) {
-            targetDestinations.push({
-              id: dest.id,
-              displayName: dest.displayName,
-              username: dest.username,
-              chatId: dest.chatId,
-              type: dest.type,
-            });
-          }
-        }
-      });
-    }
-
-    if (targetDestinations.length === 0) {
-      showToast('Please select at least one destination (Telegram Bot or Channels)', 'error');
+    if (!sendToBot && !sendToMainChannel && !sendToMainGroup && selectedAdditionalChannelIds.length === 0) {
+      showToast('Please select at least one destination checkbox above', 'error');
       return;
     }
 
     setIsSending(true);
     setLastDeliveryReport(null);
+
     try {
-      const res = await fetch('/api/ai-broadcast/send', {
+      // 1. Fetch registered users from Firestore
+      let registeredUsers: Array<{
+        id: string;
+        telegramId: string;
+        name: string;
+        banned: boolean;
+      }> = [];
+
+      if (sendToBot) {
+        try {
+          const userRes = await fetch('/api/ai-broadcast/users');
+          const userData = await userRes.json();
+          if (userData.success && Array.isArray(userData.users)) {
+            registeredUsers = userData.users;
+          }
+        } catch (uErr) {
+          console.error('Failed to load registered users:', uErr);
+        }
+      }
+
+      // Filter active and blocked users
+      const activeUsers = registeredUsers.filter(
+        (u) => u.telegramId && String(u.telegramId).trim() && !u.banned
+      );
+      const initialBlockedUsers = registeredUsers.filter(
+        (u) => !u.telegramId || !String(u.telegramId).trim() || u.banned
+      );
+
+      // Collect channel/group destinations
+      const channelDestinations: Array<{
+        id: string;
+        displayName: string;
+        chatId: string;
+      }> = [];
+
+      if (sendToMainChannel && config.mainChannelUsername) {
+        const mainChan = config.mainChannelUsername.replace(/^@/, '');
+        channelDestinations.push({
+          id: 'main_channel_dest',
+          displayName: 'Main Channel',
+          chatId: `@${mainChan}`,
+        });
+      }
+
+      if (sendToMainGroup && config.mainGroupUsername) {
+        const mainGrp = config.mainGroupUsername.replace(/^@/, '');
+        channelDestinations.push({
+          id: 'main_group_dest',
+          displayName: 'Main Group',
+          chatId: `@${mainGrp}`,
+        });
+      }
+
+      if (sendToAdditionalChannels && destinations.length > 0) {
+        destinations.forEach((dest) => {
+          if (selectedAdditionalChannelIds.includes(dest.id)) {
+            const cleanUser = dest.username ? dest.username.replace(/^@/, '') : '';
+            const isMainChan = config.mainChannelUsername && cleanUser === config.mainChannelUsername.replace(/^@/, '');
+            const isMainGrp = config.mainGroupUsername && cleanUser === config.mainGroupUsername.replace(/^@/, '');
+
+            if (!isMainChan && !isMainGrp) {
+              const targetChat = dest.chatId || (dest.username ? `@${dest.username.replace(/^@/, '')}` : '');
+              if (targetChat) {
+                channelDestinations.push({
+                  id: dest.id,
+                  displayName: dest.displayName,
+                  chatId: targetChat,
+                });
+              }
+            }
+          }
+        });
+      }
+
+      // Build overall target queue
+      const totalTargets = activeUsers.length + channelDestinations.length + initialBlockedUsers.length;
+
+      if (totalTargets === 0) {
+        showToast('No registered active users or destinations found to broadcast.', 'error');
+        setIsSending(false);
+        return;
+      }
+
+      const broadcastRecordId = `bc_${Date.now()}`;
+      const startTime = Date.now();
+
+      // Initialize live progress state
+      let currentIdx = 0;
+      let sentCount = 0;
+      let failedCount = 0;
+      let blockedCount = initialBlockedUsers.length;
+      const failedUsersList: Array<{ id: string; telegramId: string; name: string; error?: string }> = [];
+
+      setBroadcastProgress({
+        isBroadcasting: true,
+        isRetrying: false,
+        current: blockedCount,
+        total: totalTargets,
+        statusText: `Sending ${blockedCount}/${totalTargets}`,
+        sent: 0,
+        failed: 0,
+        blocked: blockedCount,
+        timeTaken: '0.0s',
+        failedUsers: [],
+        completed: false,
+        broadcastRecordId,
+      });
+
+      // A) Loop through Active Registered Users
+      for (let i = 0; i < activeUsers.length; i++) {
+        const user = activeUsers[i];
+        currentIdx = i + 1 + initialBlockedUsers.length;
+
+        setBroadcastProgress((prev) =>
+          prev
+            ? {
+                ...prev,
+                current: currentIdx,
+                statusText: `Sending ${currentIdx}/${totalTargets}`,
+              }
+            : null
+        );
+
+        try {
+          // Rate limit delay (~35ms per request = 28-30 msgs/sec)
+          await new Promise((resolve) => setTimeout(resolve, 35));
+
+          const res = await fetch('/api/ai-broadcast/send-single', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chatId: user.telegramId,
+              message: editableMessage.trim(),
+            }),
+          });
+          const data = await res.json();
+
+          if (data.success) {
+            sentCount++;
+          } else if (data.isBlocked) {
+            blockedCount++;
+          } else {
+            failedCount++;
+            failedUsersList.push({
+              id: user.id,
+              telegramId: user.telegramId,
+              name: user.name || 'User',
+              error: data.error || 'Send failed',
+            });
+          }
+        } catch (err: any) {
+          failedCount++;
+          failedUsersList.push({
+            id: user.id,
+            telegramId: user.telegramId,
+            name: user.name || 'User',
+            error: err.message || 'Error sending message',
+          });
+        }
+
+        const elapsedSeconds = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
+        setBroadcastProgress((prev) =>
+          prev
+            ? {
+                ...prev,
+                sent: sentCount,
+                failed: failedCount,
+                blocked: blockedCount,
+                failedUsers: [...failedUsersList],
+                timeTaken: elapsedSeconds,
+              }
+            : null
+        );
+      }
+
+      // B) Loop through Channel / Group Destinations
+      for (let j = 0; j < channelDestinations.length; j++) {
+        const dest = channelDestinations[j];
+        currentIdx = activeUsers.length + initialBlockedUsers.length + j + 1;
+
+        setBroadcastProgress((prev) =>
+          prev
+            ? {
+                ...prev,
+                current: currentIdx,
+                statusText: `Sending ${currentIdx}/${totalTargets}`,
+              }
+            : null
+        );
+
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 35));
+
+          const res = await fetch('/api/ai-broadcast/send-single', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chatId: dest.chatId,
+              message: editableMessage.trim(),
+            }),
+          });
+          const data = await res.json();
+
+          if (data.success) {
+            sentCount++;
+          } else {
+            failedCount++;
+            failedUsersList.push({
+              id: dest.id,
+              telegramId: dest.chatId,
+              name: dest.displayName,
+              error: data.error || 'Channel send failed',
+            });
+          }
+        } catch (err: any) {
+          failedCount++;
+          failedUsersList.push({
+            id: dest.id,
+            telegramId: dest.chatId,
+            name: dest.displayName,
+            error: err.message || 'Channel send error',
+          });
+        }
+
+        const elapsedSeconds = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
+        setBroadcastProgress((prev) =>
+          prev
+            ? {
+                ...prev,
+                sent: sentCount,
+                failed: failedCount,
+                blocked: blockedCount,
+                failedUsers: [...failedUsersList],
+                timeTaken: elapsedSeconds,
+              }
+            : null
+        );
+      }
+
+      const finalTimeTaken = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
+
+      // Complete progress update
+      setBroadcastProgress({
+        isBroadcasting: false,
+        isRetrying: false,
+        current: totalTargets,
+        total: totalTargets,
+        statusText: 'Completed',
+        sent: sentCount,
+        failed: failedCount,
+        blocked: blockedCount,
+        timeTaken: finalTimeTaken,
+        failedUsers: failedUsersList,
+        completed: true,
+        broadcastRecordId,
+      });
+
+      // Save History to Firestore
+      await fetch('/api/ai-broadcast/save-history', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          id: broadcastRecordId,
           type: broadcastType,
           redeemCode: broadcastType === 'redeem_code' ? redeemCodeInput.trim().toUpperCase() : 'N/A',
           message: editableMessage.trim(),
-          selectedDestinations: targetDestinations,
           sentByAdmin: 'Admin',
-          targetAudience: 'Selected Destinations',
-          redeemSettings: {
-            expiryTime,
-            maxUses,
-            remainingUses,
-          },
+          targetAudience: 'All Registered Users',
+          status: 'Completed',
+          totalUsers: totalTargets,
+          sent: sentCount,
+          failed: failedCount,
+          blocked: blockedCount,
+          timeTaken: finalTimeTaken,
+          failedUsers: failedUsersList,
+          timestamp: new Date().toISOString(),
         }),
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        showToast('🚀 Broadcast Sent Successfully to Selected Destinations!', 'success');
-        setLastDeliveryReport({
-          totalSent: data.deliveryStats?.totalSent || targetDestinations.length,
-          delivered: data.deliveryStats?.delivered || targetDestinations.length,
-          failed: data.deliveryStats?.failed || 0,
-          successRate: data.deliveryStats?.successRate || 100,
-          destinationResults: data.destinationResults || [],
-        });
-        fetchHistory();
-      } else {
-        showToast(data.error || 'Failed to send broadcast', 'error');
-      }
+
+      showToast('🚀 Broadcast Completed Successfully!', 'success');
+      fetchHistory();
     } catch (err: any) {
       showToast(err.message || 'Network error sending broadcast', 'error');
     } finally {
       setIsSending(false);
+    }
+  };
+
+  // Retry failed users
+  const handleRetryFailedUsers = async (targetFailedList?: Array<{ id: string; telegramId: string; name: string; error?: string }>, recordId?: string) => {
+    const listToRetry = targetFailedList || broadcastProgress?.failedUsers || [];
+    if (listToRetry.length === 0) {
+      showToast('No failed users to retry', 'info');
+      return;
+    }
+
+    showToast(`Retrying ${listToRetry.length} failed user(s)...`, 'info');
+    const startTime = Date.now();
+
+    let retrySent = 0;
+    let retryBlocked = 0;
+    const stillFailedUsers: Array<{ id: string; telegramId: string; name: string; error?: string }> = [];
+
+    setBroadcastProgress((prev) =>
+      prev
+        ? {
+            ...prev,
+            isRetrying: true,
+            statusText: `Retrying 0/${listToRetry.length}`,
+          }
+        : null
+    );
+
+    for (let i = 0; i < listToRetry.length; i++) {
+      const u = listToRetry[i];
+      setBroadcastProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              statusText: `Retrying ${i + 1}/${listToRetry.length}`,
+            }
+          : null
+      );
+
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 35));
+
+        const res = await fetch('/api/ai-broadcast/send-single', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chatId: u.telegramId,
+            message: editableMessage.trim(),
+          }),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          retrySent++;
+        } else if (data.isBlocked) {
+          retryBlocked++;
+        } else {
+          stillFailedUsers.push({
+            ...u,
+            error: data.error || 'Retry failed',
+          });
+        }
+      } catch (err: any) {
+        stillFailedUsers.push({
+          ...u,
+          error: err.message || 'Retry network error',
+        });
+      }
+    }
+
+    setBroadcastProgress((prev) => {
+      if (!prev) return null;
+      const newSent = prev.sent + retrySent;
+      const newBlocked = prev.blocked + retryBlocked;
+      const newFailed = stillFailedUsers.length;
+      const elapsedSeconds = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
+
+      fetch('/api/ai-broadcast/save-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: recordId || prev.broadcastRecordId || `bc_${Date.now()}`,
+          type: broadcastType,
+          redeemCode: broadcastType === 'redeem_code' ? redeemCodeInput.trim().toUpperCase() : 'N/A',
+          message: editableMessage.trim(),
+          sentByAdmin: 'Admin',
+          targetAudience: 'All Registered Users',
+          status: 'Completed',
+          totalUsers: prev.total,
+          sent: newSent,
+          failed: newFailed,
+          blocked: newBlocked,
+          timeTaken: elapsedSeconds,
+          failedUsers: stillFailedUsers,
+          timestamp: new Date().toISOString(),
+        }),
+      }).then(() => fetchHistory());
+
+      return {
+        ...prev,
+        isRetrying: false,
+        sent: newSent,
+        blocked: newBlocked,
+        failed: newFailed,
+        failedUsers: stillFailedUsers,
+        statusText: stillFailedUsers.length === 0 ? 'All Retries Succeeded' : 'Retry Completed',
+      };
+    });
+
+    if (stillFailedUsers.length === 0) {
+      showToast('🎉 All retried messages delivered successfully!', 'success');
+    } else {
+      showToast(`Retry finished. Delivered: ${retrySent}, Still Failed: ${stillFailedUsers.length}`, 'info');
     }
   };
 
@@ -838,28 +1155,97 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
           )}
         </div>
 
-        {/* Delivery Report if sent */}
-        {lastDeliveryReport && (
-          <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-1.5 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-emerald-300 flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                <span>Delivery Report</span>
+        {/* Live Broadcast Progress & Final Report Card */}
+        {broadcastProgress && (
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3 text-xs">
+            {/* Header / Title */}
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
+              <span className="font-bold text-white flex items-center gap-2 text-xs sm:text-sm">
+                <Zap className={`w-4 h-4 ${broadcastProgress.isBroadcasting || broadcastProgress.isRetrying ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`} />
+                <span>
+                  {broadcastProgress.isBroadcasting
+                    ? 'Live Broadcasting in Progress...'
+                    : broadcastProgress.isRetrying
+                    ? 'Retrying Failed Users...'
+                    : 'Broadcast Final Report'}
+                </span>
               </span>
-              <span className="font-mono text-[11px] text-emerald-400">
-                {lastDeliveryReport.delivered} / {lastDeliveryReport.totalSent} Sent ({lastDeliveryReport.successRate}%)
+
+              <span className="font-mono font-bold text-sky-400 text-xs">
+                {broadcastProgress.statusText}
               </span>
             </div>
-            {lastDeliveryReport.destinationResults && (
-              <div className="space-y-1 pt-1 border-t border-emerald-500/20">
-                {lastDeliveryReport.destinationResults.map((dest, idx) => (
-                  <div key={idx} className="flex items-center justify-between text-[11px]">
-                    <span className="text-slate-300 truncate mr-2">{dest.displayName}</span>
-                    <span className={dest.success ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-                      {dest.success ? '✅ Delivered' : '❌ Failed'}
-                    </span>
-                  </div>
-                ))}
+
+            {/* Live Progress Bar */}
+            {(broadcastProgress.isBroadcasting || broadcastProgress.isRetrying) && (
+              <div className="space-y-1.5">
+                <div className="w-full bg-slate-900 rounded-full h-2.5 overflow-hidden border border-slate-800">
+                  <div
+                    className="bg-gradient-to-r from-sky-500 via-teal-400 to-emerald-500 h-2.5 rounded-full transition-all duration-200"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.round((broadcastProgress.current / Math.max(1, broadcastProgress.total)) * 100)
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <div className="flex justify-between text-[11px] text-slate-400 font-mono">
+                  <span>Progress: {Math.round((broadcastProgress.current / Math.max(1, broadcastProgress.total)) * 100)}%</span>
+                  <span>
+                    Sending {broadcastProgress.current}/{broadcastProgress.total}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Final Report Grid / Stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
+              <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/80 text-center">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Users</span>
+                <span className="text-sm font-bold font-mono text-white">{broadcastProgress.total}</span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-center">
+                <span className="text-[10px] uppercase font-bold text-emerald-400 block">Sent</span>
+                <span className="text-sm font-bold font-mono text-emerald-300">{broadcastProgress.sent}</span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-center">
+                <span className="text-[10px] uppercase font-bold text-rose-400 block">Failed</span>
+                <span className="text-sm font-bold font-mono text-rose-300">{broadcastProgress.failed}</span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-center">
+                <span className="text-[10px] uppercase font-bold text-amber-400 block">Blocked</span>
+                <span className="text-sm font-bold font-mono text-amber-300">{broadcastProgress.blocked}</span>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-sky-500/10 border border-sky-500/20 text-center col-span-2 sm:col-span-1">
+                <span className="text-[10px] uppercase font-bold text-sky-400 block">Time Taken</span>
+                <span className="text-sm font-bold font-mono text-sky-300">{broadcastProgress.timeTaken}</span>
+              </div>
+            </div>
+
+            {/* Final Status Indicator & Action */}
+            {broadcastProgress.completed && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-2 border-t border-slate-800">
+                <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>Completed Successfully.</span>
+                </span>
+
+                {broadcastProgress.failed > 0 && broadcastProgress.failedUsers.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleRetryFailedUsers()}
+                    disabled={broadcastProgress.isRetrying}
+                    className="w-full sm:w-auto px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition flex items-center justify-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${broadcastProgress.isRetrying ? 'animate-spin' : ''}`} />
+                    <span>Retry Failed Users ({broadcastProgress.failedUsers.length})</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -880,10 +1266,14 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
           <button
             type="button"
             onClick={handleSendLiveBroadcast}
-            disabled={isSending || !editableMessage.trim()}
+            disabled={isSending || (broadcastProgress?.isBroadcasting ?? false) || !editableMessage.trim()}
             className="w-full sm:w-1/2 py-2.5 px-4 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/20 transition disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            {isSending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {isSending || (broadcastProgress?.isBroadcasting ?? false) ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
             <span>Send Broadcast</span>
           </button>
         </div>
@@ -934,7 +1324,9 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                     </span>
                     <span
                       className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        item.status === 'Success' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'
+                        item.status === 'Completed' || item.status === 'Success'
+                          ? 'bg-emerald-500/20 text-emerald-300'
+                          : 'bg-rose-500/20 text-rose-300'
                       }`}
                     >
                       {item.status}
@@ -947,11 +1339,34 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                     </div>
                   )}
 
+                  {/* Stats Summary line */}
+                  {(item.totalUsers !== undefined || item.sent !== undefined) && (
+                    <div className="flex flex-wrap gap-x-2 text-[10px] font-mono text-slate-400 bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                      <span>Total: {item.totalUsers ?? 'N/A'}</span>
+                      <span className="text-emerald-400">Sent: {item.sent ?? 0}</span>
+                      <span className="text-rose-400">Failed: {item.failed ?? 0}</span>
+                      <span className="text-amber-400">Blocked: {item.blocked ?? 0}</span>
+                      {item.timeTaken && <span className="text-sky-400">Time: {item.timeTaken}</span>}
+                    </div>
+                  )}
+
                   <p className="text-slate-300 text-[11px] line-clamp-2 leading-relaxed">
                     {item.message}
                   </p>
 
-                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/80">
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                    {item.failedUsers && item.failedUsers.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => handleRetryFailedUsers(item.failedUsers, item.id)}
+                        className="px-2 py-1 rounded bg-amber-500/20 text-amber-300 font-bold text-[10px] flex items-center gap-1 border border-amber-500/30"
+                      >
+                        <RefreshCw className="w-3 h-3" /> Retry Failed ({item.failedUsers.length})
+                      </button>
+                    ) : (
+                      <span />
+                    )}
+
                     <button
                       type="button"
                       onClick={() => handleSendAgainFromHistory(item)}
@@ -972,6 +1387,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                     <th className="py-2.5 px-3">Time</th>
                     <th className="py-2.5 px-3">Code</th>
                     <th className="py-2.5 px-3">Message</th>
+                    <th className="py-2.5 px-3">Stats</th>
                     <th className="py-2.5 px-3">Status</th>
                     <th className="py-2.5 px-3 text-right">Actions</th>
                   </tr>
@@ -993,10 +1409,19 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                       <td className="py-2.5 px-3 max-w-xs truncate text-slate-300" title={item.message}>
                         {item.message}
                       </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap font-mono text-[11px]">
+                        {item.totalUsers !== undefined ? (
+                          <span className="text-slate-300">
+                            Total: {item.totalUsers} | <span className="text-emerald-400">Sent: {item.sent}</span> | <span className="text-rose-400">Fail: {item.failed}</span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
+                      </td>
                       <td className="py-2.5 px-3 whitespace-nowrap">
-                        {item.status === 'Success' ? (
+                        {item.status === 'Completed' || item.status === 'Success' ? (
                           <span className="inline-flex items-center gap-1 text-emerald-400 font-bold text-[11px]">
-                            <CheckCircle2 className="w-3 h-3" /> Success
+                            <CheckCircle2 className="w-3 h-3" /> Completed
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-rose-400 font-bold text-[11px]">
@@ -1005,14 +1430,27 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                         )}
                       </td>
                       <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => handleSendAgainFromHistory(item)}
-                          className="px-2.5 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 text-[11px] font-bold transition flex items-center gap-1"
-                        >
-                          <Send className="w-3 h-3" />
-                          <span>Load Message</span>
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          {item.failedUsers && item.failedUsers.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRetryFailedUsers(item.failedUsers, item.id)}
+                              className="px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-[10px] font-bold transition flex items-center gap-1"
+                              title="Retry failed recipients"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                              <span>Retry ({item.failedUsers.length})</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleSendAgainFromHistory(item)}
+                            className="px-2.5 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 text-[11px] font-bold transition flex items-center gap-1"
+                          >
+                            <Send className="w-3 h-3" />
+                            <span>Load Message</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
