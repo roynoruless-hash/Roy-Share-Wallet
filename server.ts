@@ -1214,92 +1214,198 @@ Claim now and don't forget to share your screenshot!`;
   // 1. Start Live Redeem Event
   app.post('/api/live-event/start', async (req, res) => {
     try {
-      const { code, maxUses = 100, countdownSeconds = 10, durationMinutes = 15, sendBroadcast = true, channelUsername } = req.body;
+      const {
+        code,
+        codesInput, // Multiple codes (line-separated or array)
+        maxUses = 100,
+        minReadyUsers = 0,
+        countdownSeconds = 10,
+        durationMinutes = 15,
+        sendToChannel = true,
+        sendToGroups = true,
+        sendToUsers = false,
+        selectedDestinations = [],
+      } = req.body;
 
-      if (!code || !code.trim()) {
-        return res.status(400).json({ success: false, error: 'Redeem code is required to start live event.' });
+      let codesPool: string[] = [];
+
+      if (Array.isArray(codesInput) && codesInput.length > 0) {
+        codesPool = codesInput.map((c: string) => String(c).trim().toUpperCase()).filter(Boolean);
+      } else if (typeof codesInput === 'string' && codesInput.trim()) {
+        codesPool = codesInput
+          .split(/[\n,]+/)
+          .map((c: string) => c.trim().toUpperCase())
+          .filter(Boolean);
       }
 
-      const cleanCode = code.trim().toUpperCase();
-      const now = Date.now();
-      const numCountdown = Math.max(1, Number(countdownSeconds) || 10);
-      const numUses = Math.max(1, Number(maxUses) || 100);
-      const numDuration = Math.max(1, Number(durationMinutes) || 15);
+      if (codesPool.length === 0) {
+        if (!code || !code.trim()) {
+          return res.status(400).json({ success: false, error: 'At least one redeem code is required.' });
+        }
+        const singleCode = code.trim().toUpperCase();
+        const numToGen = Math.max(1, Number(maxUses) || 100);
+        codesPool = Array(numToGen).fill(singleCode);
+      }
 
-      const unlocksAt = now + (numCountdown * 1000);
-      const expiresAt = now + (numDuration * 60 * 1000);
-      const eventId = `live_${now}`;
+      const numUses = codesPool.length;
+      const numCountdown = Math.max(1, Number(countdownSeconds) || 10);
+      const numDuration = Math.max(1, Number(durationMinutes) || 15);
+      const numMinReady = Math.max(0, Number(minReadyUsers) || 0);
 
       const adminConfig = await getDecryptedConfig();
       const botToken = adminConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
       const botUsername = adminConfig?.botUsername || 'Roy_wallett_bot';
 
+      if (!botToken) {
+        return res.status(400).json({ success: false, error: 'Telegram Bot Token not configured.' });
+      }
+
+      // STEP 2: Broadcast Announcement Message ONLY (NEVER include redeem code)
+      const broadcastText =
+        `🚨 <b>Redeem Event Started!</b>\n\n` +
+        `⏳ <b>Get Ready...</b>\n\n` +
+        `🤖 <b>Tap the button below and open Roy Wallet Bot.</b>`;
+
+      const botLink = `https://t.me/${botUsername.replace(/^@/, '')}?start=live_event`;
+      const options = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🤖 Open Roy Wallet Bot', url: botLink }],
+          ],
+        },
+      };
+
+      // STEP 3 & STEP 4: Run Broadcast Engine & WAIT until completion
+      let usersSent = 0;
+      let channelStatus = 'N/A';
+      let groupsStatus = 'N/A';
+
+      // A) Send to Selected Channels & Groups
+      const mainChan = adminConfig?.mainChannelUsername ? `@${adminConfig.mainChannelUsername.replace(/^@/, '')}` : null;
+      const mainGrp = adminConfig?.mainGroupUsername ? `@${adminConfig.mainGroupUsername.replace(/^@/, '')}` : null;
+
+      if (sendToChannel && mainChan) {
+        try {
+          const cRes = await sendTelegramMessage(botToken, mainChan, broadcastText, options);
+          channelStatus = cRes && cRes.ok ? 'Success' : (cRes?.description || 'Failed');
+        } catch (e: any) {
+          channelStatus = e.message || 'Error';
+        }
+      }
+
+      if (sendToGroups && mainGrp) {
+        try {
+          const gRes = await sendTelegramMessage(botToken, mainGrp, broadcastText, options);
+          groupsStatus = gRes && gRes.ok ? 'Success' : (gRes?.description || 'Failed');
+        } catch (e: any) {
+          groupsStatus = e.message || 'Error';
+        }
+      }
+
+      // Send to extra selected destinations if passed
+      if (Array.isArray(selectedDestinations) && selectedDestinations.length > 0) {
+        for (const dest of selectedDestinations) {
+          const target = dest.chatId?.trim() || (dest.username ? `@${dest.username.replace(/^@/, '')}` : null);
+          if (target) {
+            try {
+              const resObj = await sendTelegramMessage(botToken, target, broadcastText, options);
+              if (resObj && resObj.ok) {
+                if (dest.type === 'channel') channelStatus = 'Success';
+                if (dest.type === 'group') groupsStatus = 'Success';
+              }
+            } catch (err) {}
+          }
+        }
+      }
+
+      // B) Send to All Bot Users if requested
+      if (sendToUsers) {
+        const usersRef = collection(db, 'users');
+        const userSnaps = await getDocs(usersRef);
+        const registeredUsers: any[] = [];
+
+        userSnaps.forEach((docSnap) => {
+          const u = docSnap.data();
+          const tid = String(u.telegramId || '').trim();
+          if (tid && !u.banned && u.status !== 'blocked') {
+            registeredUsers.push(tid);
+          }
+        });
+
+        for (const tid of registeredUsers) {
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 35)); // rate limit ~30 msgs/sec
+            const uRes = await sendTelegramMessage(botToken, tid, broadcastText, options);
+            if (uRes && uRes.ok) {
+              usersSent++;
+            }
+          } catch (e) {}
+        }
+      }
+
+      // STEP 5: Set Firestore status. If minReadyUsers > 0, wait for ready first
+      const serverTime = Date.now();
+      const initialEventStatus = numMinReady > 0 ? 'WAITING_FOR_READY' : 'LIVE';
+      const unlockTime = initialEventStatus === 'LIVE' ? serverTime + (numCountdown * 1000) : serverTime + 999999;
+      const expiresAt = serverTime + (numDuration * 60 * 1000);
+      const eventId = `live_${serverTime}`;
+
       const eventData = {
         id: eventId,
-        code: cleanCode,
+        code: codesPool[0] || 'ROY500',
+        codesPool,
+        usedCodes: {},
         maxUses: numUses,
         claimedCount: 0,
+        failedClaimsCount: 0,
+        minReadyUsers: numMinReady,
+        readyCount: 0,
+        readyUsers: {},
+        onlineUsers: {},
         countdownSeconds: numCountdown,
-        unlocksAt,
-        expiresAt,
+        eventStatus: initialEventStatus,
         status: 'active',
-        createdAt: new Date(now).toISOString(),
+        serverTime,
+        unlockTime,
+        unlocksAt: unlockTime,
+        expiresAt,
+        createdAt: new Date(serverTime).toISOString(),
         claimedUsers: {},
+        antiCheatLogs: [],
+        requestTimestamps: [],
+        broadcastResult: {
+          usersSent,
+          channel: channelStatus,
+          groups: groupsStatus,
+        },
       };
 
       // Store active live event in Firestore
       await setDoc(doc(db, 'liveRedeemEvents', 'active'), eventData);
       await setDoc(doc(db, 'liveRedeemEventsHistory', eventId), eventData);
 
-      let broadcastSent = false;
-      let broadcastError = '';
-
-      // Send Telegram Broadcast ONLY if requested
-      if (sendBroadcast && botToken) {
-        const rawChannel = channelUsername || adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername;
-        const cleanChannel = rawChannel ? rawChannel.replace(/^@/, '') : '';
-        const targetChat = cleanChannel ? `@${cleanChannel}` : (adminConfig?.adminTelegramId || adminConfig?.adminChatId);
-
-        if (targetChat) {
-          // Requirement: Broadcast text MUST NOT contain the redeem code!
-          const broadcastText =
-            `🚨 <b>Redeem Event Started!</b>\n\n` +
-            `⏳ <b>Code unlocks in ${numCountdown} seconds.</b>\n\n` +
-            `🤖 Open Roy Wallet Bot now and get ready.`;
-
-          const botLink = `https://t.me/${botUsername.replace(/^@/, '')}?start=live_event`;
-          const options = {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '🎁 Open Roy Wallet Bot', url: botLink }],
-              ],
-            },
-          };
-
-          const tgRes = await sendTelegramMessage(botToken, targetChat, broadcastText, options);
-          if (tgRes && tgRes.ok) {
-            broadcastSent = true;
-          } else {
-            broadcastError = tgRes?.description || 'Failed to post broadcast to Telegram channel.';
-          }
-        } else {
-          broadcastError = 'No main channel or admin chat configured for broadcast.';
-        }
-      }
-
       return res.json({
         success: true,
+        broadcastComplete: true,
+        broadcastSummary: {
+          usersSent,
+          channel: channelStatus,
+          groups: groupsStatus,
+        },
         event: {
           id: eventData.id,
+          eventStatus: eventData.eventStatus,
           status: eventData.status,
+          minReadyUsers: eventData.minReadyUsers,
+          readyCount: 0,
+          unlockTime: eventData.unlockTime,
           unlocksAt: eventData.unlocksAt,
           expiresAt: eventData.expiresAt,
           maxUses: eventData.maxUses,
+          totalCodes: codesPool.length,
           claimedCount: eventData.claimedCount,
           countdownSeconds: eventData.countdownSeconds,
         },
-        broadcastSent,
-        broadcastError,
       });
     } catch (err: any) {
       console.error('Error starting live redeem event:', err);
@@ -1307,7 +1413,71 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
-  // 2. Get Active Live Event Status
+  // 1.5 Submit "I'M READY" status
+  app.post('/api/live-event/ready', async (req, res) => {
+    try {
+      const { userId, telegramId, phone, ip } = req.body;
+      const userKey = String(telegramId || userId || '').trim();
+
+      if (!userKey) {
+        return res.status(400).json({ success: false, error: 'User ID is required.' });
+      }
+
+      const activeDocRef = doc(db, 'liveRedeemEvents', 'active');
+      const activeDocSnap = await getDoc(activeDocRef);
+
+      if (!activeDocSnap.exists()) {
+        return res.status(400).json({ success: false, error: 'No active live event found.' });
+      }
+
+      const data = activeDocSnap.data() as any;
+
+      if (data.status !== 'active' || data.eventStatus === 'ENDED') {
+        return res.status(400).json({ success: false, error: 'This redeem event has ended.' });
+      }
+
+      const readyUsers = data.readyUsers || {};
+      readyUsers[userKey] = {
+        readyAt: Date.now(),
+        telegramId: telegramId || userKey,
+        phone: phone || '',
+        ip: ip || req.ip || '',
+      };
+
+      const readyCount = Object.keys(readyUsers).length;
+      let newEventStatus = data.eventStatus || 'LIVE';
+      let unlockTime = data.unlockTime || data.unlocksAt;
+
+      // If waiting for ready users and threshold reached, start countdown now!
+      if (data.eventStatus === 'WAITING_FOR_READY' && readyCount >= (data.minReadyUsers || 0)) {
+        newEventStatus = 'LIVE';
+        unlockTime = Date.now() + (data.countdownSeconds || 10) * 1000;
+      }
+
+      const updateData: any = {
+        readyUsers,
+        readyCount,
+        eventStatus: newEventStatus,
+        unlockTime,
+        unlocksAt: unlockTime,
+      };
+
+      await setDoc(activeDocRef, updateData, { merge: true });
+
+      return res.json({
+        success: true,
+        readyCount,
+        minReadyUsers: data.minReadyUsers || 0,
+        eventStatus: newEventStatus,
+        unlockTime,
+      });
+    } catch (err: any) {
+      console.error('Error submitting ready status:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 2. Get Active Live Event Status (Real-time Heartbeat & Stats)
   app.get('/api/live-event/active', async (req, res) => {
     try {
       const activeDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
@@ -1317,38 +1487,109 @@ Claim now and don't forget to share your screenshot!`;
 
       const data = activeDocSnap.data() as any;
       const now = Date.now();
-
-      if (data.status !== 'active' || now > data.expiresAt || data.claimedCount >= data.maxUses) {
-        if (data.status === 'active') {
-          await setDoc(doc(db, 'liveRedeemEvents', 'active'), { status: 'ended' }, { merge: true });
-        }
-        return res.json({
-          success: true,
-          activeEvent: null,
-          message: now > data.expiresAt ? '⌛ This redeem event has ended.' : '❌ All redeem codes have already been claimed.',
-        });
-      }
-
       const userKey = (req.query.userId || req.query.telegramId || '').toString().trim();
-      let userAlreadyClaimedCode = undefined;
-      if (userKey && data.claimedUsers && data.claimedUsers[userKey]) {
-        userAlreadyClaimedCode = data.claimedUsers[userKey].code;
+
+      // Track online user heartbeat
+      const onlineUsers = data.onlineUsers || {};
+      if (userKey) {
+        onlineUsers[userKey] = now;
       }
 
-      const isUnlocked = now >= data.unlocksAt;
+      // Cleanup users inactive for > 12s
+      let onlineCount = 0;
+      const activeOnlineUsers: Record<string, number> = {};
+      Object.keys(onlineUsers).forEach((u) => {
+        if (now - onlineUsers[u] <= 12000) {
+          activeOnlineUsers[u] = onlineUsers[u];
+          onlineCount++;
+        }
+      });
+
+      // Calculate Requests Per Second (RPS) over last 5 seconds
+      const reqStamps: number[] = (data.requestTimestamps || []).filter((ts: number) => now - ts <= 5000);
+      const requestsPerSecond = Number((reqStamps.length / 5).toFixed(1));
+
+      const codesPool: string[] = data.codesPool || (data.code ? [data.code] : []);
+      const totalCodesCount = codesPool.length || data.maxUses || 100;
+      const claimedCount = data.claimedCount || 0;
+      const remainingCodesCount = Math.max(0, totalCodesCount - claimedCount);
+
+      const isEnded =
+        data.status !== 'active' ||
+        data.eventStatus === 'ENDED' ||
+        now > data.expiresAt ||
+        remainingCodesCount <= 0;
+
+      if (isEnded && data.status === 'active') {
+        await setDoc(doc(db, 'liveRedeemEvents', 'active'), { status: 'ended', eventStatus: 'ENDED' }, { merge: true });
+      }
+
+      let userAlreadyClaimedCode = undefined;
+      const claimedUsers = data.claimedUsers || {};
+      if (userKey && claimedUsers[userKey]) {
+        userAlreadyClaimedCode = claimedUsers[userKey].code || data.code;
+      }
+
+      const readyUsers = data.readyUsers || {};
+      const readyCount = Object.keys(readyUsers).length;
+      const minReadyUsers = data.minReadyUsers || 0;
+      const isUserReady = Boolean(userKey && readyUsers[userKey]);
+
+      let eventStatus = data.eventStatus || 'LIVE';
+      let unlockTime = data.unlockTime || data.unlocksAt || now;
+
+      // Auto-unlock if WAITING_FOR_READY threshold met
+      if (eventStatus === 'WAITING_FOR_READY' && readyCount >= minReadyUsers) {
+        eventStatus = 'LIVE';
+        unlockTime = now + (data.countdownSeconds || 10) * 1000;
+        await setDoc(doc(db, 'liveRedeemEvents', 'active'), { eventStatus: 'LIVE', unlockTime, unlocksAt: unlockTime }, { merge: true });
+      }
+
+      const isUnlocked = eventStatus === 'LIVE' && now >= unlockTime;
+
+      // Compute total participants across online, ready, and claimed
+      const allParticipants = new Set([
+        ...Object.keys(onlineUsers),
+        ...Object.keys(readyUsers),
+        ...Object.keys(claimedUsers),
+      ]);
+
+      const summaryStats = {
+        totalParticipants: allParticipants.size,
+        successfulClaims: claimedCount,
+        remainingCodes: remainingCodesCount,
+      };
+
+      if (userKey) {
+        setDoc(doc(db, 'liveRedeemEvents', 'active'), { onlineUsers: activeOnlineUsers }, { merge: true }).catch(() => {});
+      }
 
       return res.json({
         success: true,
         activeEvent: {
           id: data.id,
-          status: data.status,
-          unlocksAt: data.unlocksAt,
+          eventStatus: isEnded ? 'ENDED' : eventStatus,
+          status: isEnded ? 'ended' : 'active',
+          unlockTime,
+          unlocksAt: unlockTime,
           expiresAt: data.expiresAt,
-          maxUses: data.maxUses,
-          claimedCount: data.claimedCount,
+          maxUses: totalCodesCount,
+          claimedCount,
+          failedClaimsCount: data.failedClaimsCount || 0,
+          remainingCodesCount,
+          totalCodesCount,
           countdownSeconds: data.countdownSeconds,
+          minReadyUsers,
+          readyCount,
+          isUserReady,
+          onlineUsersCount: onlineCount,
+          requestsPerSecond,
+          serverTime: now,
           isUnlocked,
           userAlreadyClaimedCode,
+          broadcastResult: data.broadcastResult || null,
+          antiCheatLogs: (data.antiCheatLogs || []).slice(-20),
+          summaryStats,
         },
       });
     } catch (err: any) {
@@ -1357,11 +1598,14 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
-  // 3. Claim Live Redeem Event Code
+  // 3. Claim Live Redeem Event Code (With Anti-Cheat & Multi-Code Engine)
   app.post('/api/live-event/claim', async (req, res) => {
     try {
-      const { userId, telegramId } = req.body;
-      const userKey = String(telegramId || userId || 'anon_user').trim();
+      const { userId, telegramId, phone, deviceId, ip } = req.body;
+      const userKey = String(telegramId || userId || '').trim();
+      const clientIp = String(ip || req.ip || req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+      const userPhone = String(phone || '').trim();
+      const userDevice = String(deviceId || '').trim();
 
       if (!userKey) {
         return res.status(400).json({ success: false, error: 'User identifier is required to claim code.' });
@@ -1377,47 +1621,119 @@ Claim now and don't forget to share your screenshot!`;
       const data = activeDocSnap.data() as any;
       const now = Date.now();
 
-      if (data.status !== 'active' || now > data.expiresAt) {
+      const requestTimestamps: number[] = [...(data.requestTimestamps || []), now].slice(-100);
+      const unlockTime = data.unlockTime || data.unlocksAt || now;
+
+      if (data.status !== 'active' || data.eventStatus === 'ENDED' || now > data.expiresAt) {
         if (data.status === 'active') {
-          await setDoc(activeDocRef, { status: 'ended' }, { merge: true });
+          await setDoc(activeDocRef, { status: 'ended', eventStatus: 'ENDED' }, { merge: true });
         }
         return res.status(400).json({ success: false, error: '⌛ This redeem event has ended.' });
       }
 
-      // Security: Countdown Check on Server
-      if (now < data.unlocksAt) {
+      if (data.eventStatus === 'WAITING_FOR_READY') {
+        return res.status(400).json({ success: false, error: '⏳ Event is waiting for minimum ready users!' });
+      }
+
+      if (now < unlockTime) {
         return res.status(400).json({ success: false, error: '⏳ Code countdown has not finished yet!' });
       }
 
-      // Stock Check
-      if (data.claimedCount >= data.maxUses) {
-        await setDoc(activeDocRef, { status: 'ended' }, { merge: true });
-        return res.status(400).json({ success: false, error: '❌ All redeem codes have already been claimed.' });
+      const codesPool: string[] = data.codesPool || (data.code ? [data.code] : []);
+      const claimedCount = data.claimedCount || 0;
+
+      if (claimedCount >= codesPool.length) {
+        await setDoc(activeDocRef, { status: 'ended', eventStatus: 'ENDED' }, { merge: true });
+        return res.status(400).json({ success: false, error: '❌ Already Claimed. All codes are out of stock.' });
       }
 
-      // User Duplicate Claim Check
       const claimedUsers = data.claimedUsers || {};
+      const antiCheatLogs: any[] = data.antiCheatLogs || [];
+
       if (claimedUsers[userKey]) {
         return res.json({
           success: true,
-          code: claimedUsers[userKey].code || data.code,
+          code: claimedUsers[userKey].code,
           alreadyClaimed: true,
-          message: 'You have already claimed this redeem code!',
+          message: 'You have already claimed your redeem code!',
         });
       }
 
-      // Update Count and User Record
-      const updatedCount = (data.claimedCount || 0) + 1;
+      // Anti-Cheat Engine
+      let antiCheatReason = '';
+
+      if (userPhone) {
+        const phoneMatch = Object.values(claimedUsers).find((u: any) => u.phone && u.phone === userPhone);
+        if (phoneMatch) {
+          antiCheatReason = `Duplicate Mobile Number (${userPhone})`;
+        }
+      }
+
+      if (!antiCheatReason && clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1') {
+        const sameIpCount = Object.values(claimedUsers).filter((u: any) => u.ip === clientIp).length;
+        if (sameIpCount >= 2) {
+          antiCheatReason = `Multiple Claims from IP (${clientIp})`;
+        }
+      }
+
+      if (!antiCheatReason && userDevice) {
+        const deviceMatch = Object.values(claimedUsers).find((u: any) => u.deviceId && u.deviceId === userDevice);
+        if (deviceMatch) {
+          antiCheatReason = 'Duplicate Device Fingerprint';
+        }
+      }
+
+      if (antiCheatReason) {
+        const logEntry = {
+          id: `ac_${now}_${Math.random().toString(36).substring(2, 6)}`,
+          timestamp: new Date(now).toISOString(),
+          userId: userKey,
+          telegramId: userKey,
+          ip: clientIp,
+          phone: userPhone || 'N/A',
+          reason: antiCheatReason,
+        };
+
+        const updatedFailed = (data.failedClaimsCount || 0) + 1;
+        antiCheatLogs.push(logEntry);
+
+        await setDoc(activeDocRef, {
+          failedClaimsCount: updatedFailed,
+          antiCheatLogs: antiCheatLogs.slice(-50),
+          requestTimestamps,
+        }, { merge: true });
+
+        return res.status(400).json({
+          success: false,
+          error: `❌ Blocked by Anti-Cheat: ${antiCheatReason}`,
+        });
+      }
+
+      const assignedCode = codesPool[claimedCount] || data.code || 'ROY500';
+      const updatedCount = claimedCount + 1;
+
       claimedUsers[userKey] = {
         claimedAt: now,
-        code: data.code,
+        code: assignedCode,
+        ip: clientIp,
+        phone: userPhone,
+        deviceId: userDevice,
       };
 
-      const isNowFull = updatedCount >= data.maxUses;
+      const usedCodes = data.usedCodes || {};
+      usedCodes[assignedCode] = {
+        userId: userKey,
+        claimedAt: now,
+      };
+
+      const isNowFull = updatedCount >= codesPool.length;
       const updateData: any = {
         claimedCount: updatedCount,
         claimedUsers,
+        usedCodes,
+        requestTimestamps,
         status: isNowFull ? 'ended' : 'active',
+        eventStatus: isNowFull ? 'ENDED' : 'LIVE',
       };
 
       await setDoc(activeDocRef, updateData, { merge: true });
