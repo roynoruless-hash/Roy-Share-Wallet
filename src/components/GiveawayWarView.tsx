@@ -85,6 +85,7 @@ import {
   resetWarUserContributions,
   resetEntireWar,
   resetUserWarTeam,
+  deleteGiveawayWar,
   awardDailyMvp,
   exportWarDataCSV,
   getTeamAchievementBadge,
@@ -214,6 +215,8 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
 
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [showEndConfirmModal, setShowEndConfirmModal] = useState<boolean>(false);
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [showResetConfirmModal, setShowResetConfirmModal] = useState<'scores' | 'contrib' | 'entire' | null>(null);
 
   // Load Wars & Registered Users on Mount
@@ -700,6 +703,36 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
       }
     } catch (err: any) {
       showToast('Error ending war: ' + err.message, 'error');
+    }
+  };
+
+  // Delete War Execution
+  const handleConfirmDeleteWar = async () => {
+    if (!selectedWarId) return;
+    if (activeWar?.status === 'live') {
+      showToast('⚠️ Giveaway War is currently LIVE. Please End War before deleting.', 'error');
+      setShowDeleteConfirmModal(false);
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      const res = await deleteGiveawayWar(selectedWarId);
+      if (res.success) {
+        showToast('✅ Giveaway War deleted successfully.', 'success');
+        setShowDeleteConfirmModal(false);
+        setSelectedWarId('');
+        setActiveWar(null);
+        setMembers([]);
+        setLogs([]);
+        setActiveTab('arena');
+        await loadAllWars();
+      } else {
+        showToast(res.message, 'error');
+      }
+    } catch (err: any) {
+      showToast('Delete error: ' + err.message, 'error');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -2486,6 +2519,20 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                       <span>🛑 End War & Pay Rewards</span>
                     </button>
                   )}
+
+                  <button
+                    onClick={() => {
+                      if (activeWar.status === 'live') {
+                        showToast('⚠️ Giveaway War is currently LIVE. Please End War before deleting.', 'error');
+                        return;
+                      }
+                      setShowDeleteConfirmModal(true);
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center gap-2 shadow-md shadow-rose-600/20"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>🗑 Delete War</span>
+                  </button>
                 </div>
               </div>
 
@@ -2493,10 +2540,10 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
               <div className="space-y-4">
                 <h4 className="text-xs font-black uppercase tracking-widest text-rose-400 flex items-center gap-1.5">
                   <RotateCcw className="w-4 h-4" />
-                  <span>Admin Reset Tools</span>
+                  <span>Admin Reset & Delete Tools</span>
                 </h4>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="p-4 rounded-2xl bg-slate-800/60 border border-slate-700/60 space-y-2">
                     <h5 className="text-xs font-bold text-white">Reset Team Scores</h5>
                     <p className="text-[11px] text-slate-400">Resets scores of all teams back to 0.</p>
@@ -2524,9 +2571,29 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                     <p className="text-[11px] text-slate-400">Deletes members & clears war completely.</p>
                     <button
                       onClick={() => setShowResetConfirmModal('entire')}
-                      className="w-full py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 text-xs font-bold transition border border-rose-500/30"
+                      className="w-full py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 text-xs font-bold transition border border-amber-500/30"
                     >
                       Reset Entire War
+                    </button>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-500/30 space-y-2">
+                    <h5 className="text-xs font-bold text-rose-200 flex items-center gap-1.5">
+                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Delete Giveaway War</span>
+                    </h5>
+                    <p className="text-[11px] text-rose-300/70">Permanently wipes this war and all member data.</p>
+                    <button
+                      onClick={() => {
+                        if (activeWar.status === 'live') {
+                          showToast('⚠️ Giveaway War is currently LIVE. Please End War before deleting.', 'error');
+                          return;
+                        }
+                        setShowDeleteConfirmModal(true);
+                      }}
+                      className="w-full py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black transition shadow-md shadow-rose-600/20"
+                    >
+                      🗑 Delete War
                     </button>
                   </div>
                 </div>
@@ -2980,6 +3047,39 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
       )}
 
       {/* CONFIRMATION MODALS */}
+      {showDeleteConfirmModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="p-6 rounded-3xl bg-slate-900 border border-rose-500/30 max-w-md w-full space-y-4 text-center shadow-2xl">
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500 mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="text-xl font-black text-white">🗑 Delete Giveaway War?</h3>
+            <p className="text-xs text-rose-200/90 leading-relaxed bg-rose-500/10 p-3.5 rounded-xl border border-rose-500/20 font-medium">
+              Are you sure you want to permanently delete this Giveaway War? This action cannot be undone.
+            </p>
+            <p className="text-[11px] text-slate-400">
+              This will permanently delete the war document, teams, members, leaders, team links, referral chains, scores, missions, milestones, lucky spin data, claim rewards, timeline, analytics, and anti-abuse logs. User wallet balances will not be affected.
+            </p>
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setShowDeleteConfirmModal(false)}
+                disabled={isDeleting}
+                className="w-1/2 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDeleteWar}
+                disabled={isDeleting}
+                className="w-1/2 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/30 transition"
+              >
+                {isDeleting ? 'Deleting...' : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showEndConfirmModal && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 max-w-md w-full space-y-4 text-center">

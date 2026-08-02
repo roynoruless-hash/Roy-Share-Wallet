@@ -1390,6 +1390,59 @@ export async function resetEntireWar(warId: string): Promise<{ success: boolean;
 }
 
 /**
+ * PERMANENT DELETE: Delete Giveaway War and all associated data
+ */
+export async function deleteGiveawayWar(warId: string): Promise<{ success: boolean; message: string }> {
+  try {
+    const warRef = doc(db, WARS_COLLECTION, warId);
+    const warSnap = await getDoc(warRef);
+
+    if (!warSnap.exists()) {
+      return { success: false, message: 'Giveaway War not found' };
+    }
+
+    const war = warSnap.data() as GiveawayWar;
+    if (war.status === 'live') {
+      return { success: false, message: '⚠️ Giveaway War is currently LIVE. Please End War before deleting.' };
+    }
+
+    // 1. Delete all war members for this war
+    const membersQ = query(collection(db, MEMBERS_COLLECTION), where('warId', '==', warId));
+    const membersSnap = await getDocs(membersQ);
+    const deleteMemberPromises = membersSnap.docs.map((d) => deleteDoc(doc(db, MEMBERS_COLLECTION, d.id)));
+    await Promise.all(deleteMemberPromises);
+
+    // 2. Delete all activity logs for this war
+    const logsQ = query(collection(db, LOGS_COLLECTION), where('warId', '==', warId));
+    const logsSnap = await getDocs(logsQ);
+    const deleteLogPromises = logsSnap.docs.map((d) => deleteDoc(doc(db, LOGS_COLLECTION, d.id)));
+    await Promise.all(deleteLogPromises);
+
+    // 3. Delete war document from giveawayWars collection
+    await deleteDoc(warRef);
+
+    // 4. Record Admin Audit Log
+    try {
+      const adminLogId = 'log_del_war_' + Date.now();
+      await setDoc(doc(db, 'adminLogs', adminLogId), {
+        id: adminLogId,
+        action: 'DELETE_GIVEAWAY_WAR',
+        warId: warId,
+        title: war.title || 'Giveaway War',
+        timestamp: new Date().toISOString()
+      });
+    } catch (e) {
+      console.warn('Failed to log admin delete action:', e);
+    }
+
+    return { success: true, message: '✅ Giveaway War deleted successfully.' };
+  } catch (err: any) {
+    console.error('Error deleting Giveaway War:', err);
+    return { success: false, message: err.message || 'Failed to delete Giveaway War' };
+  }
+}
+
+/**
  * ADMIN RESET: Reset Single User Team Lock
  */
 export async function resetUserWarTeam(warId: string, telegramId: string): Promise<{ success: boolean; message: string }> {
