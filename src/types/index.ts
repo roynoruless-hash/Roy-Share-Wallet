@@ -130,6 +130,49 @@ export interface AIBroadcastConfig {
   updatedBy?: string;
 }
 
+export interface TelegramApiLogEntry {
+  id: string;
+  category: 'Bot Users' | 'Main Channel' | 'Main Group' | 'Additional Channels' | string;
+  destinationName: string;
+  chatId: string;
+  method: string;
+  httpStatus: number;
+  telegramResponse: {
+    ok: boolean;
+    error_code?: number;
+    description?: string;
+    result?: any;
+  };
+  timestamp: string;
+  error?: string;
+}
+
+export interface BroadcastCategoryReport {
+  selected: boolean;
+  target?: string;
+  total?: number;
+  sent: number;
+  failed: number;
+  blocked?: number;
+  error?: string;
+  httpStatus?: number;
+  telegramResponse?: any;
+  channelsList?: Array<{
+    name: string;
+    chatId: string;
+    sent: boolean;
+    error?: string;
+    httpStatus?: number;
+  }>;
+}
+
+export interface BroadcastCategoryReports {
+  botUsers: BroadcastCategoryReport;
+  mainChannel: BroadcastCategoryReport;
+  mainGroup: BroadcastCategoryReport;
+  additionalChannels: BroadcastCategoryReport;
+}
+
 export interface AIBroadcastItem {
   id: string;
   type: 'active_alert' | 'redeem_code';
@@ -139,7 +182,7 @@ export interface AIBroadcastItem {
   targetChat?: string;
   targetAudience?: string;
   telegramMessageId?: string | number | null;
-  status: 'Success' | 'Failed' | 'Scheduled' | 'Completed';
+  status: 'Success' | 'Partial Success' | 'Failed' | 'Scheduled' | 'Completed';
   errorMessage?: string;
   timestamp: string;
   isScheduled?: boolean;
@@ -150,6 +193,8 @@ export interface AIBroadcastItem {
   blocked?: number;
   timeTaken?: string;
   failedUsers?: Array<{ id: string; telegramId: string; name: string; error?: string }>;
+  categoryReports?: BroadcastCategoryReports;
+  apiLogs?: TelegramApiLogEntry[];
   inlineButtons?: { text: string; url: string; enabled: boolean }[];
   redeemSettings?: {
     expiryTime?: string;

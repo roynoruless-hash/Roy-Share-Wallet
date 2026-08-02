@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AdminConfig, AIBroadcastItem, TelegramChannelItem } from '../types';
+import { AdminConfig, AIBroadcastItem, TelegramChannelItem, TelegramApiLogEntry, BroadcastCategoryReports } from '../types';
 import { getTelegramChannels } from '../services/channelService';
 import { TelegramDestinationManager } from './TelegramDestinationManager';
 import {
@@ -19,6 +19,13 @@ import {
   Eye,
   EyeOff,
   ShieldAlert,
+  Terminal,
+  FileText,
+  Search,
+  X,
+  ChevronDown,
+  ChevronUp,
+  Filter,
 } from 'lucide-react';
 
 interface AIBroadcastViewProps {
@@ -82,9 +89,29 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     blocked: number;
     timeTaken: string;
     failedUsers: Array<{ id: string; telegramId: string; name: string; error?: string }>;
+    categoryReports?: BroadcastCategoryReports;
+    apiLogs?: TelegramApiLogEntry[];
+    overallStatus?: 'Success' | 'Partial Success' | 'Failed';
     completed: boolean;
     broadcastRecordId?: string;
   } | null>(null);
+
+  // Telegram API Log Modal State
+  const [logModalOpen, setLogModalOpen] = useState(false);
+  const [activeLogTitle, setActiveLogTitle] = useState('Telegram API Log');
+  const [activeLogs, setActiveLogs] = useState<TelegramApiLogEntry[]>([]);
+  const [logFilter, setLogFilter] = useState<'all' | 'errors' | 'bot' | 'channels'>('all');
+  const [logSearchQuery, setLogSearchQuery] = useState('');
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+
+  const openApiLogModal = (logs: TelegramApiLogEntry[] = [], title: string = 'Telegram API Log') => {
+    setActiveLogs(logs || []);
+    setActiveLogTitle(title);
+    setLogFilter('all');
+    setLogSearchQuery('');
+    setExpandedLogId(null);
+    setLogModalOpen(true);
+  };
 
   const [lastDeliveryReport, setLastDeliveryReport] = useState<{
     totalSent: number;
@@ -434,286 +461,84 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     setLastDeliveryReport(null);
 
     try {
-      // 1. Fetch registered users from Firestore
-      let registeredUsers: Array<{
-        id: string;
-        telegramId: string;
-        name: string;
-        banned: boolean;
-      }> = [];
-
-      if (sendToBot) {
-        try {
-          const userRes = await fetch('/api/ai-broadcast/users');
-          const userData = await userRes.json();
-          if (userData.success && Array.isArray(userData.users)) {
-            registeredUsers = userData.users;
-          }
-        } catch (uErr) {
-          console.error('Failed to load registered users:', uErr);
-        }
-      }
-
-      // Filter active and blocked users
-      const activeUsers = registeredUsers.filter(
-        (u) => u.telegramId && String(u.telegramId).trim() && !u.banned
-      );
-      const initialBlockedUsers = registeredUsers.filter(
-        (u) => !u.telegramId || !String(u.telegramId).trim() || u.banned
-      );
-
-      // Collect channel/group destinations
-      const channelDestinations: Array<{
-        id: string;
-        displayName: string;
-        chatId: string;
-      }> = [];
-
-      if (sendToMainChannel && config.mainChannelUsername) {
-        const mainChan = config.mainChannelUsername.replace(/^@/, '');
-        channelDestinations.push({
-          id: 'main_channel_dest',
-          displayName: 'Main Channel',
-          chatId: `@${mainChan}`,
-        });
-      }
-
-      if (sendToMainGroup && config.mainGroupUsername) {
-        const mainGrp = config.mainGroupUsername.replace(/^@/, '');
-        channelDestinations.push({
-          id: 'main_group_dest',
-          displayName: 'Main Group',
-          chatId: `@${mainGrp}`,
-        });
-      }
-
-      if (sendToAdditionalChannels && destinations.length > 0) {
-        destinations.forEach((dest) => {
-          if (selectedAdditionalChannelIds.includes(dest.id)) {
-            const cleanUser = dest.username ? dest.username.replace(/^@/, '') : '';
-            const isMainChan = config.mainChannelUsername && cleanUser === config.mainChannelUsername.replace(/^@/, '');
-            const isMainGrp = config.mainGroupUsername && cleanUser === config.mainGroupUsername.replace(/^@/, '');
-
-            if (!isMainChan && !isMainGrp) {
-              const targetChat = dest.chatId || (dest.username ? `@${dest.username.replace(/^@/, '')}` : '');
-              if (targetChat) {
-                channelDestinations.push({
-                  id: dest.id,
-                  displayName: dest.displayName,
-                  chatId: targetChat,
-                });
-              }
-            }
-          }
-        });
-      }
-
-      // Build overall target queue
-      const totalTargets = activeUsers.length + channelDestinations.length + initialBlockedUsers.length;
-
-      if (totalTargets === 0) {
-        showToast('No registered active users or destinations found to broadcast.', 'error');
-        setIsSending(false);
-        return;
-      }
-
       const broadcastRecordId = `bc_${Date.now()}`;
       const startTime = Date.now();
 
-      // Initialize live progress state
-      let currentIdx = 0;
-      let sentCount = 0;
-      let failedCount = 0;
-      let blockedCount = initialBlockedUsers.length;
-      const failedUsersList: Array<{ id: string; telegramId: string; name: string; error?: string }> = [];
+      // Collect channel destinations from selection
+      const selectedChannelDests = destinations.filter(d => selectedAdditionalChannelIds.includes(d.id));
 
-      setBroadcastProgress({
-        isBroadcasting: true,
-        isRetrying: false,
-        current: blockedCount,
-        total: totalTargets,
-        statusText: `Sending ${blockedCount}/${totalTargets}`,
-        sent: 0,
-        failed: 0,
-        blocked: blockedCount,
-        timeTaken: '0.0s',
-        failedUsers: [],
-        completed: false,
-        broadcastRecordId,
-      });
-
-      // A) Loop through Active Registered Users
-      for (let i = 0; i < activeUsers.length; i++) {
-        const user = activeUsers[i];
-        currentIdx = i + 1 + initialBlockedUsers.length;
-
-        setBroadcastProgress((prev) =>
-          prev
-            ? {
-                ...prev,
-                current: currentIdx,
-                statusText: `Sending ${currentIdx}/${totalTargets}`,
-              }
-            : null
-        );
-
-        try {
-          // Rate limit delay (~35ms per request = 28-30 msgs/sec)
-          await new Promise((resolve) => setTimeout(resolve, 35));
-
-          const res = await fetch('/api/ai-broadcast/send-single', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chatId: user.telegramId,
-              message: editableMessage.trim(),
-            }),
-          });
-          const data = await res.json();
-
-          if (data.success) {
-            sentCount++;
-          } else if (data.isBlocked) {
-            blockedCount++;
-          } else {
-            failedCount++;
-            failedUsersList.push({
-              id: user.id,
-              telegramId: user.telegramId,
-              name: user.name || 'User',
-              error: data.error || 'Send failed',
-            });
-          }
-        } catch (err: any) {
-          failedCount++;
-          failedUsersList.push({
-            id: user.id,
-            telegramId: user.telegramId,
-            name: user.name || 'User',
-            error: err.message || 'Error sending message',
-          });
-        }
-
-        const elapsedSeconds = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
-        setBroadcastProgress((prev) =>
-          prev
-            ? {
-                ...prev,
-                sent: sentCount,
-                failed: failedCount,
-                blocked: blockedCount,
-                failedUsers: [...failedUsersList],
-                timeTaken: elapsedSeconds,
-              }
-            : null
-        );
-      }
-
-      // B) Loop through Channel / Group Destinations
-      for (let j = 0; j < channelDestinations.length; j++) {
-        const dest = channelDestinations[j];
-        currentIdx = activeUsers.length + initialBlockedUsers.length + j + 1;
-
-        setBroadcastProgress((prev) =>
-          prev
-            ? {
-                ...prev,
-                current: currentIdx,
-                statusText: `Sending ${currentIdx}/${totalTargets}`,
-              }
-            : null
-        );
-
-        try {
-          await new Promise((resolve) => setTimeout(resolve, 35));
-
-          const res = await fetch('/api/ai-broadcast/send-single', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chatId: dest.chatId,
-              message: editableMessage.trim(),
-            }),
-          });
-          const data = await res.json();
-
-          if (data.success) {
-            sentCount++;
-          } else {
-            failedCount++;
-            failedUsersList.push({
-              id: dest.id,
-              telegramId: dest.chatId,
-              name: dest.displayName,
-              error: data.error || 'Channel send failed',
-            });
-          }
-        } catch (err: any) {
-          failedCount++;
-          failedUsersList.push({
-            id: dest.id,
-            telegramId: dest.chatId,
-            name: dest.displayName,
-            error: err.message || 'Channel send error',
-          });
-        }
-
-        const elapsedSeconds = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
-        setBroadcastProgress((prev) =>
-          prev
-            ? {
-                ...prev,
-                sent: sentCount,
-                failed: failedCount,
-                blocked: blockedCount,
-                failedUsers: [...failedUsersList],
-                timeTaken: elapsedSeconds,
-              }
-            : null
-        );
-      }
-
-      const finalTimeTaken = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
-
-      // Complete progress update
-      setBroadcastProgress({
-        isBroadcasting: false,
-        isRetrying: false,
-        current: totalTargets,
-        total: totalTargets,
-        statusText: 'Completed',
-        sent: sentCount,
-        failed: failedCount,
-        blocked: blockedCount,
-        timeTaken: finalTimeTaken,
-        failedUsers: failedUsersList,
-        completed: true,
-        broadcastRecordId,
-      });
-
-      // Save History to Firestore
-      await fetch('/api/ai-broadcast/save-history', {
+      // Call server backend broadcast route with full category flags
+      const res = await fetch('/api/ai-broadcast/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          id: broadcastRecordId,
           type: broadcastType,
           redeemCode: broadcastType === 'redeem_code' ? redeemCodeInput.trim().toUpperCase() : 'N/A',
           message: editableMessage.trim(),
           sentByAdmin: 'Admin',
-          targetAudience: 'All Registered Users',
-          status: 'Completed',
-          totalUsers: totalTargets,
+          targetAudience: 'Selected Destinations',
+          destinationCategoryFlags: {
+            sendToBot,
+            sendToMainChannel,
+            sendToMainGroup,
+            sendToAdditionalChannels: selectedAdditionalChannelIds.length > 0,
+          },
+          selectedDestinations: selectedChannelDests.map(d => ({
+            id: d.id,
+            displayName: d.displayName,
+            chatId: d.chatId || (d.username ? `@${d.username.replace(/^@/, '')}` : ''),
+            type: d.type,
+          })),
+        }),
+      });
+
+      const data = await res.json();
+      const finalTimeTaken = `${((Date.now() - startTime) / 1000).toFixed(1)}s`;
+
+      if (data) {
+        const catReports: BroadcastCategoryReports = data.categoryReports || {
+          botUsers: { selected: sendToBot, sent: 0, failed: 0, blocked: 0, total: 0 },
+          mainChannel: { selected: sendToMainChannel, target: config.mainChannelUsername || 'N/A', sent: 0, failed: 0 },
+          mainGroup: { selected: sendToMainGroup, target: config.mainGroupUsername || 'N/A', sent: 0, failed: 0 },
+          additionalChannels: { selected: selectedAdditionalChannelIds.length > 0, total: selectedChannelDests.length, sent: 0, failed: 0, channelsList: [] },
+        };
+
+        const logs: TelegramApiLogEntry[] = data.apiLogs || [];
+        const totalTargets = data.report?.totalUsers ?? 0;
+        const sentCount = data.report?.sent ?? 0;
+        const failedCount = data.report?.failed ?? 0;
+        const blockedCount = data.report?.blocked ?? 0;
+        const statusVal: 'Success' | 'Partial Success' | 'Failed' = data.status || (failedCount === 0 && sentCount > 0 ? 'Success' : sentCount > 0 ? 'Partial Success' : 'Failed');
+
+        setBroadcastProgress({
+          isBroadcasting: false,
+          isRetrying: false,
+          current: totalTargets,
+          total: totalTargets,
+          statusText: statusVal === 'Success' ? 'Success' : statusVal === 'Partial Success' ? 'Partial Success' : 'Failed',
           sent: sentCount,
           failed: failedCount,
           blocked: blockedCount,
           timeTaken: finalTimeTaken,
-          failedUsers: failedUsersList,
-          timestamp: new Date().toISOString(),
-        }),
-      });
+          failedUsers: data.failedUsers || [],
+          categoryReports: catReports,
+          apiLogs: logs,
+          overallStatus: statusVal,
+          completed: true,
+          broadcastRecordId,
+        });
 
-      showToast('🚀 Broadcast Completed Successfully!', 'success');
+        if (statusVal === 'Success') {
+          showToast('🟢 Broadcast Completed Successfully - All Telegram API calls succeeded!', 'success');
+        } else if (statusVal === 'Partial Success') {
+          showToast('⚠️ Broadcast Completed with Partial Success - Some Telegram API calls failed', 'error');
+        } else {
+          showToast('❌ Broadcast Failed - Telegram API returned errors', 'error');
+        }
+      } else {
+        showToast('Failed to receive broadcast response', 'error');
+      }
+
       fetchHistory();
     } catch (err: any) {
       showToast(err.message || 'Network error sending broadcast', 'error');
@@ -1677,25 +1502,161 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
               </div>
             </div>
 
+            {/* Categorized Destinations Breakdown */}
+            {broadcastProgress.categoryReports && (
+              <div className="space-y-2 pt-2 border-t border-slate-800">
+                <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                  <span>Destination Breakdown</span>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                    broadcastProgress.overallStatus === 'Success'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : broadcastProgress.overallStatus === 'Partial Success'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  }`}>
+                    {broadcastProgress.overallStatus === 'Success' && '✔ SUCCESS (100% Succeeded)'}
+                    {broadcastProgress.overallStatus === 'Partial Success' && '⚠️ PARTIAL SUCCESS (Some Failed)'}
+                    {broadcastProgress.overallStatus === 'Failed' && '❌ FAILED (All Selected Failed)'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  {/* Bot Users */}
+                  {broadcastProgress.categoryReports.botUsers?.selected && (
+                    <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                      <div className="flex items-center justify-between font-bold text-slate-200">
+                        <span className="flex items-center gap-1.5"><Bot className="w-3.5 h-3.5 text-sky-400" /> Bot Users</span>
+                        <span className="font-mono text-[11px] text-emerald-400">
+                          {broadcastProgress.categoryReports.botUsers.sent} Sent
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-[11px] font-mono text-slate-400">
+                        <span>Total: {broadcastProgress.categoryReports.botUsers.total}</span>
+                        <span className="text-emerald-400">Sent: {broadcastProgress.categoryReports.botUsers.sent}</span>
+                        <span className="text-rose-400">Failed: {broadcastProgress.categoryReports.botUsers.failed}</span>
+                        <span className="text-amber-400">Blocked: {broadcastProgress.categoryReports.botUsers.blocked}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Main Channel */}
+                  {broadcastProgress.categoryReports.mainChannel?.selected && (
+                    <div className={`p-2.5 rounded-lg border space-y-1 ${
+                      broadcastProgress.categoryReports.mainChannel.sent > 0
+                        ? 'bg-emerald-950/20 border-emerald-800/40'
+                        : 'bg-rose-950/20 border-rose-800/40'
+                    }`}>
+                      <div className="flex items-center justify-between font-bold">
+                        <span className="text-slate-200">Main Channel</span>
+                        <span className={`font-mono text-[11px] ${
+                          broadcastProgress.categoryReports.mainChannel.sent > 0 ? 'text-emerald-400' : 'text-rose-400'
+                        }`}>
+                          {broadcastProgress.categoryReports.mainChannel.sent > 0 ? '✔ Sent' : '❌ Failed'}
+                        </span>
+                      </div>
+                      <div className="text-[11px] font-mono text-slate-400 truncate">
+                        Target: {broadcastProgress.categoryReports.mainChannel.target}
+                      </div>
+                      {broadcastProgress.categoryReports.mainChannel.error && (
+                        <div className="text-[10px] text-rose-300 font-mono bg-rose-950/40 p-1 rounded border border-rose-800/50">
+                          Error: {broadcastProgress.categoryReports.mainChannel.error}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Main Group */}
+                  {broadcastProgress.categoryReports.mainGroup?.selected && (
+                    <div className={`p-2.5 rounded-lg border space-y-1 ${
+                      broadcastProgress.categoryReports.mainGroup.sent > 0
+                        ? 'bg-emerald-950/20 border-emerald-800/40'
+                        : 'bg-rose-950/20 border-rose-800/40'
+                    }`}>
+                      <div className="flex items-center justify-between font-bold">
+                        <span className="text-slate-200">Main Group</span>
+                        <span className={`font-mono text-[11px] ${
+                          broadcastProgress.categoryReports.mainGroup.sent > 0 ? 'text-emerald-400' : 'text-rose-400'
+                        }`}>
+                          {broadcastProgress.categoryReports.mainGroup.sent > 0 ? '✔ Sent' : '❌ Failed'}
+                        </span>
+                      </div>
+                      <div className="text-[11px] font-mono text-slate-400 truncate">
+                        Target: {broadcastProgress.categoryReports.mainGroup.target}
+                      </div>
+                      {broadcastProgress.categoryReports.mainGroup.error && (
+                        <div className="text-[10px] text-rose-300 font-mono bg-rose-950/40 p-1 rounded border border-rose-800/50">
+                          Error: {broadcastProgress.categoryReports.mainGroup.error}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Additional Channels */}
+                  {broadcastProgress.categoryReports.additionalChannels?.selected && (
+                    <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                      <div className="flex items-center justify-between font-bold text-slate-200">
+                        <span>Additional Channels</span>
+                        <span className="font-mono text-[11px]">
+                          <span className="text-emerald-400">{broadcastProgress.categoryReports.additionalChannels.sent} Sent</span> / <span className="text-rose-400">{broadcastProgress.categoryReports.additionalChannels.failed} Failed</span>
+                        </span>
+                      </div>
+                      <div className="text-[11px] font-mono text-slate-400">
+                        Total Channels: {broadcastProgress.categoryReports.additionalChannels.total}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Final Status Indicator & Action */}
             {broadcastProgress.completed && (
               <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-2 border-t border-slate-800">
-                <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>Completed Successfully.</span>
+                <span className={`text-xs font-bold flex items-center gap-1.5 ${
+                  broadcastProgress.overallStatus === 'Success'
+                    ? 'text-emerald-400'
+                    : broadcastProgress.overallStatus === 'Partial Success'
+                    ? 'text-amber-400'
+                    : 'text-rose-400'
+                }`}>
+                  {broadcastProgress.overallStatus === 'Success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  ) : broadcastProgress.overallStatus === 'Partial Success' ? (
+                    <AlertCircle className="w-4 h-4 text-amber-400" />
+                  ) : (
+                    <XCircle className="w-4 h-4 text-rose-400" />
+                  )}
+                  <span>
+                    {broadcastProgress.overallStatus === 'Success' && 'Completed Successfully (All destinations received message)'}
+                    {broadcastProgress.overallStatus === 'Partial Success' && 'Completed with Partial Success (Some destinations failed)'}
+                    {broadcastProgress.overallStatus === 'Failed' && 'Broadcast Failed (All destinations failed)'}
+                  </span>
                 </span>
 
-                {broadcastProgress.failed > 0 && broadcastProgress.failedUsers.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => handleRetryFailedUsers()}
-                    disabled={broadcastProgress.isRetrying}
-                    className="w-full sm:w-auto px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition flex items-center justify-center gap-1.5"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${broadcastProgress.isRetrying ? 'animate-spin' : ''}`} />
-                    <span>Retry Failed Users ({broadcastProgress.failedUsers.length})</span>
-                  </button>
-                )}
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  {broadcastProgress.apiLogs && broadcastProgress.apiLogs.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => openApiLogModal(broadcastProgress.apiLogs, 'Broadcast Telegram API Log')}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 transition flex items-center gap-1.5"
+                    >
+                      <Terminal className="w-3.5 h-3.5 text-sky-400" />
+                      <span>View Telegram API Log ({broadcastProgress.apiLogs.length})</span>
+                    </button>
+                  )}
+
+                  {broadcastProgress.failed > 0 && broadcastProgress.failedUsers && broadcastProgress.failedUsers.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRetryFailedUsers()}
+                      disabled={broadcastProgress.isRetrying}
+                      className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition flex items-center justify-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${broadcastProgress.isRetrying ? 'animate-spin' : ''}`} />
+                      <span>Retry Failed ({broadcastProgress.failedUsers.length})</span>
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -1881,6 +1842,17 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                       </td>
                       <td className="py-2.5 px-3 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
+                          {item.apiLogs && item.apiLogs.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => openApiLogModal(item.apiLogs, `Telegram API Log - ${new Date(item.timestamp).toLocaleString()}`)}
+                              className="px-2 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 text-[10px] font-bold transition flex items-center gap-1"
+                              title="View Telegram API Log"
+                            >
+                              <Terminal className="w-3 h-3" />
+                              <span>View Telegram API Log</span>
+                            </button>
+                          )}
                           {item.failedUsers && item.failedUsers.length > 0 && (
                             <button
                               type="button"
@@ -1910,6 +1882,220 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
           </div>
         )}
       </div>
+
+      {/* Telegram API Request & Response Log Modal */}
+      {logModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-md">
+          <div className="w-full max-w-4xl max-h-[90vh] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-xs">
+            {/* Modal Header */}
+            <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400">
+                  <Terminal className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                    <span>{activeLogTitle}</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                      {activeLogs.length} Calls
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Real Telegram Bot API HTTP status codes and exact response payloads
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setLogModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Filter Controls Bar */}
+            <div className="p-3 bg-slate-900/90 border-b border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => setLogFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                    logFilter === 'all'
+                      ? 'bg-sky-500 text-slate-950'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  All Logs ({activeLogs.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogFilter('errors')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                    logFilter === 'errors'
+                      ? 'bg-rose-500 text-white'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  Errors Only ({activeLogs.filter(l => !l.ok).length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogFilter('bot')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                    logFilter === 'bot'
+                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  Bot Users ({activeLogs.filter(l => l.category === 'Bot Users').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogFilter('channels')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition whitespace-nowrap ${
+                    logFilter === 'channels'
+                      ? 'bg-teal-500/20 text-teal-300 border border-teal-500/40'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  Channels & Groups ({activeLogs.filter(l => l.category !== 'Bot Users').length})
+                </button>
+              </div>
+
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Filter chat ID or error..."
+                  value={logSearchQuery}
+                  onChange={(e) => setLogSearchQuery(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 font-mono"
+                />
+              </div>
+            </div>
+
+            {/* Logs List / Table */}
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2">
+              {activeLogs.length === 0 ? (
+                <div className="p-8 text-center text-slate-500">No Telegram API log entries recorded for this broadcast.</div>
+              ) : (
+                activeLogs
+                  .filter((entry) => {
+                    if (logFilter === 'errors' && entry.ok) return false;
+                    if (logFilter === 'bot' && entry.category !== 'Bot Users') return false;
+                    if (logFilter === 'channels' && entry.category === 'Bot Users') return false;
+                    if (logSearchQuery.trim()) {
+                      const q = logSearchQuery.toLowerCase();
+                      return (
+                        entry.chatId.toLowerCase().includes(q) ||
+                        entry.destinationName.toLowerCase().includes(q) ||
+                        (entry.errorDescription && entry.errorDescription.toLowerCase().includes(q))
+                      );
+                    }
+                    return true;
+                  })
+                  .map((entry, idx) => {
+                    const isExpanded = expandedLogId === (entry.id || `log_${idx}`);
+                    return (
+                      <div
+                        key={entry.id || `log_${idx}`}
+                        className={`p-3 rounded-xl border transition space-y-2 ${
+                          entry.ok
+                            ? 'bg-slate-950/80 border-slate-800/80 hover:border-slate-700'
+                            : 'bg-rose-950/20 border-rose-800/40 hover:border-rose-700/60'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 font-mono">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              entry.ok ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                            }`}>
+                              HTTP {entry.httpStatus}
+                            </span>
+                            <span className="font-bold text-slate-200 text-xs">
+                              {entry.destinationName}
+                            </span>
+                            <span className="text-slate-400 text-[11px]">
+                              ({entry.chatId})
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-800 text-slate-400">
+                              {entry.category}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Error notice banner if failed */}
+                        {!entry.ok && (
+                          <div className="p-2 rounded bg-rose-950/60 border border-rose-800/60 text-rose-200 text-xs font-mono flex items-start gap-2">
+                            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold">Telegram Error: </span>
+                              <span>{entry.errorDescription || 'API Request Failed'}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Raw API Response JSON Expandable Block */}
+                        <div className="pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setExpandedLogId(isExpanded ? null : (entry.id || `log_${idx}`))}
+                            className="text-[11px] text-sky-400 hover:text-sky-300 font-mono flex items-center gap-1"
+                          >
+                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            <span>{isExpanded ? 'Hide Raw Telegram Response Payload' : 'View Raw Telegram Response Payload'}</span>
+                          </button>
+
+                          {isExpanded && (
+                            <div className="mt-2 p-3 rounded-lg bg-slate-950 border border-slate-800/90 font-mono text-[11px] text-slate-300 overflow-x-auto">
+                              <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">
+                                Method: <span className="text-sky-400">{entry.method}</span> | Target: <span className="text-amber-300">{entry.chatId}</span>
+                              </div>
+                              <pre className="whitespace-pre-wrap break-all text-emerald-400/90">
+                                {JSON.stringify(entry.telegramResponse, null, 2)}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(JSON.stringify(activeLogs, null, 2));
+                  showToast('Copied full Telegram API log to clipboard!', 'success');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 font-bold text-xs flex items-center gap-1.5 transition"
+              >
+                <Copy className="w-3.5 h-3.5 text-slate-400" />
+                <span>Copy Full Log JSON</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setLogModalOpen(false)}
+                className="px-4 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs transition"
+              >
+                Close Log
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
