@@ -1698,12 +1698,18 @@ Claim now and don't forget to share your screenshot!`;
       const expiresAt = serverTime + (numDuration * 60 * 1000);
 
       const eventData = {
+        active: true,
+        eventId: eventId,
         id: eventId,
         code: codesPool[0] || 'ROY500',
         codesPool,
         usedCodes: {},
         maxUses: numUses,
+        claimedUses: 0,
         claimedCount: 0,
+        remainingUses: numUses,
+        remainingCodesCount: numUses,
+        totalCodesCount: numUses,
         failedClaimsCount: 0,
         minReadyUsers: numMinReady,
         readyCount: 0,
@@ -1713,10 +1719,11 @@ Claim now and don't forget to share your screenshot!`;
         eventStatus: initialEventStatus,
         status: 'active',
         serverTime,
+        unlockAt: unlockTime,
         unlockTime,
         unlocksAt: unlockTime,
         expiresAt,
-        createdAt: new Date(serverTime).toISOString(),
+        createdAt: serverTime,
         claimedUsers: {},
         antiCheatLogs: [],
         requestTimestamps: [],
@@ -1727,7 +1734,8 @@ Claim now and don't forget to share your screenshot!`;
         },
       };
 
-      // Store active live event in Firestore
+      // Store active live event in Firestore document liveRedeem/current & liveRedeemEvents/active
+      await setDoc(doc(db, 'liveRedeem', 'current'), eventData);
       await setDoc(doc(db, 'liveRedeemEvents', 'active'), eventData);
       await setDoc(doc(db, 'liveRedeemEventsHistory', eventId), eventData);
 
@@ -1770,8 +1778,12 @@ Claim now and don't forget to share your screenshot!`;
         return res.status(400).json({ success: false, error: 'User ID is required.' });
       }
 
-      const activeDocRef = doc(db, 'liveRedeemEvents', 'active');
-      const activeDocSnap = await getDoc(activeDocRef);
+      let activeDocSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
+      let activeDocRef = doc(db, 'liveRedeem', 'current');
+      if (!activeDocSnap.exists()) {
+        activeDocRef = doc(db, 'liveRedeemEvents', 'active');
+        activeDocSnap = await getDoc(activeDocRef);
+      }
 
       if (!activeDocSnap.exists()) {
         return res.status(400).json({ success: false, error: 'No active live event found.' });
@@ -1779,7 +1791,7 @@ Claim now and don't forget to share your screenshot!`;
 
       const data = activeDocSnap.data() as any;
 
-      if (data.status !== 'active' || data.eventStatus === 'ENDED') {
+      if (data.status !== 'active' || data.eventStatus === 'ENDED' || data.active === false) {
         return res.status(400).json({ success: false, error: 'This redeem event has ended.' });
       }
 
@@ -1807,9 +1819,11 @@ Claim now and don't forget to share your screenshot!`;
         eventStatus: newEventStatus,
         unlockTime,
         unlocksAt: unlockTime,
+        unlockAt: unlockTime,
       };
 
-      await setDoc(activeDocRef, updateData, { merge: true });
+      await setDoc(doc(db, 'liveRedeem', 'current'), updateData, { merge: true });
+      await setDoc(doc(db, 'liveRedeemEvents', 'active'), updateData, { merge: true });
 
       return res.json({
         success: true,
@@ -1827,7 +1841,11 @@ Claim now and don't forget to share your screenshot!`;
   // 2. Get Active Live Event Status (Real-time Heartbeat & Stats)
   app.get('/api/live-event/active', async (req, res) => {
     try {
-      const activeDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
+      let activeDocSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
+      if (!activeDocSnap.exists()) {
+        activeDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
+      }
+
       if (!activeDocSnap.exists()) {
         return res.json({ success: true, activeEvent: null });
       }
@@ -1857,18 +1875,21 @@ Claim now and don't forget to share your screenshot!`;
       const requestsPerSecond = Number((reqStamps.length / 5).toFixed(1));
 
       const codesPool: string[] = data.codesPool || (data.code ? [data.code] : []);
-      const totalCodesCount = codesPool.length || data.maxUses || 100;
-      const claimedCount = data.claimedCount || 0;
+      const totalCodesCount = Number(data.maxUses || data.totalCodesCount || codesPool.length || 100);
+      const claimedCount = Number(data.claimedUses ?? data.claimedCount ?? 0);
       const remainingCodesCount = Math.max(0, totalCodesCount - claimedCount);
 
       const isEnded =
+        data.active === false ||
         data.status !== 'active' ||
         data.eventStatus === 'ENDED' ||
         now > data.expiresAt ||
         remainingCodesCount <= 0;
 
-      if (isEnded && data.status === 'active') {
-        await setDoc(doc(db, 'liveRedeemEvents', 'active'), { status: 'ended', eventStatus: 'ENDED' }, { merge: true });
+      if (isEnded && (data.status === 'active' || data.active === true)) {
+        const endData = { active: false, status: 'ended', eventStatus: 'ENDED', remainingUses: 0, remainingCodesCount: 0 };
+        await setDoc(doc(db, 'liveRedeem', 'current'), endData, { merge: true });
+        await setDoc(doc(db, 'liveRedeemEvents', 'active'), endData, { merge: true });
       }
 
       let userAlreadyClaimedCode = undefined;
@@ -1883,16 +1904,18 @@ Claim now and don't forget to share your screenshot!`;
       const isUserReady = Boolean(userKey && readyUsers[userKey]);
 
       let eventStatus = data.eventStatus || 'LIVE';
-      let unlockTime = data.unlockTime || data.unlocksAt || now;
+      let unlockTime = data.unlockAt || data.unlockTime || data.unlocksAt || now;
 
       // Auto-unlock if WAITING_FOR_READY threshold met
       if (eventStatus === 'WAITING_FOR_READY' && readyCount >= minReadyUsers) {
         eventStatus = 'LIVE';
         unlockTime = now + (data.countdownSeconds || 10) * 1000;
-        await setDoc(doc(db, 'liveRedeemEvents', 'active'), { eventStatus: 'LIVE', unlockTime, unlocksAt: unlockTime }, { merge: true });
+        const unlockData = { eventStatus: 'LIVE', unlockTime, unlocksAt: unlockTime, unlockAt: unlockTime };
+        await setDoc(doc(db, 'liveRedeem', 'current'), unlockData, { merge: true });
+        await setDoc(doc(db, 'liveRedeemEvents', 'active'), unlockData, { merge: true });
       }
 
-      const isUnlocked = eventStatus === 'LIVE' && now >= unlockTime;
+      const isUnlocked = !isEnded && eventStatus === 'LIVE' && now >= unlockTime;
 
       // Compute total participants across online, ready, and claimed
       const allParticipants = new Set([
@@ -1908,21 +1931,27 @@ Claim now and don't forget to share your screenshot!`;
       };
 
       if (userKey) {
+        setDoc(doc(db, 'liveRedeem', 'current'), { onlineUsers: activeOnlineUsers }, { merge: true }).catch(() => {});
         setDoc(doc(db, 'liveRedeemEvents', 'active'), { onlineUsers: activeOnlineUsers }, { merge: true }).catch(() => {});
       }
 
       return res.json({
         success: true,
         activeEvent: {
-          id: data.id,
+          id: data.eventId || data.id,
+          eventId: data.eventId || data.id,
+          active: !isEnded,
           eventStatus: isEnded ? 'ENDED' : eventStatus,
           status: isEnded ? 'ended' : 'active',
+          unlockAt: unlockTime,
           unlockTime,
           unlocksAt: unlockTime,
           expiresAt: data.expiresAt,
           maxUses: totalCodesCount,
+          claimedUses: claimedCount,
           claimedCount,
           failedClaimsCount: data.failedClaimsCount || 0,
+          remainingUses: remainingCodesCount,
           remainingCodesCount,
           totalCodesCount,
           countdownSeconds: data.countdownSeconds,
@@ -1958,8 +1987,12 @@ Claim now and don't forget to share your screenshot!`;
         return res.status(400).json({ success: false, error: 'User identifier is required to claim code.' });
       }
 
-      const activeDocRef = doc(db, 'liveRedeemEvents', 'active');
-      const activeDocSnap = await getDoc(activeDocRef);
+      let activeDocSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
+      let activeDocRef = doc(db, 'liveRedeem', 'current');
+      if (!activeDocSnap.exists()) {
+        activeDocRef = doc(db, 'liveRedeemEvents', 'active');
+        activeDocSnap = await getDoc(activeDocRef);
+      }
 
       if (!activeDocSnap.exists()) {
         return res.status(400).json({ success: false, error: '⌛ This redeem event has ended.' });
@@ -1969,12 +2002,12 @@ Claim now and don't forget to share your screenshot!`;
       const now = Date.now();
 
       const requestTimestamps: number[] = [...(data.requestTimestamps || []), now].slice(-100);
-      const unlockTime = data.unlockTime || data.unlocksAt || now;
+      const unlockTime = data.unlockAt || data.unlockTime || data.unlocksAt || now;
 
-      if (data.status !== 'active' || data.eventStatus === 'ENDED' || now > data.expiresAt) {
-        if (data.status === 'active') {
-          await setDoc(activeDocRef, { status: 'ended', eventStatus: 'ENDED' }, { merge: true });
-        }
+      if (data.active === false || data.status !== 'active' || data.eventStatus === 'ENDED' || now > data.expiresAt) {
+        const endData = { active: false, status: 'ended', eventStatus: 'ENDED', remainingUses: 0 };
+        await setDoc(doc(db, 'liveRedeem', 'current'), endData, { merge: true });
+        await setDoc(doc(db, 'liveRedeemEvents', 'active'), endData, { merge: true });
         return res.status(400).json({ success: false, error: '⌛ This redeem event has ended.' });
       }
 
@@ -1987,10 +2020,13 @@ Claim now and don't forget to share your screenshot!`;
       }
 
       const codesPool: string[] = data.codesPool || (data.code ? [data.code] : []);
-      const claimedCount = data.claimedCount || 0;
+      const claimedCount = Number(data.claimedUses ?? data.claimedCount ?? 0);
+      const maxUses = Number(data.maxUses || codesPool.length || 100);
 
-      if (claimedCount >= codesPool.length) {
-        await setDoc(activeDocRef, { status: 'ended', eventStatus: 'ENDED' }, { merge: true });
+      if (claimedCount >= maxUses || claimedCount >= codesPool.length) {
+        const fullEndData = { active: false, status: 'ended', eventStatus: 'ENDED', remainingUses: 0, remainingCodesCount: 0 };
+        await setDoc(doc(db, 'liveRedeem', 'current'), fullEndData, { merge: true });
+        await setDoc(doc(db, 'liveRedeemEvents', 'active'), fullEndData, { merge: true });
         return res.status(400).json({ success: false, error: '❌ Already Claimed. All codes are out of stock.' });
       }
 
@@ -2044,11 +2080,13 @@ Claim now and don't forget to share your screenshot!`;
         const updatedFailed = (data.failedClaimsCount || 0) + 1;
         antiCheatLogs.push(logEntry);
 
-        await setDoc(activeDocRef, {
+        const acPayload = {
           failedClaimsCount: updatedFailed,
           antiCheatLogs: antiCheatLogs.slice(-50),
           requestTimestamps,
-        }, { merge: true });
+        };
+        await setDoc(doc(db, 'liveRedeem', 'current'), acPayload, { merge: true });
+        await setDoc(doc(db, 'liveRedeemEvents', 'active'), acPayload, { merge: true });
 
         return res.status(400).json({
           success: false,
@@ -2058,6 +2096,7 @@ Claim now and don't forget to share your screenshot!`;
 
       const assignedCode = codesPool[claimedCount] || data.code || 'ROY500';
       const updatedCount = claimedCount + 1;
+      const remainingUses = Math.max(0, maxUses - updatedCount);
 
       claimedUsers[userKey] = {
         claimedAt: now,
@@ -2073,9 +2112,13 @@ Claim now and don't forget to share your screenshot!`;
         claimedAt: now,
       };
 
-      const isNowFull = updatedCount >= codesPool.length;
+      const isNowFull = remainingUses <= 0 || updatedCount >= codesPool.length;
       const updateData: any = {
+        active: !isNowFull,
+        claimedUses: updatedCount,
         claimedCount: updatedCount,
+        remainingUses,
+        remainingCodesCount: remainingUses,
         claimedUsers,
         usedCodes,
         requestTimestamps,
@@ -2083,14 +2126,17 @@ Claim now and don't forget to share your screenshot!`;
         eventStatus: isNowFull ? 'ENDED' : 'LIVE',
       };
 
-      await setDoc(activeDocRef, updateData, { merge: true });
-      await setDoc(doc(db, 'liveRedeemEventsHistory', data.id), updateData, { merge: true });
+      await setDoc(doc(db, 'liveRedeem', 'current'), updateData, { merge: true });
+      await setDoc(doc(db, 'liveRedeemEvents', 'active'), updateData, { merge: true });
+      if (data.id || data.eventId) {
+        await setDoc(doc(db, 'liveRedeemEventsHistory', data.eventId || data.id), updateData, { merge: true });
+      }
 
       return res.json({
         success: true,
-        code: data.code,
+        code: assignedCode,
         claimedCount: updatedCount,
-        remainingCount: data.maxUses - updatedCount,
+        remainingCount: remainingUses,
       });
     } catch (err: any) {
       console.error('Error claiming live event code:', err);
@@ -2101,14 +2147,15 @@ Claim now and don't forget to share your screenshot!`;
   // 4. End Active Live Redeem Event (Admin Action)
   app.post('/api/live-event/end', async (req, res) => {
     try {
-      const activeDocRef = doc(db, 'liveRedeemEvents', 'active');
-      const snap = await getDoc(activeDocRef);
+      const endData = { active: false, status: 'ended', eventStatus: 'ENDED', remainingUses: 0, remainingCodesCount: 0 };
+      await setDoc(doc(db, 'liveRedeem', 'current'), endData, { merge: true });
+      await setDoc(doc(db, 'liveRedeemEvents', 'active'), endData, { merge: true });
 
+      const snap = await getDoc(doc(db, 'liveRedeem', 'current'));
       if (snap.exists()) {
         const data = snap.data() as any;
-        await setDoc(activeDocRef, { status: 'ended' }, { merge: true });
-        if (data.id) {
-          await setDoc(doc(db, 'liveRedeemEventsHistory', data.id), { status: 'ended' }, { merge: true });
+        if (data.id || data.eventId) {
+          await setDoc(doc(db, 'liveRedeemEventsHistory', data.eventId || data.id), endData, { merge: true });
         }
       }
 
