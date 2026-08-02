@@ -20,6 +20,9 @@ import {
   X,
   Bot,
   Bug,
+  ChevronDown,
+  ChevronUp,
+  Copy,
 } from 'lucide-react';
 import { AdminConfig, TelegramChannelItem } from '../types';
 import {
@@ -45,6 +48,18 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
   const [channels, setChannels] = useState<TelegramChannelItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [testingId, setTestingId] = useState<string | null>(null);
+  const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
+
+  // Copy Chat ID to clipboard
+  const handleCopyChatId = (item: TelegramChannelItem) => {
+    const textToCopy = item.chatId || (item.username ? `@${item.username.replace(/^@/, '')}` : '');
+    if (!textToCopy) {
+      showToast('No Chat ID or Username available to copy', 'error');
+      return;
+    }
+    navigator.clipboard.writeText(textToCopy);
+    showToast(`Copied Chat ID: ${textToCopy}`, 'info');
+  };
 
   // Debug Details States
   const [rowDebugInfos, setRowDebugInfos] = useState<Record<string, any>>({});
@@ -468,239 +483,379 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
   return (
     <div className="space-y-6">
       {/* Header Box */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+      <div className="p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 shrink-0">
               <Radio className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <span>📢 Telegram Destinations</span>
+              <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <span>📢 Manage Telegram Destinations</span>
                 <span className="px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 text-[10px] font-mono font-bold">
-                  {channels.length} Configured
+                  {channels.length} Saved
                 </span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Manage unlimited channels and groups for broadcasts, notifications, and force-join checks.
+                Configure channels & groups for broadcasts, test messages, and force-join requirements.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
             <button
               type="button"
               onClick={() => handleOpenAdd('channel')}
-              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-sky-500/20 transition flex items-center gap-2"
+              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-sky-500/20 transition flex items-center gap-1.5"
             >
               <Plus className="w-4 h-4" />
-              <span>➕ Add More</span>
+              <span>➕ Add Destination</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsCollapsed(!isCollapsed)}
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition"
+              title={isCollapsed ? 'Expand section' : 'Collapse section'}
+            >
+              {isCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
             </button>
           </div>
         </div>
 
-        {/* Destination List Table / Cards */}
-        {isLoading ? (
-          <div className="py-12 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
-            <RefreshCw className="w-4 h-4 animate-spin text-sky-400" />
-            <span>Loading Telegram destinations...</span>
-          </div>
-        ) : channels.length === 0 ? (
-          <div className="p-8 text-center bg-slate-950/40 rounded-xl border border-slate-800/80 space-y-3">
-            <div className="w-12 h-12 rounded-2xl bg-slate-800/80 flex items-center justify-center text-slate-400 mx-auto">
-              <Users2 className="w-6 h-6" />
-            </div>
-            <div>
-              <p className="text-sm font-bold text-white">No Telegram Destinations Added Yet</p>
-              <p className="text-xs text-slate-400 mt-1">
-                Click "Add More" above to configure channels or groups.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => handleOpenAdd('channel')}
-              className="px-4 py-2 rounded-xl bg-sky-500/20 text-sky-300 border border-sky-500/30 font-bold text-xs hover:bg-sky-500/30 transition inline-flex items-center gap-1.5"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add Your First Destination</span>
-            </button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
-                  <th className="py-3 px-3">Type</th>
-                  <th className="py-3 px-3">Name</th>
-                  <th className="py-3 px-3">Username / Chat ID</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-3">Active</th>
-                  <th className="py-3 px-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60 font-sans">
-                {channels.map((item) => {
-                  const isTesting = testingId === item.id;
-                  const cleanUser = item.username ? `@${item.username.replace(/^@/, '')}` : 'N/A';
-                  const cleanChat = item.chatId || cleanUser;
+        {/* Collapsible Content */}
+        {!isCollapsed && (
+          <>
+            {isLoading ? (
+              <div className="py-10 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin text-sky-400" />
+                <span>Loading Telegram destinations...</span>
+              </div>
+            ) : channels.length === 0 ? (
+              <div className="p-6 sm:p-8 text-center bg-slate-950/40 rounded-xl border border-slate-800/80 space-y-3">
+                <div className="w-11 h-11 rounded-2xl bg-slate-800/80 flex items-center justify-center text-slate-400 mx-auto">
+                  <Users2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-white">No Telegram Destinations Added Yet</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Click "Add Destination" above to add your channel or group.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleOpenAdd('channel')}
+                  className="px-4 py-2 rounded-xl bg-sky-500/20 text-sky-300 border border-sky-500/30 font-bold text-xs hover:bg-sky-500/30 transition inline-flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Your First Destination</span>
+                </button>
+              </div>
+            ) : (
+              <div>
+                {/* Mobile Cards View (sm:hidden) */}
+                <div className="block sm:hidden space-y-3">
+                  {channels.map((item) => {
+                    const isTesting = testingId === item.id;
+                    const cleanUser = item.username ? `@${item.username.replace(/^@/, '')}` : 'N/A';
+                    const cleanChat = item.chatId || cleanUser;
 
-                  return (
-                    <React.Fragment key={item.id}>
-                      <tr className="hover:bg-slate-800/40 transition">
-                      {/* Type Badge */}
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <span
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1 ${
-                            item.type === 'channel'
-                              ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
-                              : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                          }`}
-                        >
-                          {item.type === 'channel' ? '📢 Channel' : '👥 Group'}
-                        </span>
-                      </td>
-
-                      {/* Display Name */}
-                      <td className="py-3 px-3 font-bold text-white whitespace-nowrap">
-                        {item.displayName}
-                      </td>
-
-                      {/* Username & Chat ID */}
-                      <td className="py-3 px-3 font-mono text-[11px] text-slate-300 whitespace-nowrap">
-                        <div className="space-y-0.5">
-                          <div className="text-sky-400 font-bold flex items-center gap-1">
-                            <span>{cleanUser}</span>
-                            {item.username && (
-                              <a
-                                href={`https://t.me/${item.username.replace(/^@/, '')}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-slate-500 hover:text-sky-300"
-                              >
-                                <ExternalLink className="w-3 h-3" />
-                              </a>
-                            )}
-                          </div>
-                          <div className="text-slate-500 text-[10px]">ID: {cleanChat}</div>
-                        </div>
-                      </td>
-
-                      {/* Live Validation Status Badge */}
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        {item.status === 'verified' ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[11px]">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>✅ Connected</span>
-                          </span>
-                        ) : item.status === 'error' ? (
+                    return (
+                      <div
+                        key={item.id}
+                        className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3"
+                      >
+                        <div className="flex items-center justify-between gap-2">
                           <span
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold text-[11px]"
-                            title={item.verifyError || 'Verification failed'}
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1 ${
+                              item.type === 'channel'
+                                ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                                : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                            }`}
                           >
-                            <XCircle className="w-3.5 h-3.5 text-rose-400" />
-                            <span>{item.verifyError || '❌ Verification Failed'}</span>
+                            {item.type === 'channel' ? '📢 Channel' : '👥 Group'}
                           </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 font-medium text-[11px]">
-                            <Info className="w-3.5 h-3.5 text-slate-400" />
-                            <span>Unverified</span>
-                          </span>
-                        )}
-                      </td>
 
-                      {/* Active Toggle Switch */}
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActiveRow(item)}
-                          className={`p-1 rounded-lg transition ${
-                            item.active ? 'text-emerald-400 hover:text-emerald-300' : 'text-slate-600 hover:text-slate-400'
-                          }`}
-                          title={item.active ? 'Active (Click to disable)' : 'Inactive (Click to enable)'}
-                        >
-                          {item.active ? (
-                            <ToggleRight className="w-6 h-6" />
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                item.active
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                  : 'bg-slate-800 text-slate-400 border border-slate-700'
+                              }`}
+                            >
+                              {item.active ? 'Active' : 'Inactive'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleActiveRow(item)}
+                              className="text-slate-400 hover:text-emerald-400 transition"
+                              title="Toggle Active Status"
+                            >
+                              {item.active ? <ToggleRight className="w-5 h-5 text-emerald-400" /> : <ToggleLeft className="w-5 h-5 text-slate-500" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="text-sm font-bold text-white">{item.displayName}</p>
+                          <div className="flex items-center justify-between text-xs text-slate-400 mt-1 font-mono">
+                            <span>User: <span className="text-sky-400 font-bold">{cleanUser}</span></span>
+                            <span>ID: <span className="text-slate-300">{cleanChat}</span></span>
+                          </div>
+                        </div>
+
+                        {/* Status Badge */}
+                        <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2 text-xs">
+                          <span className="text-slate-400 text-[11px]">Connection Status:</span>
+                          {item.status === 'verified' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-bold text-[11px]">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Connected
+                            </span>
+                          ) : item.status === 'error' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-500/15 text-rose-300 font-bold text-[11px]">
+                              <XCircle className="w-3 h-3 text-rose-400" /> Error
+                            </span>
                           ) : (
-                            <ToggleLeft className="w-6 h-6" />
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-medium text-[11px]">
+                              <Info className="w-3 h-3" /> Unverified
+                            </span>
                           )}
-                        </button>
-                      </td>
+                        </div>
 
-                      {/* Row Action Buttons */}
-                      <td className="py-3 px-3 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* Test Connection Button */}
+                        {/* Mobile Action Buttons */}
+                        <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEdit(item)}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition flex items-center gap-1"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Edit</span>
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => handleTestRowConnection(item)}
                             disabled={isTesting}
-                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-bold text-[11px] transition flex items-center gap-1 disabled:opacity-50"
-                            title="Test Bot Connection & Permissions"
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 text-xs font-bold transition flex items-center gap-1 disabled:opacity-50"
                           >
-                            <RefreshCw className={`w-3 h-3 ${isTesting ? 'animate-spin' : ''}`} />
+                            <RefreshCw className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin' : ''}`} />
                             <span>Test</span>
                           </button>
 
-                          {/* Debug Logs Toggle Button */}
                           <button
                             type="button"
-                            onClick={() => setExpandedDebugId(expandedDebugId === item.id ? null : item.id)}
-                            className={`p-1.5 rounded-lg border transition ${
-                              expandedDebugId === item.id
-                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                                : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-amber-300 border border-slate-700'
-                            }`}
-                            title="View Telegram API Debug Logs"
+                            onClick={() => handleCopyChatId(item)}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition flex items-center gap-1"
                           >
-                            <Bug className="w-3.5 h-3.5" />
+                            <Copy className="w-3.5 h-3.5 text-sky-400" />
+                            <span>Copy ID</span>
                           </button>
 
-                          {/* Edit Button */}
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEdit(item)}
-                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition"
-                            title="Edit Destination"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Delete Button */}
                           <button
                             type="button"
                             onClick={() => handleDeleteRow(item)}
-                            className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition"
-                            title="Delete Destination"
+                            className="px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold transition flex items-center gap-1"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
                           </button>
                         </div>
-                      </td>
-                    </tr>
+                      </div>
+                    );
+                  })}
+                </div>
 
-                    {/* Expandable Debug Section for Table Row */}
-                    {expandedDebugId === item.id && (
-                      <tr className="bg-slate-950/90">
-                        <td colSpan={6} className="p-4 border-b border-slate-800">
-                          {renderDebugSection(
-                            rowDebugInfos[item.id] || {
-                              savedChatId: item.chatId || '(Not tested in this session)',
-                              savedUsername: item.username || '(Not tested in this session)',
-                              chatIdUsed: resolveTargetChatId(item.chatId, item.username, item.type) || 'N/A',
-                              apiUrl: 'Click "Test" above to perform live API call and log URL',
-                              apiResponse: { status: item.status, verifyError: item.verifyError || 'Click Test button above' },
-                              errorReason: item.verifyError || (item.status === 'verified' ? 'None (Connected)' : 'Unverified'),
-                            }
-                          )}
-                        </td>
+                {/* Desktop Table View (hidden sm:block) */}
+                <div className="hidden sm:block overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
+                        <th className="py-3 px-3">Type</th>
+                        <th className="py-3 px-3">Name</th>
+                        <th className="py-3 px-3">Username / Chat ID</th>
+                        <th className="py-3 px-3">Status</th>
+                        <th className="py-3 px-3">Active</th>
+                        <th className="py-3 px-3 text-right">Actions</th>
                       </tr>
-                    )}
-                  </React.Fragment>
-                );
-                })}
-              </tbody>
-            </table>
-          </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-sans">
+                      {channels.map((item) => {
+                        const isTesting = testingId === item.id;
+                        const cleanUser = item.username ? `@${item.username.replace(/^@/, '')}` : 'N/A';
+                        const cleanChat = item.chatId || cleanUser;
+
+                        return (
+                          <React.Fragment key={item.id}>
+                            <tr className="hover:bg-slate-800/40 transition">
+                              {/* Type Badge */}
+                              <td className="py-3 px-3 whitespace-nowrap">
+                                <span
+                                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1 ${
+                                    item.type === 'channel'
+                                      ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                                      : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                                  }`}
+                                >
+                                  {item.type === 'channel' ? '📢 Channel' : '👥 Group'}
+                                </span>
+                              </td>
+
+                              {/* Display Name */}
+                              <td className="py-3 px-3 font-bold text-white whitespace-nowrap">
+                                {item.displayName}
+                              </td>
+
+                              {/* Username & Chat ID */}
+                              <td className="py-3 px-3 font-mono text-[11px] text-slate-300 whitespace-nowrap">
+                                <div className="space-y-0.5">
+                                  <div className="text-sky-400 font-bold flex items-center gap-1">
+                                    <span>{cleanUser}</span>
+                                    {item.username && (
+                                      <a
+                                        href={`https://t.me/${item.username.replace(/^@/, '')}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-slate-500 hover:text-sky-300"
+                                      >
+                                        <ExternalLink className="w-3 h-3" />
+                                      </a>
+                                    )}
+                                  </div>
+                                  <div className="text-slate-500 text-[10px]">ID: {cleanChat}</div>
+                                </div>
+                              </td>
+
+                              {/* Live Validation Status Badge */}
+                              <td className="py-3 px-3 whitespace-nowrap">
+                                {item.status === 'verified' ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[11px]">
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span>✅ Connected</span>
+                                  </span>
+                                ) : item.status === 'error' ? (
+                                  <span
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold text-[11px]"
+                                    title={item.verifyError || 'Verification failed'}
+                                  >
+                                    <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                                    <span>{item.verifyError || '❌ Verification Failed'}</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 font-medium text-[11px]">
+                                    <Info className="w-3.5 h-3.5 text-slate-400" />
+                                    <span>Unverified</span>
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Active Toggle Switch */}
+                              <td className="py-3 px-3 whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleActiveRow(item)}
+                                  className={`p-1 rounded-lg transition ${
+                                    item.active ? 'text-emerald-400 hover:text-emerald-300' : 'text-slate-600 hover:text-slate-400'
+                                  }`}
+                                  title={item.active ? 'Active (Click to disable)' : 'Inactive (Click to enable)'}
+                                >
+                                  {item.active ? (
+                                    <ToggleRight className="w-6 h-6" />
+                                  ) : (
+                                    <ToggleLeft className="w-6 h-6" />
+                                  )}
+                                </button>
+                              </td>
+
+                              {/* Row Action Buttons */}
+                              <td className="py-3 px-3 text-right whitespace-nowrap">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  {/* Edit Button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEdit(item)}
+                                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition"
+                                    title="Edit Destination"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                                  </button>
+
+                                  {/* Test Connection Button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleTestRowConnection(item)}
+                                    disabled={isTesting}
+                                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-bold text-[11px] transition flex items-center gap-1 disabled:opacity-50"
+                                    title="Test Bot Connection & Permissions"
+                                  >
+                                    <RefreshCw className={`w-3 h-3 ${isTesting ? 'animate-spin' : ''}`} />
+                                    <span>Test</span>
+                                  </button>
+
+                                  {/* Copy Chat ID Button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopyChatId(item)}
+                                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition"
+                                    title="Copy Chat ID"
+                                  >
+                                    <Copy className="w-3.5 h-3.5 text-sky-400" />
+                                  </button>
+
+                                  {/* Delete Button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteRow(item)}
+                                    className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition"
+                                    title="Delete Destination"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+
+                                  {/* Debug Logs Toggle Button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedDebugId(expandedDebugId === item.id ? null : item.id)}
+                                    className={`p-1.5 rounded-lg border transition ${
+                                      expandedDebugId === item.id
+                                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                        : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-amber-300 border border-slate-700'
+                                    }`}
+                                    title="View Telegram API Debug Logs"
+                                  >
+                                    <Bug className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+
+                            {/* Expandable Debug Section for Table Row */}
+                            {expandedDebugId === item.id && (
+                              <tr className="bg-slate-950/90">
+                                <td colSpan={6} className="p-4 border-b border-slate-800">
+                                  {renderDebugSection(
+                                    rowDebugInfos[item.id] || {
+                                      savedChatId: item.chatId || '(Not tested in this session)',
+                                      savedUsername: item.username || '(Not tested in this session)',
+                                      chatIdUsed: resolveTargetChatId(item.chatId, item.username, item.type) || 'N/A',
+                                      apiUrl: 'Click "Test" above to perform live API call and log URL',
+                                      apiResponse: { status: item.status, verifyError: item.verifyError || 'Click Test button above' },
+                                      errorReason: item.verifyError || (item.status === 'verified' ? 'None (Connected)' : 'Unverified'),
+                                    }
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 

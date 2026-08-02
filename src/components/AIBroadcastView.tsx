@@ -618,20 +618,11 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
         </div>
       </div>
 
-      {/* SECTION 2: Telegram Destinations (Add / Edit / Delete / Test) */}
-      <div className="w-full max-w-full overflow-hidden box-border">
-        <TelegramDestinationManager
-          config={config}
-          showToast={showToast}
-          onDestinationsUpdated={fetchDestinations}
-        />
-      </div>
-
-      {/* SECTION 3: Redeem Code Input */}
+      {/* SECTION 2: Redeem Code Input */}
       <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
         <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
           <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-xs">
-            3
+            2
           </div>
           <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
             <Gift className="w-4 h-4 text-emerald-400" />
@@ -731,11 +722,11 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
         </div>
       </div>
 
-      {/* SECTION 4: Generate AI Message */}
+      {/* SECTION 3: Generate AI Message */}
       <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
         <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
           <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
-            4
+            3
           </div>
           <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-sky-400" />
@@ -785,11 +776,11 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
         </div>
       </div>
 
-      {/* SECTION 5: Telegram Preview */}
+      {/* SECTION 4: Telegram Live Preview */}
       <div className="w-full max-w-full overflow-hidden p-4 sm:p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4 box-border">
         <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
           <div className="w-7 h-7 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 font-bold text-xs">
-            5
+            4
           </div>
           <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
             <Bot className="w-4 h-4 text-sky-400" />
@@ -847,6 +838,15 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
             </button>
           )}
         </div>
+      </div>
+
+      {/* SECTION 5: Manage Telegram Destinations */}
+      <div className="w-full max-w-full overflow-hidden box-border">
+        <TelegramDestinationManager
+          config={config}
+          showToast={showToast}
+          onDestinationsUpdated={fetchDestinations}
+        />
       </div>
 
       {/* SECTION 6: Send Test */}
