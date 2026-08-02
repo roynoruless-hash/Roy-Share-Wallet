@@ -72,8 +72,8 @@ export async function getActiveWarAndTeamByAlias(alias: string, specificWarId?: 
       const warsSnap = await getDocs(warsQuery);
       if (!warsSnap.empty) {
         const warsList = warsSnap.docs.map((d) => ({ ...(d.data() as GiveawayWar), id: d.id }));
-        const liveWar = warsList.find((w) => w.status === 'live');
-        war = liveWar || warsList[0];
+        const activeWar = warsList.find((w) => w.status === 'registration_open' || w.status === 'live');
+        war = activeWar || warsList[0];
       }
     }
     if (!war) return null;
@@ -503,8 +503,27 @@ export async function joinWarTeam(
       return { success: false, message: 'Giveaway War event not found' };
     }
 
-    if (war.status !== 'live') {
-      return { success: false, message: 'Giveaway War is not currently live' };
+    const registrationAllowed = war.status === 'registration_open' || war.status === 'live';
+    if (!registrationAllowed) {
+      let msg = 'Giveaway War registration is not currently open.';
+      if (war.status === 'draft') {
+        msg = 'This war is in Draft mode. Registration links are disabled.';
+      } else if (war.status === 'paused') {
+        msg = 'Giveaway War is currently paused.';
+      } else if (war.status === 'ended') {
+        msg = 'Giveaway War has ended.';
+      }
+
+      console.log('================ GIVEAWAY WAR DEBUG LOG ================');
+      console.log(`War ID:               ${warId}`);
+      console.log(`War Status:           ${war.status}`);
+      console.log(`Payload:              teamId:${teamId}`);
+      console.log(`Registration Allowed: false`);
+      console.log(`Leader Created:       false`);
+      console.log(`Member Joined:        false`);
+      console.log('=======================================================');
+
+      return { success: false, message: msg };
     }
 
     const team = war.teams.find((t) => t.id === teamId);
@@ -551,7 +570,9 @@ export async function joinWarTeam(
     // First Join Leader Check
     const isFirstJoinLeader = !team.leaderTelegramId || team.leaderTelegramId === '';
     const botUsername = 'Roy_wallett_bot';
-    const leaderLink = `https://t.me/${botUsername}?start=TEAMA_LEADER_${warId}_${user.telegramId}`;
+    const isTeamB = team.id.toLowerCase().includes('b') || team.name.toLowerCase().includes('b') || war.teams.indexOf(team) === 1;
+    const teamLeaderPrefix = isTeamB ? 'TEAMB_LEADER' : 'TEAMA_LEADER';
+    const leaderLink = `https://t.me/${botUsername}?start=${teamLeaderPrefix}_${warId}_${user.telegramId}`;
 
     const nowIso = new Date().toISOString();
     const newMember: WarMember = {
@@ -641,6 +662,15 @@ export async function joinWarTeam(
     });
 
     const updatedTeam = updatedTeams.find((t) => t.id === teamId) || team;
+
+    console.log('================ GIVEAWAY WAR DEBUG LOG ================');
+    console.log(`War ID:               ${warId}`);
+    console.log(`War Status:           ${war.status}`);
+    console.log(`Payload:              teamId:${teamId}`);
+    console.log(`Registration Allowed: true`);
+    console.log(`Leader Created:       ${isFirstJoinLeader}`);
+    console.log(`Member Joined:        true`);
+    console.log('=======================================================');
 
     return {
       success: true,

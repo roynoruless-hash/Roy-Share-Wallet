@@ -1371,7 +1371,8 @@ export async function processTelegramUpdate(token: string, update: any) {
               logTelegramPayload(startParam, type, warId, chatId, actionText);
 
               if (isLeader) {
-                const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${warId}_${chatId}`;
+                const isTeamB = result.team.id.toLowerCase().includes('b') || result.team.name.toLowerCase().includes('b');
+                const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=${isTeamB ? 'TEAMB_LEADER' : 'TEAMA_LEADER'}_${warId}_${chatId}`;
                 await sendTelegramApi(token, 'sendMessage', {
                   chat_id: chatId,
                   text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
@@ -2242,7 +2243,8 @@ export async function processTelegramUpdate(token: string, update: any) {
         const isLeader = result.member?.isTeamLeader || String(result.team.leaderTelegramId) === String(chatId);
 
         if (isLeader) {
-          const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${pendingWarJoin.warId}_${chatId}`;
+          const isTeamB = result.team.id.toLowerCase().includes('b') || result.team.name.toLowerCase().includes('b');
+          const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=${isTeamB ? 'TEAMB_LEADER' : 'TEAMA_LEADER'}_${pendingWarJoin.warId}_${chatId}`;
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
             text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +

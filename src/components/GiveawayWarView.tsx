@@ -899,12 +899,16 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                 className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider border ${
                   activeWar.status === 'live'
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 animate-pulse'
+                    : activeWar.status === 'registration_open'
+                    ? 'bg-blue-500/10 text-blue-400 border-blue-500/30 animate-pulse'
                     : activeWar.status === 'ended'
                     ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                    : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                    : activeWar.status === 'paused'
+                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                    : 'bg-slate-700/50 text-slate-300 border-slate-600/50'
                 }`}
               >
-                ● {activeWar.status}
+                ● {activeWar.status === 'registration_open' ? 'REGISTRATION OPEN' : activeWar.status.toUpperCase()}
               </span>
             )}
           </div>
@@ -1103,6 +1107,35 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                   </div>
                 </div>
               </div>
+
+              {/* DRAFT MODE WARNING BANNER */}
+              {activeWar.status === 'draft' && (
+                <div className="p-5 rounded-3xl bg-amber-500/10 border border-amber-500/30 text-amber-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl">
+                  <div className="flex items-center gap-3">
+                    <AlertTriangle className="w-6 h-6 text-amber-400 shrink-0" />
+                    <div>
+                      <p className="text-sm font-black text-amber-200">This war is in Draft mode. Registration links are disabled.</p>
+                      <p className="text-xs text-amber-300/80 mt-0.5">Click "Open Registration" or "Start War" below to allow users to register.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => handleStatusChange('registration_open')}
+                      className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-blue-600/20"
+                    >
+                      <Play className="w-3.5 h-3.5" />
+                      <span>Open Registration</span>
+                    </button>
+                    <button
+                      onClick={() => handleStatusChange('live')}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition flex items-center gap-1.5 shadow-md shadow-emerald-500/20"
+                    >
+                      <Play className="w-3.5 h-3.5" />
+                      <span>Start War (Live)</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* OFFICIAL TEAM REGISTRATION LINKS (ONLY TWO REGISTRATION LINKS GENERATED) */}
               <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-4">
@@ -2378,19 +2411,47 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
 
                 <div className="flex flex-wrap items-center gap-2">
                   {activeWar.status === 'draft' && (
-                    <button
-                      onClick={() => handleStatusChange('live')}
-                      className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition flex items-center gap-2"
-                    >
-                      <Play className="w-4 h-4" />
-                      <span>Start Giveaway War</span>
-                    </button>
+                    <>
+                      <button
+                        onClick={() => handleStatusChange('registration_open')}
+                        className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-2 shadow-md shadow-blue-600/20"
+                      >
+                        <Play className="w-4 h-4" />
+                        <span>Open Registration</span>
+                      </button>
+                      <button
+                        onClick={() => handleStatusChange('live')}
+                        className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition flex items-center gap-2 shadow-md shadow-emerald-500/20"
+                      >
+                        <Play className="w-4 h-4" />
+                        <span>Start War (Go Live)</span>
+                      </button>
+                    </>
+                  )}
+
+                  {activeWar.status === 'registration_open' && (
+                    <>
+                      <button
+                        onClick={() => handleStatusChange('live')}
+                        className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition flex items-center gap-2 shadow-md shadow-emerald-500/20"
+                      >
+                        <Play className="w-4 h-4" />
+                        <span>Start War (Go Live)</span>
+                      </button>
+                      <button
+                        onClick={() => handleStatusChange('paused')}
+                        className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition flex items-center gap-2 shadow-md shadow-amber-500/20"
+                      >
+                        <Pause className="w-4 h-4" />
+                        <span>Pause Registration</span>
+                      </button>
+                    </>
                   )}
 
                   {activeWar.status === 'live' && (
                     <button
                       onClick={() => handleStatusChange('paused')}
-                      className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition flex items-center gap-2"
+                      className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition flex items-center gap-2 shadow-md shadow-amber-500/20"
                     >
                       <Pause className="w-4 h-4" />
                       <span>Pause War</span>
@@ -2398,13 +2459,22 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                   )}
 
                   {activeWar.status === 'paused' && (
-                    <button
-                      onClick={() => handleStatusChange('live')}
-                      className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition flex items-center gap-2"
-                    >
-                      <Play className="w-4 h-4" />
-                      <span>Resume War</span>
-                    </button>
+                    <>
+                      <button
+                        onClick={() => handleStatusChange('registration_open')}
+                        className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition flex items-center gap-2 shadow-md shadow-blue-600/20"
+                      >
+                        <Play className="w-4 h-4" />
+                        <span>Open Registration</span>
+                      </button>
+                      <button
+                        onClick={() => handleStatusChange('live')}
+                        className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition flex items-center gap-2 shadow-md shadow-emerald-500/20"
+                      >
+                        <Play className="w-4 h-4" />
+                        <span>Resume War (Go Live)</span>
+                      </button>
+                    </>
                   )}
 
                   {activeWar.status !== 'ended' && (

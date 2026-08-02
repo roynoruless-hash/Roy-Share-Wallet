@@ -551,7 +551,7 @@ export interface GiveawayWar {
   totalTeams: number; // default 2
   teams: WarTeam[];
   prizePool: number;
-  status: 'draft' | 'live' | 'paused' | 'ended';
+  status: 'draft' | 'registration_open' | 'live' | 'paused' | 'ended';
   pointRules: WarPointRules;
   rewards: WarRewardConfig;
   startDate?: string;
