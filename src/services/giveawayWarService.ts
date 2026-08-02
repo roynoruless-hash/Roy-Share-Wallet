@@ -58,27 +58,42 @@ export const DEFAULT_REWARD_CONFIG: WarRewardConfig = {
 /**
  * Resolve Active War and Team by alias e.g. teamA, teamB, team_teamA
  */
-export async function getActiveWarAndTeamByAlias(alias: string): Promise<{ warId: string; teamId: string; teamName: string } | null> {
+export async function getActiveWarAndTeamByAlias(alias: string, specificWarId?: string): Promise<{ warId: string; teamId: string; teamName: string } | null> {
   try {
-    const warsQuery = query(collection(db, WARS_COLLECTION), where('status', '==', 'live'), limit(1));
-    const warsSnap = await getDocs(warsQuery);
-    if (warsSnap.empty) return null;
+    let war: GiveawayWar | null = null;
+    if (specificWarId) {
+      war = await getGiveawayWarById(specificWarId);
+    }
+    if (!war) {
+      const warsQuery = query(collection(db, WARS_COLLECTION), where('status', '==', 'live'), limit(1));
+      const warsSnap = await getDocs(warsQuery);
+      if (!warsSnap.empty) {
+        war = warsSnap.docs[0].data() as GiveawayWar;
+      }
+    }
+    if (!war) return null;
 
-    const war = warsSnap.docs[0].data() as GiveawayWar;
     const cleanAlias = alias.toLowerCase().trim();
 
-    const matchedTeam = war.teams.find((t) =>
-      t.id.toLowerCase() === cleanAlias ||
-      t.name.toLowerCase().replace(/\s+/g, '') === cleanAlias ||
-      t.id.toLowerCase().includes(cleanAlias) ||
-      cleanAlias.includes(t.id.toLowerCase())
-    );
+    let matchedTeam = war.teams.find((t, idx) => {
+      const tId = t.id.toLowerCase();
+      const tName = t.name.toLowerCase().replace(/\s+/g, '');
+      if (cleanAlias === 'teama' || cleanAlias === 'team_a' || cleanAlias === 'a') return idx === 0;
+      if (cleanAlias === 'teamb' || cleanAlias === 'team_b' || cleanAlias === 'b') return idx === 1;
+      return (
+        tId === cleanAlias ||
+        tName === cleanAlias ||
+        tId.includes(cleanAlias) ||
+        cleanAlias.includes(tId)
+      );
+    });
+
+    if (!matchedTeam && war.teams.length > 0) {
+      matchedTeam = cleanAlias.includes('b') || cleanAlias.includes('2') ? (war.teams[1] || war.teams[0]) : war.teams[0];
+    }
 
     if (matchedTeam) {
       return { warId: war.id, teamId: matchedTeam.id, teamName: matchedTeam.name };
-    }
-    if (war.teams.length > 0) {
-      return { warId: war.id, teamId: war.teams[0].id, teamName: war.teams[0].name };
     }
     return null;
   } catch (err) {

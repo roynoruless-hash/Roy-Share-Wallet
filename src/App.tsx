@@ -25,6 +25,7 @@ import { ClaimRewardView } from './components/ClaimRewardView';
 import { AdminLoginView } from './components/AdminLoginView';
 import { VotingContestsView } from './components/VotingContestsView';
 import { GiveawayWarView } from './components/GiveawayWarView';
+import { GiveawayWarPublicView } from './components/GiveawayWarPublicView';
 import { ContestRegistrationView } from './components/ContestRegistrationView';
 import { ComingSoonView } from './components/ComingSoonView';
 import { Toast, ToastMessage } from './components/Toast';
@@ -462,6 +463,7 @@ export default function App() {
     (new URLSearchParams(window.location.search).has('token') && !isClaimRewardRoute);
   const isFeedbackRoute = window.location.pathname.startsWith('/feedback');
   const isContestRegistrationRoute = window.location.pathname.startsWith('/register-contest');
+  const isWarPublicRoute = window.location.pathname.startsWith('/war/') || window.location.pathname.startsWith('/war');
 
   if (isClaimRewardRoute) {
     return <ClaimRewardView botUsername={config.botUsername || 'RoyShareWalletBot'} />;
@@ -481,6 +483,10 @@ export default function App() {
     const pathParts = window.location.pathname.split('/');
     const rContestId = pathParts[2] || '';
     return <ContestRegistrationView contestId={rContestId} botUsername={config.botUsername || 'RoyShareWalletBot'} />;
+  }
+
+  if (isWarPublicRoute) {
+    return <GiveawayWarPublicView botUsername={config.botUsername || 'Roy_wallett_bot'} />;
   }
 
   if (isLoading) {

@@ -525,6 +525,67 @@ async function verifyUserSmartJoin(
   }
 }
 
+async function parseWarStartParam(startParam: string): Promise<{ warId: string; teamId: string; inviterTgId: string } | null> {
+  if (!startParam) return null;
+  const lower = startParam.toLowerCase().trim();
+  const isWarParam = lower.startsWith('war_') || lower.includes('team') || lower.startsWith('team');
+  if (!isWarParam) return null;
+
+  let warId = '';
+  let teamId = '';
+  let inviterTgId = '';
+
+  if (lower.startsWith('teama_leader_') || lower.startsWith('teamb_leader_')) {
+    const parts = startParam.split('_');
+    const alias = parts[0];
+    warId = parts[2] || '';
+    inviterTgId = parts[3] || '';
+    const res = await getActiveWarAndTeamByAlias(alias, warId);
+    if (res) {
+      return { warId: res.warId, teamId: res.teamId, inviterTgId };
+    }
+  } else if (lower.startsWith('war_')) {
+    const parts = startParam.split('_');
+    warId = parts[1] || '';
+    for (let i = 2; i < parts.length; i++) {
+      if (parts[i].toLowerCase() === 'team' && parts[i + 1]) {
+        teamId = parts[i + 1];
+      }
+      if ((parts[i].toLowerCase() === 'ref' || parts[i].toLowerCase() === 'lead') && parts[i + 1]) {
+        inviterTgId = parts[i + 1];
+      }
+    }
+    if (warId && teamId) {
+      return { warId, teamId, inviterTgId };
+    }
+    if (warId && !teamId) {
+      const res = await getActiveWarAndTeamByAlias('teamA', warId);
+      if (res) return { warId: res.warId, teamId: res.teamId, inviterTgId };
+    }
+  } else {
+    // Formats e.g. teamA_warId, teamB_warId, teamA_warId_inviterTgId, team_teamA_warId
+    const parts = startParam.split('_');
+    let teamAlias = parts[0];
+    let possibleWarId = '';
+
+    if (teamAlias.toLowerCase() === 'team' && parts[1]) {
+      teamAlias = parts[1];
+      possibleWarId = parts[2] || '';
+      inviterTgId = parts[3] || '';
+    } else {
+      possibleWarId = parts[1] || '';
+      inviterTgId = parts[2] || '';
+    }
+
+    const res = await getActiveWarAndTeamByAlias(teamAlias, possibleWarId);
+    if (res) {
+      return { warId: res.warId, teamId: res.teamId, inviterTgId };
+    }
+  }
+
+  return null;
+}
+
 /**
  * Main Telegram Webhook Update Processor
  */
@@ -1158,7 +1219,7 @@ export async function processTelegramUpdate(token: string, update: any) {
     return;
   }
 
-  // Pre-process: Parse referral or vote parameter from /start command for unregistered users
+  // Pre-process: Parse referral, vote, or war parameters from /start command for unregistered users
   if (!existingUser && (text === '/start' || text.startsWith('/start'))) {
     let startParam = '';
     const parts = text.split(/\s+/);
@@ -1173,6 +1234,7 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     let referrerUid: string | undefined = undefined;
     let pendingVote: { contestId: string; contestantId: string } | undefined = undefined;
+    let pendingWarJoin: { warId: string; teamId: string; inviterTgId?: string } | undefined = undefined;
 
     if (startParam.startsWith('vote_')) {
       const vParts = startParam.split('_');
@@ -1180,20 +1242,27 @@ export async function processTelegramUpdate(token: string, update: any) {
         pendingVote = { contestId: vParts[1], contestantId: vParts[2] };
       }
     } else if (startParam) {
-      const referrer = await getUserByUid(startParam);
-      if (referrer && String(referrer.telegramId) !== String(chatId)) {
-        referrerUid = String(referrer.uid);
+      const warRes = await parseWarStartParam(startParam);
+      if (warRes) {
+        pendingWarJoin = warRes;
+      } else {
+        const referrer = await getUserByUid(startParam);
+        if (referrer && String(referrer.telegramId) !== String(chatId)) {
+          referrerUid = String(referrer.uid);
+        }
       }
     }
 
     const existingSess = userSessions.get(chatId);
     const finalReferrerUid = referrerUid || existingSess?.referrerUid;
     const finalPendingVote = pendingVote || existingSess?.pendingVote;
+    const finalPendingWarJoin = pendingWarJoin || existingSess?.pendingWarJoin;
 
     userSessions.set(chatId, {
       step: 'FORCE_JOIN',
       referrerUid: finalReferrerUid,
       pendingVote: finalPendingVote,
+      pendingWarJoin: finalPendingWarJoin,
     });
   }
 
@@ -1284,9 +1353,13 @@ export async function processTelegramUpdate(token: string, update: any) {
       let session = userSessions.get(chatId);
       if (!session || session.step === 'FORCE_JOIN') {
         const finalReferrerUid = session?.referrerUid;
+        const finalPendingVote = session?.pendingVote;
+        const finalPendingWarJoin = session?.pendingWarJoin;
         session = {
           step: 'WAITING_NAME',
           referrerUid: finalReferrerUid,
+          pendingVote: finalPendingVote,
+          pendingWarJoin: finalPendingWarJoin,
           verifiedChannels: verifyRes.missingItems.length === 0 ? [] : undefined,
         };
         userSessions.set(chatId, session);
@@ -1297,9 +1370,13 @@ export async function processTelegramUpdate(token: string, update: any) {
           parse_mode: 'HTML',
         });
 
+        const welcomeSubtitle = finalPendingWarJoin
+          ? `⚔️ <b>Giveaway War Registration</b>\n\nLet's complete your registration to join your team.`
+          : `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration.`;
+
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
-          text: `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
+          text: `${welcomeSubtitle}\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
           parse_mode: 'HTML',
         });
         return;
@@ -1373,103 +1450,75 @@ export async function processTelegramUpdate(token: string, update: any) {
       }
     }
 
-    const isWarParam = startParam.startsWith('war_') || startParam.toLowerCase().includes('team') || startParam.toLowerCase().startsWith('team');
-
-    if (isWarParam) {
-      let warId = '';
-      let teamId = '';
-      let inviterTgId = '';
-
-      if (startParam.startsWith('war_')) {
-        const parts = startParam.split('_');
-        warId = parts[1];
-        for (let i = 2; i < parts.length; i++) {
-          if (parts[i] === 'team' && parts[i + 1]) {
-            teamId = parts[i + 1];
-          }
-          if ((parts[i] === 'lead' || parts[i] === 'ref') && parts[i + 1]) {
-            inviterTgId = parts[i + 1];
-          }
-        }
-      } else {
-        // Formats e.g. teamA_xxxxx, teamB_xxxxx, team_teamA_xxxxx
-        const parts = startParam.split('_');
-        let teamAlias = parts[0];
-        if (teamAlias.toLowerCase() === 'team' && parts[1]) {
-          teamAlias = parts[1];
-          inviterTgId = parts[2] || '';
-        } else {
-          inviterTgId = parts[1] || '';
-        }
-
-        const resolved = await getActiveWarAndTeamByAlias(teamAlias);
-        if (resolved) {
-          warId = resolved.warId;
-          teamId = resolved.teamId;
-        }
+    let warParam = await parseWarStartParam(startParam);
+    if (!warParam && (startParam.startsWith('war_') || startParam.toLowerCase().includes('team') || startParam.toLowerCase().startsWith('team'))) {
+      const resolved = await getActiveWarAndTeamByAlias(startParam);
+      if (resolved) {
+        warParam = { warId: resolved.warId, teamId: resolved.teamId, inviterTgId: '' };
       }
+    }
 
-      if (warId && teamId) {
-        if (existingUser) {
-          const result = await joinWarTeam(
-            warId,
-            {
-              telegramId: String(chatId),
-              name: existingUser.firstName,
-              username: existingUser.username,
-            },
-            teamId,
-            { invitedByTelegramId: inviterTgId }
-          );
+    if (warParam) {
+      const { warId, teamId, inviterTgId } = warParam;
+      if (existingUser) {
+        const result = await joinWarTeam(
+          warId,
+          {
+            telegramId: String(chatId),
+            name: existingUser.firstName,
+            username: existingUser.username,
+          },
+          teamId,
+          { invitedByTelegramId: inviterTgId }
+        );
 
-          if (result.success && result.team) {
-            const botUsername = 'Roy_wallett_bot';
-            const isLeader = result.member?.isTeamLeader || String(result.team.leaderTelegramId) === String(chatId);
+        if (result.success && result.team) {
+          const botUsername = 'Roy_wallett_bot';
+          const isLeader = result.member?.isTeamLeader || String(result.team.leaderTelegramId) === String(chatId);
 
-            if (isLeader) {
-              const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${warId}_${chatId}`;
-              await sendTelegramApi(token, 'sendMessage', {
-                chat_id: chatId,
-                text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
-                  `You are now automatically assigned as the <b>👑 Official Team Leader</b> for <b>${result.team.name}</b>!\n\n` +
-                  `🔗 <b>Your Personal Team Leader Invite Link:</b>\n` +
-                  `<code>${leaderLink}</code>\n\n` +
-                  `Share this link to recruit warriors directly to your team! Anyone joining through your link earns leadership bonus points for you!`,
-                parse_mode: 'HTML',
-              });
-            } else {
-              const myTeamRefLink = `https://t.me/${botUsername}?start=war_${warId}_team_${teamId}_ref_${chatId}`;
-              await sendTelegramApi(token, 'sendMessage', {
-                chat_id: chatId,
-                text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
-                  `You are now registered for <b>${result.team.name}</b> in Giveaway War!\n` +
-                  `🔒 <b>Team Choice Locked.</b>\n\n` +
-                  `🔗 <b>Your Unique Team Referral Link:</b>\n` +
-                  `<code>${myTeamRefLink}</code>\n\n` +
-                  `Share your referral link with friends! Anyone joining through your link automatically joins <b>${result.team.name}</b> and earns points for both you and your Team Leader!`,
-                parse_mode: 'HTML',
-              });
-            }
-          } else {
+          if (isLeader) {
+            const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${warId}_${chatId}`;
             await sendTelegramApi(token, 'sendMessage', {
               chat_id: chatId,
-              text: `⚔️ <b>Giveaway War Team Status:</b>\n\n${result.message}`,
+              text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
+                `You are now automatically assigned as the <b>👑 Official Team Leader</b> for <b>${result.team.name}</b>!\n\n` +
+                `🔗 <b>Your Personal Team Leader Invite Link:</b>\n` +
+                `<code>${leaderLink}</code>\n\n` +
+                `Share this link to recruit warriors directly to your team! Anyone joining through your link earns leadership bonus points for you!`,
+              parse_mode: 'HTML',
+            });
+          } else {
+            const myTeamRefLink = `https://t.me/${botUsername}?start=war_${warId}_team_${teamId}_ref_${chatId}`;
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
+                `You are now registered for <b>${result.team.name}</b> in Giveaway War!\n` +
+                `🔒 <b>Team Choice Locked.</b>\n\n` +
+                `🔗 <b>Your Unique Team Referral Link:</b>\n` +
+                `<code>${myTeamRefLink}</code>\n\n` +
+                `Share your referral link with friends! Anyone joining through your link automatically joins <b>${result.team.name}</b> and earns points for both you and your Team Leader!`,
               parse_mode: 'HTML',
             });
           }
-          return;
         } else {
-          const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
-          session.pendingWarJoin = { warId, teamId, inviterTgId };
-          userSessions.set(chatId, session);
-
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
-            text: `⚔️ <b>Welcome to Giveaway War!</b>\n\nTo join your team and unlock rewards, please complete a quick registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
+            text: `⚔️ <b>Giveaway War Team Status:</b>\n\n${result.message}`,
             parse_mode: 'HTML',
           });
-          return;
         }
+        return;
+      } else {
+        const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
+        session.pendingWarJoin = { warId, teamId, inviterTgId };
+        userSessions.set(chatId, session);
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `⚔️ <b>Welcome to Giveaway War!</b>\n\nTo join your team and unlock rewards, please complete a quick registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
+          parse_mode: 'HTML',
+        });
+        return;
       }
     }
 
