@@ -678,6 +678,15 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     showToast('Loaded message into generator', 'info');
   };
 
+  const now = Date.now();
+  const effectiveUnlockTime = activeLiveEvent?.unlockAt || activeLiveEvent?.unlockTime || activeLiveEvent?.unlocksAt || now;
+  const countdownSec = Math.max(0, Math.ceil((effectiveUnlockTime - now) / 1000));
+  const countdownText = activeLiveEvent?.eventStatus === 'WAITING_FOR_READY'
+    ? 'Waiting'
+    : countdownSec > 0
+    ? `${countdownSec}s Left`
+    : 'Unlocked';
+
   return (
     <div className="space-y-4 w-full max-w-full overflow-hidden box-border font-sans text-slate-100">
       {/* SECTION 1: Gemini API Key Config */}
@@ -912,11 +921,11 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
             </div>
 
             {/* REAL-TIME DASHBOARD METRICS GRID */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 font-mono text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-7 gap-2.5 font-mono text-xs">
               {/* Ready Users Metric */}
               <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
                 <span className="text-[10px] text-slate-400 block uppercase">Ready Users</span>
-                <div className="text-amber-400 font-black text-base">
+                <div className="text-amber-400 font-black text-sm sm:text-base">
                   {activeLiveEvent.readyCount || 0} / {activeLiveEvent.minReadyUsers || 0}
                 </div>
                 <span className="text-[9px] text-slate-500 block">
@@ -927,16 +936,27 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
               {/* Online Users Metric */}
               <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
                 <span className="text-[10px] text-slate-400 block uppercase">Online Users</span>
-                <div className="text-sky-400 font-black text-base">
+                <div className="text-sky-400 font-black text-sm sm:text-base">
                   {activeLiveEvent.onlineUsersCount || 0}
                 </div>
                 <span className="text-[9px] text-slate-500 block">Live heartbeat</span>
               </div>
 
+              {/* Countdown Status Metric */}
+              <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+                <span className="text-[10px] text-slate-400 block uppercase">Countdown</span>
+                <div className={`font-black text-xs sm:text-sm ${countdownSec > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  {countdownText}
+                </div>
+                <span className="text-[9px] text-slate-500 block">
+                  {countdownSec > 0 ? 'Timer ticking' : 'Unlocked'}
+                </span>
+              </div>
+
               {/* Remaining Codes Metric */}
               <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
-                <span className="text-[10px] text-slate-400 block uppercase">Remaining Codes</span>
-                <div className="text-emerald-400 font-black text-base">
+                <span className="text-[10px] text-slate-400 block uppercase">Remaining</span>
+                <div className="text-emerald-400 font-black text-sm sm:text-base">
                   {activeLiveEvent.remainingCodesCount ?? 0}
                 </div>
                 <span className="text-[9px] text-slate-500 block">Stock left</span>
@@ -945,16 +965,25 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
               {/* Claimed Codes Metric */}
               <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
                 <span className="text-[10px] text-slate-400 block uppercase">Claimed Codes</span>
-                <div className="text-indigo-400 font-black text-base">
+                <div className="text-indigo-400 font-black text-sm sm:text-base">
                   {activeLiveEvent.claimedCount || 0} / {activeLiveEvent.totalCodesCount || activeLiveEvent.maxUses}
                 </div>
-                <span className="text-[9px] text-slate-500 block">Unique claimants</span>
+                <span className="text-[9px] text-slate-500 block">Unique claims</span>
+              </div>
+
+              {/* Screenshot Proofs Metric */}
+              <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+                <span className="text-[10px] text-slate-400 block uppercase">Proofs Uploaded</span>
+                <div className="text-pink-400 font-black text-sm sm:text-base">
+                  {activeLiveEvent.screenshotUploadsCount || 0}
+                </div>
+                <span className="text-[9px] text-slate-500 block">Shared screenshot</span>
               </div>
 
               {/* Claim Requests / Sec Metric */}
               <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1 col-span-2 sm:col-span-1">
                 <span className="text-[10px] text-slate-400 block uppercase">Requests / Sec</span>
-                <div className="text-rose-400 font-black text-base">
+                <div className="text-rose-400 font-black text-sm sm:text-base">
                   {activeLiveEvent.requestsPerSecond ?? 0} RPS
                 </div>
                 <span className="text-[9px] text-slate-500 block">5s moving avg</span>

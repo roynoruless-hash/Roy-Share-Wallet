@@ -1583,21 +1583,19 @@ Claim now and don't forget to share your screenshot!`;
       // Generate event ID and bot deep link
       const serverTime = Date.now();
       const eventId = `live_${serverTime}`;
-      const botLink = `https://t.me/${botUsername.replace(/^@/, '')}?start=redeem_${eventId}`;
+      const cleanBotName = botUsername.replace(/^@/, '') || 'Roy_wallett_bot';
+      const miniAppLink = `https://t.me/${cleanBotName}?startapp=live_event`;
 
-      // STEP 2: Broadcast Announcement Message ONLY (NEVER include redeem code)
+      // STEP 1: Broadcast Announcement Message ONLY (NEVER include redeem code)
       const broadcastText =
-        `━━━━━━━━━━━━━━\n\n` +
-        `🚨 <b>REDEEM EVENT STARTED!</b>\n\n` +
-        `🎁 <b>A new redeem event is now LIVE.</b>\n\n` +
-        `⏳ <b>The redeem code will unlock in 10 seconds.</b>\n\n` +
-        `⚡ <b>Open Roy Wallet Bot now and stay ready.</b>\n\n` +
-        `━━━━━━━━━━━━━━`;
+        `🚨 <b>REDEEM EVENT STARTED</b>\n\n` +
+        `⏳ <b>Code unlocks in 10 seconds.</b>\n\n` +
+        `👇 <b>Tap below to join the Live Event.</b>`;
 
       const options = {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🤖 Open Roy Wallet Bot', url: botLink }],
+            [{ text: '🤖 CLAIM NOW', url: miniAppLink }],
           ],
         },
       };
@@ -1965,6 +1963,8 @@ Claim now and don't forget to share your screenshot!`;
           userAlreadyClaimedCode,
           broadcastResult: data.broadcastResult || null,
           antiCheatLogs: (data.antiCheatLogs || []).slice(-20),
+          screenshotUploadsCount: data.screenshotUploadsCount || (data.screenshotUploads ? data.screenshotUploads.length : 0),
+          maskedCode: data.code ? `${data.code.substring(0, 3)}***${data.code.substring(Math.max(0, data.code.length - 2))}` : 'ROY***99',
           summaryStats,
         },
       });
@@ -2162,6 +2162,118 @@ Claim now and don't forget to share your screenshot!`;
       return res.json({ success: true, message: 'Live event ended successfully.' });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 4.5 Upload Redemption Screenshot Proof (Auto-posts to Telegram Proof Channel)
+  app.post('/api/live-event/upload-proof', async (req, res) => {
+    try {
+      const { userId, telegramId, userName, code, imageBase64 } = req.body;
+
+      if (!imageBase64) {
+        return res.status(400).json({ success: false, error: 'No image data provided.' });
+      }
+
+      const adminConfig = await getDecryptedConfig();
+      const botToken = adminConfig?.botToken || process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '';
+
+      // Determine proof channel target
+      const proofTargetRaw =
+        adminConfig?.proofChannelChatId ||
+        adminConfig?.proofChannelUsername ||
+        adminConfig?.mainChannelChatId ||
+        adminConfig?.mainChannelUsername ||
+        adminConfig?.mainGroupChatId ||
+        adminConfig?.adminTelegramId;
+
+      const proofTarget = formatTelegramTarget(proofTargetRaw);
+
+      const nowStr = new Date().toLocaleString('en-US', {
+        timeZone: 'Asia/Kolkata',
+        dateStyle: 'medium',
+        timeStyle: 'medium',
+      });
+
+      const userDisplay = userName || telegramId || userId || 'Anonymous User';
+      const tgIdDisplay = telegramId || userId || 'N/A';
+      const codeDisplay = code || 'ROY500';
+
+      const caption =
+        `📸 <b>New Redemption Proof</b>\n\n` +
+        `👤 <b>User:</b>\n${userDisplay}\n\n` +
+        `🆔 <b>Telegram ID:</b>\n${tgIdDisplay}\n\n` +
+        `🎁 <b>Code:</b>\n<code>${codeDisplay}</code>\n\n` +
+        `🕒 <b>Time:</b>\n${nowStr}`;
+
+      let telegramSent = false;
+
+      if (botToken && proofTarget) {
+        try {
+          const base64Clean = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+          const imageBuffer = Buffer.from(base64Clean, 'base64');
+          const blob = new Blob([imageBuffer], { type: 'image/png' });
+
+          const formData = new FormData();
+          formData.append('chat_id', proofTarget);
+          formData.append('photo', blob, 'proof.png');
+          formData.append('caption', caption);
+          formData.append('parse_mode', 'HTML');
+
+          const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+            method: 'POST',
+            body: formData,
+          });
+
+          const tgData = await tgRes.json();
+          if (tgData.ok) {
+            telegramSent = true;
+          } else {
+            console.warn('Telegram sendPhoto response:', tgData);
+          }
+        } catch (tgErr) {
+          console.error('Error posting screenshot to Telegram proof channel:', tgErr);
+        }
+      }
+
+      // Record proof in Firestore
+      let activeDocSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
+      if (!activeDocSnap.exists()) {
+        activeDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
+      }
+
+      if (activeDocSnap.exists()) {
+        const data = activeDocSnap.data() as any;
+        const currentProofs = data.screenshotUploads || [];
+        const newProofs = [
+          ...currentProofs,
+          {
+            userId: userId || telegramId,
+            telegramId,
+            userName: userDisplay,
+            code: codeDisplay,
+            timestamp: Date.now(),
+            telegramSent,
+          },
+        ];
+
+        const updatedCount = (data.screenshotUploadsCount || currentProofs.length) + 1;
+        const proofPayload = {
+          screenshotUploadsCount: updatedCount,
+          screenshotUploads: newProofs.slice(-100),
+        };
+
+        await setDoc(doc(db, 'liveRedeem', 'current'), proofPayload, { merge: true });
+        await setDoc(doc(db, 'liveRedeemEvents', 'active'), proofPayload, { merge: true });
+      }
+
+      return res.json({
+        success: true,
+        message: '✅ Screenshot Uploaded Successfully. Your proof has been submitted.',
+        telegramSent,
+      });
+    } catch (err: any) {
+      console.error('Error in upload-proof endpoint:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Failed to process screenshot upload.' });
     }
   });
 
