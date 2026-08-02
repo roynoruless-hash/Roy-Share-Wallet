@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   setDoc,
   addDoc,
@@ -158,6 +159,53 @@ export interface ChannelVerificationResult {
   statusMessage: string;
   error?: string;
   details?: any;
+  debugInfo: {
+    savedChatId: string;
+    savedUsername: string;
+    chatIdUsed: string;
+    apiUrl: string;
+    apiResponse: any;
+    errorReason: string;
+  };
+}
+
+/**
+  * Pure helper to resolve target Chat ID without wrongly forcing numeric IDs into usernames
+  */
+export function resolveTargetChatId(chatId?: string, username?: string, type?: string): string {
+  const rawChatId = (chatId || '').trim();
+  const rawUsername = (username || '').trim();
+
+  // 1. If chatId is provided, prioritize chatId directly!
+  if (rawChatId) {
+    // If it already starts with @ or -, return as is
+    if (rawChatId.startsWith('@') || rawChatId.startsWith('-')) {
+      return rawChatId;
+    }
+    // If it's numeric digits only
+    if (/^\d+$/.test(rawChatId)) {
+      if (rawChatId.startsWith('100')) {
+        return `-${rawChatId}`;
+      } else {
+        return `-100${rawChatId}`;
+      }
+    }
+    // If user typed e.g. "roy_official_channel" into chatId field
+    if (/^[a-zA-Z0-9_]+$/.test(rawChatId)) {
+      return `@${rawChatId}`;
+    }
+    return rawChatId;
+  }
+
+  // 2. Only if chatId is missing, use username
+  if (rawUsername) {
+    const cleanUser = rawUsername.replace(/^@/, '').trim();
+    if (cleanUser) {
+      return `@${cleanUser}`;
+    }
+  }
+
+  return '';
 }
 
 /**
@@ -167,6 +215,31 @@ export async function verifySingleChannelGroup(
   token: string,
   item: TelegramChannelItem
 ): Promise<ChannelVerificationResult> {
+  let savedChatId = item.chatId || '';
+  let savedUsername = item.username || '';
+
+  // Requirement 1: Read the latest saved Channel ID directly from Firestore (do not use cached values)
+  if (item.id && item.id !== 'temp') {
+    try {
+      const docRef = doc(db, CHANNELS_COLLECTION, item.id);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const fresh = docSnap.data();
+        savedChatId = fresh.chatId ?? savedChatId;
+        savedUsername = fresh.username ?? savedUsername;
+        item = {
+          ...item,
+          chatId: savedChatId,
+          username: savedUsername,
+          displayName: fresh.displayName || item.displayName,
+          type: fresh.type || item.type,
+        };
+      }
+    } catch (err) {
+      console.warn('[Telegram Verification] Failed to read fresh Firestore document:', err);
+    }
+  }
+
   const cleanToken = token.trim();
   if (!cleanToken) {
     return {
@@ -174,88 +247,149 @@ export async function verifySingleChannelGroup(
       status: 'Bot is not Admin',
       statusMessage: '❌ Bot Token Required',
       error: 'Bot Token is required for testing.',
+      debugInfo: {
+        savedChatId,
+        savedUsername,
+        chatIdUsed: 'N/A',
+        apiUrl: 'N/A',
+        apiResponse: null,
+        errorReason: 'Bot Token is empty or missing in Settings.',
+      },
     };
   }
 
-  const targetIdentifier = item.chatId?.trim() || formatTelegramUsername(item.username);
-  if (!targetIdentifier) {
+  // Requirement 6: Do not resolve chats using usernames if chatId is available
+  const cleanTarget = resolveTargetChatId(item.chatId, item.username, item.type);
+
+  if (!cleanTarget) {
     return {
       success: false,
       status: 'Invalid Chat ID',
       statusMessage: '❌ Invalid Chat ID',
       error: 'Channel/Group Username or Chat ID is missing.',
+      debugInfo: {
+        savedChatId,
+        savedUsername,
+        chatIdUsed: 'N/A',
+        apiUrl: 'N/A',
+        apiResponse: null,
+        errorReason: 'Neither Chat ID nor Username was provided.',
+      },
     };
   }
 
-  let cleanTarget = targetIdentifier.trim();
-  if (!cleanTarget.startsWith('@') && !cleanTarget.startsWith('-')) {
-    cleanTarget = `@${cleanTarget}`;
-  }
+  // Requirement 2: Log exact Chat ID being used for API request
+  console.log('[Telegram Verification] Saved Chat ID:', savedChatId);
+  console.log('[Telegram Verification] Saved Username:', savedUsername);
+  console.log('[Telegram Verification] Exact Chat ID used for API request:', cleanTarget);
+
+  const getChatUrl = `https://api.telegram.org/bot${cleanToken}/getChat?chat_id=${encodeURIComponent(cleanTarget)}`;
+  // Requirement 3: Log exact Bot API URL
+  console.log('[Telegram Verification] Exact Bot API URL:', getChatUrl);
 
   try {
-    // 1. Get Chat details
-    const getChatRes = await fetch(
-      `https://api.telegram.org/bot${cleanToken}/getChat?chat_id=${encodeURIComponent(cleanTarget)}`
-    );
+    // Requirement 4: Validate using getChat(chat_id)
+    const getChatRes = await fetch(getChatUrl);
     const getChatData = await getChatRes.json();
 
+    // Requirement 3: Log API response
+    console.log('[Telegram Verification] API Response:', JSON.stringify(getChatData));
+
     if (!getChatData.ok) {
-      const desc = (getChatData.description || '').toLowerCase();
-      if (desc.includes('not found') || desc.includes('chat not found')) {
-        return {
-          success: false,
-          status: 'Chat Not Found',
-          statusMessage: '❌ Chat Not Found',
-          error: `Telegram Chat Not Found: ${getChatData.description || 'Target chat not found or private.'}`,
-        };
-      } else if (desc.includes('invalid') || desc.includes('wrong') || desc.includes('format')) {
-        return {
-          success: false,
-          status: 'Invalid Chat ID',
-          statusMessage: '❌ Invalid Chat ID',
-          error: `Invalid Chat ID: ${getChatData.description}`,
-        };
+      const desc = getChatData.description || 'Target chat not found or private.';
+      const descLower = desc.toLowerCase();
+      let status: 'Chat Not Found' | 'Invalid Chat ID' | 'Bot is not Admin' = 'Chat Not Found';
+      let statusMsg = '❌ Chat Not Found';
+
+      if (descLower.includes('not found') || descLower.includes('chat not found')) {
+        status = 'Chat Not Found';
+        statusMsg = '❌ Chat Not Found';
+      } else if (descLower.includes('invalid') || descLower.includes('wrong') || descLower.includes('format')) {
+        status = 'Invalid Chat ID';
+        statusMsg = '❌ Invalid Chat ID';
       } else {
-        return {
-          success: false,
-          status: 'Chat Not Found',
-          statusMessage: `❌ Chat Not Found (${getChatData.description || 'Chat unavailable'})`,
-          error: getChatData.description,
-        };
+        status = 'Chat Not Found';
+        statusMsg = `❌ Chat Not Found (${desc})`;
       }
+
+      return {
+        success: false,
+        status,
+        statusMessage: statusMsg,
+        error: desc,
+        debugInfo: {
+          savedChatId,
+          savedUsername,
+          chatIdUsed: cleanTarget,
+          apiUrl: getChatUrl,
+          apiResponse: getChatData,
+          errorReason: desc,
+        },
+      };
     }
 
-    // 2. Check Bot Admin status via getChatMember
+    // Requirement 5: If getChat succeeds, check Bot Admin status via getChatMember
     const botMe = await testBotToken(cleanToken);
-    if (botMe.success && botMe.botId) {
-      const memberRes = await fetch(
-        `https://api.telegram.org/bot${cleanToken}/getChatMember?chat_id=${encodeURIComponent(cleanTarget)}&user_id=${botMe.botId}`
-      );
-      const memberData = await memberRes.json();
+    let botMemberResponse: any = null;
+    let botMemberUrl = 'N/A';
 
-      if (memberData.ok && memberData.result) {
-        const status = memberData.result.status;
-        if (status === 'administrator' || status === 'creator' || (item.type === 'group' && status === 'member')) {
+    if (botMe.success && botMe.botId) {
+      botMemberUrl = `https://api.telegram.org/bot${cleanToken}/getChatMember?chat_id=${encodeURIComponent(cleanTarget)}&user_id=${botMe.botId}`;
+      const memberRes = await fetch(botMemberUrl);
+      botMemberResponse = await memberRes.json();
+
+      console.log('[Telegram Verification] getChatMember URL:', botMemberUrl);
+      console.log('[Telegram Verification] getChatMember Response:', JSON.stringify(botMemberResponse));
+
+      if (botMemberResponse.ok && botMemberResponse.result) {
+        const memberStatus = botMemberResponse.result.status;
+        if (memberStatus === 'administrator' || memberStatus === 'creator' || (item.type === 'group' && memberStatus === 'member')) {
           return {
             success: true,
             status: 'Connected',
             statusMessage: '✅ Connected',
             details: getChatData.result,
+            debugInfo: {
+              savedChatId,
+              savedUsername,
+              chatIdUsed: cleanTarget,
+              apiUrl: getChatUrl,
+              apiResponse: { getChat: getChatData, getChatMember: botMemberResponse },
+              errorReason: 'None (Connected successfully)',
+            },
           };
         } else {
+          const errText = `Bot is in chat but status is "${memberStatus}". Please promote Bot to Admin in ${cleanTarget}.`;
           return {
             success: false,
             status: 'Bot is not Admin',
-            statusMessage: `❌ Bot is not Admin (Current Status: "${status}")`,
-            error: `Please promote Bot to Admin in ${cleanTarget}.`,
+            statusMessage: `❌ Bot is not Admin (Current Status: "${memberStatus}")`,
+            error: errText,
+            debugInfo: {
+              savedChatId,
+              savedUsername,
+              chatIdUsed: cleanTarget,
+              apiUrl: botMemberUrl,
+              apiResponse: { getChat: getChatData, getChatMember: botMemberResponse },
+              errorReason: errText,
+            },
           };
         }
       } else {
+        const errText = `Bot is not in ${cleanTarget}: ${botMemberResponse?.description || 'Add Bot to chat'}`;
         return {
           success: false,
           status: 'Bot is not Admin',
           statusMessage: '❌ Bot is not Admin',
-          error: `Bot is not in ${cleanTarget}: ${memberData.description || 'Add Bot to chat'}`,
+          error: errText,
+          debugInfo: {
+            savedChatId,
+            savedUsername,
+            chatIdUsed: cleanTarget,
+            apiUrl: botMemberUrl,
+            apiResponse: { getChat: getChatData, getChatMember: botMemberResponse },
+            errorReason: errText,
+          },
         };
       }
     }
@@ -265,13 +399,31 @@ export async function verifySingleChannelGroup(
       status: 'Connected',
       statusMessage: '✅ Connected',
       details: getChatData.result,
+      debugInfo: {
+        savedChatId,
+        savedUsername,
+        chatIdUsed: cleanTarget,
+        apiUrl: getChatUrl,
+        apiResponse: getChatData,
+        errorReason: 'None (Connected successfully)',
+      },
     };
   } catch (err: any) {
+    const errorMsg = err.message || 'Network error during API request.';
+    console.error('[Telegram Verification] Network Exception:', err);
     return {
       success: false,
       status: 'Invalid Chat ID',
-      statusMessage: `❌ Test Failed (${err.message || 'Network error'})`,
-      error: err.message || 'Network error during test.',
+      statusMessage: `❌ Test Failed (${errorMsg})`,
+      error: errorMsg,
+      debugInfo: {
+        savedChatId,
+        savedUsername,
+        chatIdUsed: cleanTarget,
+        apiUrl: getChatUrl,
+        apiResponse: { error: errorMsg },
+        errorReason: errorMsg,
+      },
     };
   }
 }

@@ -19,6 +19,7 @@ import {
   Check,
   X,
   Bot,
+  Bug,
 } from 'lucide-react';
 import { AdminConfig, TelegramChannelItem } from '../types';
 import {
@@ -26,6 +27,7 @@ import {
   saveTelegramChannel,
   deleteTelegramChannel,
   verifySingleChannelGroup,
+  resolveTargetChatId,
 } from '../services/channelService';
 import { formatTelegramUsername } from '../services/telegramService';
 
@@ -43,6 +45,10 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
   const [channels, setChannels] = useState<TelegramChannelItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [testingId, setTestingId] = useState<string | null>(null);
+
+  // Debug Details States
+  const [rowDebugInfos, setRowDebugInfos] = useState<Record<string, any>>({});
+  const [expandedDebugId, setExpandedDebugId] = useState<string | null>(null);
 
   // Modal / Form States
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -72,6 +78,7 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
     status: 'Connected' | 'Chat Not Found' | 'Bot is not Admin' | 'Invalid Chat ID' | 'Checking';
     message: string;
     error?: string;
+    debugInfo?: any;
   } | null>(null);
 
   useEffect(() => {
@@ -169,6 +176,67 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
     setIsModalOpen(true);
   };
 
+  // Render Debug Section UI
+  const renderDebugSection = (debugInfo: any) => {
+    if (!debugInfo) return null;
+    return (
+      <div className="mt-3 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono space-y-3 shadow-inner">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+          <span className="font-bold text-amber-400 flex items-center gap-1.5 font-sans text-xs">
+            <Bug className="w-4 h-4 text-amber-400" />
+            <span>🛠️ Telegram API Debug Logs</span>
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-sans text-[11px]">
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-0.5">
+            <span className="text-slate-400 block text-[10px] font-bold uppercase tracking-wider">Saved Chat ID</span>
+            <span className="text-sky-300 font-mono font-bold">{debugInfo.savedChatId || '(None / Empty)'}</span>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-0.5">
+            <span className="text-slate-400 block text-[10px] font-bold uppercase tracking-wider">Saved Username</span>
+            <span className="text-sky-300 font-mono font-bold">{debugInfo.savedUsername || '(None / Empty)'}</span>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-0.5">
+            <span className="text-slate-400 block text-[10px] font-bold uppercase tracking-wider">Chat ID Actually Used</span>
+            <span className="text-emerald-400 font-mono font-bold">{debugInfo.chatIdUsed || 'N/A'}</span>
+          </div>
+
+          <div className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-0.5">
+            <span className="text-slate-400 block text-[10px] font-bold uppercase tracking-wider">Error Reason</span>
+            <span className={`font-bold ${debugInfo.errorReason?.includes('None') ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {debugInfo.errorReason || 'N/A'}
+            </span>
+          </div>
+        </div>
+
+        {debugInfo.apiUrl && (
+          <div className="space-y-1">
+            <span className="text-slate-400 font-sans block text-[10px] font-bold uppercase tracking-wider">
+              Bot API URL Request
+            </span>
+            <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 font-mono text-[10px] text-slate-300 break-all select-all">
+              {debugInfo.apiUrl}
+            </div>
+          </div>
+        )}
+
+        {debugInfo.apiResponse && (
+          <div className="space-y-1">
+            <span className="text-slate-400 font-sans block text-[10px] font-bold uppercase tracking-wider">
+              API Response Payload
+            </span>
+            <pre className="p-3 rounded-xl bg-slate-900 border border-slate-800 font-mono text-[10px] text-sky-200 overflow-x-auto max-h-48 leading-relaxed select-all">
+              {JSON.stringify(debugInfo.apiResponse, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Test single destination connection (for table row button)
   const handleTestRowConnection = async (item: TelegramChannelItem) => {
     if (!config.botToken) {
@@ -193,6 +261,11 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
       setChannels(updatedList);
       if (onDestinationsUpdated) {
         onDestinationsUpdated(updatedList);
+      }
+
+      if (res.debugInfo) {
+        setRowDebugInfos((prev) => ({ ...prev, [item.id]: res.debugInfo }));
+        setExpandedDebugId(item.id);
       }
 
       // Update in Firestore
@@ -269,6 +342,7 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
       status: res.status,
       message: res.statusMessage,
       error: res.error,
+      debugInfo: res.debugInfo,
     });
 
     if (res.success) {
@@ -322,6 +396,7 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
           status: testRes.status,
           message: testRes.statusMessage,
           error: testRes.error,
+          debugInfo: testRes.debugInfo,
         });
 
         if (!testRes.success) {
@@ -470,7 +545,8 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
                   const cleanChat = item.chatId || cleanUser;
 
                   return (
-                    <tr key={item.id} className="hover:bg-slate-800/40 transition">
+                    <React.Fragment key={item.id}>
+                      <tr className="hover:bg-slate-800/40 transition">
                       {/* Type Badge */}
                       <td className="py-3 px-3 whitespace-nowrap">
                         <span
@@ -565,6 +641,20 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
                             <span>Test</span>
                           </button>
 
+                          {/* Debug Logs Toggle Button */}
+                          <button
+                            type="button"
+                            onClick={() => setExpandedDebugId(expandedDebugId === item.id ? null : item.id)}
+                            className={`p-1.5 rounded-lg border transition ${
+                              expandedDebugId === item.id
+                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-amber-300 border border-slate-700'
+                            }`}
+                            title="View Telegram API Debug Logs"
+                          >
+                            <Bug className="w-3.5 h-3.5" />
+                          </button>
+
                           {/* Edit Button */}
                           <button
                             type="button"
@@ -587,7 +677,26 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
                         </div>
                       </td>
                     </tr>
-                  );
+
+                    {/* Expandable Debug Section for Table Row */}
+                    {expandedDebugId === item.id && (
+                      <tr className="bg-slate-950/90">
+                        <td colSpan={6} className="p-4 border-b border-slate-800">
+                          {renderDebugSection(
+                            rowDebugInfos[item.id] || {
+                              savedChatId: item.chatId || '(Not tested in this session)',
+                              savedUsername: item.username || '(Not tested in this session)',
+                              chatIdUsed: resolveTargetChatId(item.chatId, item.username, item.type) || 'N/A',
+                              apiUrl: 'Click "Test" above to perform live API call and log URL',
+                              apiResponse: { status: item.status, verifyError: item.verifyError || 'Click Test button above' },
+                              errorReason: item.verifyError || (item.status === 'verified' ? 'None (Connected)' : 'Unverified'),
+                            }
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
                 })}
               </tbody>
             </table>
@@ -716,24 +825,29 @@ export const TelegramDestinationManager: React.FC<TelegramDestinationManagerProp
 
               {/* Test Connection Result Box inside Modal */}
               {modalTestStatus && (
-                <div
-                  className={`p-3.5 rounded-xl border text-xs font-medium space-y-1 ${
-                    modalTestStatus.success
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                      : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                  }`}
-                >
-                  <p className="font-bold flex items-center gap-1.5">
-                    {modalTestStatus.success ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                    ) : (
-                      <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                <div className="space-y-2">
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs font-medium space-y-1 ${
+                      modalTestStatus.success
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                        : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                    }`}
+                  >
+                    <p className="font-bold flex items-center gap-1.5">
+                      {modalTestStatus.success ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      ) : (
+                        <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      )}
+                      <span>{modalTestStatus.message}</span>
+                    </p>
+                    {modalTestStatus.error && (
+                      <p className="text-[11px] text-slate-300 pl-5">{modalTestStatus.error}</p>
                     )}
-                    <span>{modalTestStatus.message}</span>
-                  </p>
-                  {modalTestStatus.error && (
-                    <p className="text-[11px] text-slate-300 pl-5">{modalTestStatus.error}</p>
-                  )}
+                  </div>
+
+                  {/* Debug Details Section in Modal */}
+                  {modalTestStatus.debugInfo && renderDebugSection(modalTestStatus.debugInfo)}
                 </div>
               )}
 
