@@ -650,6 +650,17 @@ export async function processTelegramUpdate(token: string, update: any) {
     const chatId = String(cb.message?.chat?.id || cb.from?.id);
     const cbId = cb.id;
 
+    // COPY REDEEM CODE CALLBACK
+    if (data && data.startsWith('copy_code_')) {
+      const code = data.replace('copy_code_', '');
+      await sendTelegramApi(token, 'answerCallbackQuery', {
+        callback_query_id: cbId,
+        text: `📋 Code: ${code} (Copied!)`,
+        show_alert: true,
+      });
+      return;
+    }
+
     if (data === 'check_membership') {
       const existingUser = await getUserByTelegramId(chatId);
       const verifyRes = await verifyUserSmartJoin(token, chatId, existingUser);
@@ -1268,45 +1279,190 @@ export async function processTelegramUpdate(token: string, update: any) {
     console.log('PAYLOAD:', startParam || 'none');
 
     if (startParam) {
-      // 0. LIVE REDEEM EVENT FLOW
-      if (startParam.startsWith('live_event') || startParam.startsWith('live_redeem')) {
+      // 0. LIVE REDEEM EVENT FLOW V2
+      if (
+        startParam.startsWith('redeem_live') ||
+        startParam.startsWith('live_event') ||
+        startParam.startsWith('live_redeem') ||
+        startParam.startsWith('redeem_')
+      ) {
         try {
           const liveDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
-          let isEventActive = false;
+          let activeData: any = null;
           if (liveDocSnap.exists()) {
             const data = liveDocSnap.data() as any;
-            if (data.status === 'active' && Date.now() <= data.expiresAt && data.claimedCount < data.maxUses) {
-              isEventActive = true;
+            if (
+              data.status === 'active' &&
+              data.eventStatus !== 'ENDED' &&
+              Date.now() <= data.expiresAt &&
+              data.claimedCount < data.maxUses
+            ) {
+              activeData = data;
             }
           }
 
           const baseUrl = process.env.APP_BASE_URL || process.env.APP_URL || '';
           const liveAppUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/live-redeem` : '';
 
-          if (isEventActive) {
-            const inline_keyboard: any[][] = [];
-            if (liveAppUrl) {
-              inline_keyboard.push([{ text: '🎁 Open Live Redeem Screen', web_app: { url: liveAppUrl } }]);
-              inline_keyboard.push([{ text: '🌐 Open Web Browser', url: liveAppUrl }]);
-            }
-
+          if (!activeData) {
             await sendTelegramApi(token, 'sendMessage', {
               chat_id: chatId,
-              text: `🚨 <b>LIVE REDEEM EVENT IS ACTIVE!</b>\n\n` +
-                `⏳ Code unlocks in countdown.\n` +
-                `🤖 Tap below to open the Live Redeem Screen now and get ready:`,
-              parse_mode: 'HTML',
-              reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined,
-            });
-            return;
-          } else {
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text: `⌛ <b>This redeem event has ended.</b>\n\nNo active live redeem event right now. Please wait for our channel notification!`,
+              text:
+                `━━━━━━━━━━━━━━\n\n` +
+                `🎁 <b>Redeem Event</b>\n\n` +
+                `⌛ <b>This redeem event has ended.</b>\n\n` +
+                `No active live redeem event right now. Please wait for our channel notification!\n\n` +
+                `━━━━━━━━━━━━━━`,
               parse_mode: 'HTML',
             });
             return;
           }
+
+          const now = Date.now();
+          const unlockTime = activeData.unlockTime || activeData.unlocksAt || now;
+          let remainingSecs = Math.max(0, Math.ceil((unlockTime - now) / 1000));
+
+          // Check if user already claimed code
+          const claimedUsers = activeData.claimedUsers || {};
+          let userCode = claimedUsers[chatId]?.code;
+
+          // If code already assigned or countdown finished
+          if (userCode || remainingSecs <= 0) {
+            if (!userCode) {
+              const codesPool: string[] = activeData.codesPool || (activeData.code ? [activeData.code] : ['ROY500']);
+              const claimedCount = activeData.claimedCount || 0;
+              userCode = codesPool[claimedCount] || activeData.code || 'ROY500';
+
+              claimedUsers[chatId] = {
+                claimedAt: now,
+                code: userCode,
+                ip: 'telegram_bot',
+                phone: '',
+              };
+              const updatedCount = claimedCount + 1;
+              await setDoc(doc(db, 'liveRedeemEvents', 'active'), {
+                claimedCount: updatedCount,
+                claimedUsers,
+              }, { merge: true });
+            }
+
+            const inline_keyboard: any[][] = [
+              [{ text: '📋 Copy Code', callback_data: `copy_code_${userCode}` }],
+            ];
+            if (liveAppUrl) {
+              inline_keyboard.push([{ text: '🎁 Open Live Redeem Screen', web_app: { url: liveAppUrl } }]);
+            }
+
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text:
+                `━━━━━━━━━━━━━━\n\n` +
+                `🎉 <b>Code Unlocked!</b>\n\n` +
+                `<b>Your Redeem Code</b>\n\n` +
+                `<code>${userCode}</code>\n\n` +
+                `⏳ <b>Valid:</b>\n` +
+                `15 Minutes\n\n` +
+                `━━━━━━━━━━━━━━`,
+              parse_mode: 'HTML',
+              reply_markup: { inline_keyboard },
+            });
+            return;
+          }
+
+          // Step 3: Countdown Stage inside Telegram Chat
+          const inline_keyboard: any[][] = [];
+          if (liveAppUrl) {
+            inline_keyboard.push([{ text: '🎁 Open Live Redeem Screen', web_app: { url: liveAppUrl } }]);
+          }
+
+          const sendRes = await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text:
+              `━━━━━━━━━━━━━━\n\n` +
+              `🎁 <b>Redeem Event</b>\n\n` +
+              `⏳ <b>Code Unlocking...</b>\n\n` +
+              `<b>${remainingSecs}</b>\n\n` +
+              `━━━━━━━━━━━━━━`,
+            parse_mode: 'HTML',
+            reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined,
+          });
+
+          const msgId = sendRes?.result?.message_id;
+
+          // Asynchronously update countdown every second in Telegram chat until unlock
+          if (msgId && remainingSecs > 0) {
+            (async () => {
+              for (let sec = remainingSecs - 1; sec >= 0; sec--) {
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+
+                if (sec > 0) {
+                  await sendTelegramApi(token, 'editMessageText', {
+                    chat_id: chatId,
+                    message_id: msgId,
+                    text:
+                      `━━━━━━━━━━━━━━\n\n` +
+                      `🎁 <b>Redeem Event</b>\n\n` +
+                      `⏳ <b>Code Unlocking...</b>\n\n` +
+                      `<b>${sec}</b>\n\n` +
+                      `━━━━━━━━━━━━━━`,
+                    parse_mode: 'HTML',
+                    reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined,
+                  });
+                } else {
+                  // Step 4: Final Unlock step when countdown reaches 0
+                  const freshSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
+                  let finalCode = activeData.code || 'ROY500';
+                  if (freshSnap.exists()) {
+                    const freshData = freshSnap.data() as any;
+                    const freshClaimed = freshData.claimedUsers || {};
+                    if (freshClaimed[chatId]?.code) {
+                      finalCode = freshClaimed[chatId].code;
+                    } else {
+                      const codesPool: string[] = freshData.codesPool || (freshData.code ? [freshData.code] : ['ROY500']);
+                      const cCount = freshData.claimedCount || 0;
+                      finalCode = codesPool[cCount] || freshData.code || 'ROY500';
+                      freshClaimed[chatId] = {
+                        claimedAt: Date.now(),
+                        code: finalCode,
+                        ip: 'telegram_bot',
+                      };
+                      await setDoc(
+                        doc(db, 'liveRedeemEvents', 'active'),
+                        {
+                          claimedCount: cCount + 1,
+                          claimedUsers: freshClaimed,
+                        },
+                        { merge: true }
+                      );
+                    }
+                  }
+
+                  const unlockedKeyboard: any[][] = [
+                    [{ text: '📋 Copy Code', callback_data: `copy_code_${finalCode}` }],
+                  ];
+                  if (liveAppUrl) {
+                    unlockedKeyboard.push([{ text: '🎁 Open Live Redeem Screen', web_app: { url: liveAppUrl } }]);
+                  }
+
+                  await sendTelegramApi(token, 'editMessageText', {
+                    chat_id: chatId,
+                    message_id: msgId,
+                    text:
+                      `━━━━━━━━━━━━━━\n\n` +
+                      `🎉 <b>Code Unlocked!</b>\n\n` +
+                      `<b>Your Redeem Code</b>\n\n` +
+                      `<code>${finalCode}</code>\n\n` +
+                      `⏳ <b>Valid:</b>\n` +
+                      `15 Minutes\n\n` +
+                      `━━━━━━━━━━━━━━`,
+                    parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard: unlockedKeyboard },
+                  });
+                }
+              }
+            })().catch((err) => console.error('Error in live event countdown loop:', err));
+          }
+          return;
         } catch (err) {
           console.error('Error handling live_event payload in botHandler:', err);
         }
