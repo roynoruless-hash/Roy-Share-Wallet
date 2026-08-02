@@ -28,6 +28,7 @@ import { GiveawayWarView } from './components/GiveawayWarView';
 import { AIBroadcastView } from './components/AIBroadcastView';
 import { GiveawayWarPublicView } from './components/GiveawayWarPublicView';
 import { ContestRegistrationView } from './components/ContestRegistrationView';
+import { LiveRedeemView } from './components/LiveRedeemView';
 import { ComingSoonView } from './components/ComingSoonView';
 import { Toast, ToastMessage } from './components/Toast';
 import { Loader2 } from 'lucide-react';
@@ -470,6 +471,18 @@ export default function App() {
   const isFeedbackRoute = window.location.pathname.startsWith('/feedback');
   const isContestRegistrationRoute = window.location.pathname.startsWith('/register-contest');
   const isWarPublicRoute = window.location.pathname.startsWith('/war/') || window.location.pathname.startsWith('/war');
+  const urlParams = new URLSearchParams(window.location.search);
+  const isLiveRedeemRoute =
+    window.location.pathname.startsWith('/live-redeem') ||
+    window.location.pathname.startsWith('/live-event') ||
+    window.location.pathname.startsWith('/redeem') ||
+    urlParams.get('start') === 'live_event' ||
+    urlParams.get('startapp') === 'live_event' ||
+    urlParams.get('tgWebAppStartParam') === 'live_event';
+
+  if (isLiveRedeemRoute) {
+    return <LiveRedeemView botUsername={config.botUsername || 'Roy_wallett_bot'} />;
+  }
 
   if (isClaimRewardRoute) {
     return <ClaimRewardView botUsername={config.botUsername || 'RoyShareWalletBot'} />;

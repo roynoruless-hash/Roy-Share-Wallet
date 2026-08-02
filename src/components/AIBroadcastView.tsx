@@ -102,6 +102,74 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
   const [historyList, setHistoryList] = useState<AIBroadcastItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
+  // Live Redeem Event States
+  const [liveCodeInput, setLiveCodeInput] = useState('ROY500');
+  const [liveCountdownSec, setLiveCountdownSec] = useState(10);
+  const [liveMaxUses, setLiveMaxUses] = useState(100);
+  const [liveDurationMin, setLiveDurationMin] = useState(15);
+  const [isStartingLiveEvent, setIsStartingLiveEvent] = useState(false);
+  const [activeLiveEvent, setActiveLiveEvent] = useState<any>(null);
+
+  const fetchLiveEvent = async () => {
+    try {
+      const res = await fetch('/api/live-event/active');
+      const data = await res.json();
+      if (data.success && data.activeEvent) {
+        setActiveLiveEvent(data.activeEvent);
+      } else {
+        setActiveLiveEvent(null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch active live event:', err);
+    }
+  };
+
+  const handleStartLiveEvent = async () => {
+    if (!liveCodeInput.trim()) {
+      showToast('Please enter a Redeem Code for the Live Event', 'error');
+      return;
+    }
+
+    setIsStartingLiveEvent(true);
+    try {
+      const res = await fetch('/api/live-event/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: liveCodeInput.trim().toUpperCase(),
+          maxUses: liveMaxUses,
+          countdownSeconds: liveCountdownSec,
+          durationMinutes: liveDurationMin,
+          sendBroadcast: true,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🚀 Live Redeem Event Started & Broadcasted to Channel!', 'success');
+        fetchLiveEvent();
+      } else {
+        showToast(data.error || 'Failed to start live redeem event', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error starting live event', 'error');
+    } finally {
+      setIsStartingLiveEvent(false);
+    }
+  };
+
+  const handleEndLiveEvent = async () => {
+    try {
+      const res = await fetch('/api/live-event/end', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Live Redeem Event ended', 'info');
+        setActiveLiveEvent(null);
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error ending live event', 'error');
+    }
+  };
+
   // Fetch dynamic destinations from Firestore
   const fetchDestinations = async () => {
     setIsLoadingDestinations(true);
@@ -122,6 +190,10 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     fetchConfig();
     fetchHistory();
     fetchDestinations();
+    fetchLiveEvent();
+
+    const interval = setInterval(fetchLiveEvent, 4000);
+    return () => clearInterval(interval);
   }, []);
 
   // Update default message if code changes
@@ -914,6 +986,151 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
             ))}
           </div>
         </div>
+      </div>
+
+      {/* SECTION 2.5: Live Redeem Event Launcher */}
+      <div className="w-full max-w-full overflow-hidden p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-amber-950/20 to-slate-900 border border-amber-500/30 shadow-xl space-y-4 box-border">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold text-xs">
+              ⚡
+            </div>
+            <div>
+              <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                <Zap className="w-4 h-4 text-amber-400 animate-pulse" />
+                <span>Live Redeem Event System</span>
+              </h2>
+              <p className="text-[11px] text-slate-400">
+                Broadcasts start message to channel WITHOUT revealing code. Users claim inside bot after countdown.
+              </p>
+            </div>
+          </div>
+
+          {activeLiveEvent ? (
+            <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+              <span>LIVE EVENT ACTIVE</span>
+            </span>
+          ) : (
+            <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+              No Active Event
+            </span>
+          )}
+        </div>
+
+        {/* Live Active Event Monitor Box */}
+        {activeLiveEvent ? (
+          <div className="p-4 rounded-2xl bg-slate-950/90 border border-amber-500/40 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="space-y-1">
+                <span className="text-xs font-bold text-slate-400">Active Event Code:</span>
+                <code className="text-lg font-mono font-black text-amber-300 block">
+                  {activeLiveEvent.code || 'HIDDEN'}
+                </code>
+              </div>
+
+              <div className="flex items-center gap-4 text-xs font-mono">
+                <div>
+                  <span className="text-slate-400 block">Claims:</span>
+                  <span className="text-emerald-400 font-bold text-sm">
+                    {activeLiveEvent.claimedCount} / {activeLiveEvent.maxUses}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-slate-400 block">Countdown:</span>
+                  <span className="text-amber-400 font-bold text-sm">
+                    {activeLiveEvent.countdownSeconds}s
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleEndLiveEvent}
+                className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold transition ml-auto"
+              >
+                🛑 End Event Now
+              </button>
+            </div>
+
+            <div className="text-[11px] text-slate-400 border-t border-slate-800 pt-2 flex items-center justify-between">
+              <span>Status: {activeLiveEvent.isUnlocked ? '🟢 Unlocked & Claimable' : '🔒 Countdown Active'}</span>
+              <span>Auto Syncing with Server</span>
+            </div>
+          </div>
+        ) : (
+          /* Form to launch new event */
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Redeem Code</label>
+                <input
+                  type="text"
+                  value={liveCodeInput}
+                  onChange={(e) => setLiveCodeInput(e.target.value.toUpperCase())}
+                  placeholder="ROY500"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-300 text-xs sm:text-sm font-mono font-bold uppercase focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Countdown (Sec)</label>
+                <input
+                  type="number"
+                  value={liveCountdownSec}
+                  onChange={(e) => setLiveCountdownSec(Number(e.target.value))}
+                  placeholder="10"
+                  min={1}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono font-bold focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Total Stock</label>
+                <input
+                  type="number"
+                  value={liveMaxUses}
+                  onChange={(e) => setLiveMaxUses(Number(e.target.value))}
+                  placeholder="100"
+                  min={1}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono font-bold focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Expiry (Mins)</label>
+                <input
+                  type="number"
+                  value={liveDurationMin}
+                  onChange={(e) => setLiveDurationMin(Number(e.target.value))}
+                  placeholder="15"
+                  min={1}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono font-bold focus:outline-none focus:border-amber-500"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleStartLiveEvent}
+              disabled={isStartingLiveEvent}
+              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs sm:text-sm shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2 active:scale-98 disabled:opacity-50"
+            >
+              {isStartingLiveEvent ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Starting Event & Posting Channel Broadcast...</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4 text-slate-950" />
+                  <span>🚀 Start Live Redeem Event & Broadcast to Channel</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* SECTION 3: Generate AI Message */}

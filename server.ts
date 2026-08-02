@@ -1207,6 +1207,270 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
+  // ==========================================
+  // LIVE REDEEM EVENT SYSTEM ENDPOINTS
+  // ==========================================
+
+  // 1. Start Live Redeem Event
+  app.post('/api/live-event/start', async (req, res) => {
+    try {
+      const { code, maxUses = 100, countdownSeconds = 10, durationMinutes = 15, sendBroadcast = true, channelUsername } = req.body;
+
+      if (!code || !code.trim()) {
+        return res.status(400).json({ success: false, error: 'Redeem code is required to start live event.' });
+      }
+
+      const cleanCode = code.trim().toUpperCase();
+      const now = Date.now();
+      const numCountdown = Math.max(1, Number(countdownSeconds) || 10);
+      const numUses = Math.max(1, Number(maxUses) || 100);
+      const numDuration = Math.max(1, Number(durationMinutes) || 15);
+
+      const unlocksAt = now + (numCountdown * 1000);
+      const expiresAt = now + (numDuration * 60 * 1000);
+      const eventId = `live_${now}`;
+
+      const adminConfig = await getDecryptedConfig();
+      const botToken = adminConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+      const botUsername = adminConfig?.botUsername || 'Roy_wallett_bot';
+
+      const eventData = {
+        id: eventId,
+        code: cleanCode,
+        maxUses: numUses,
+        claimedCount: 0,
+        countdownSeconds: numCountdown,
+        unlocksAt,
+        expiresAt,
+        status: 'active',
+        createdAt: new Date(now).toISOString(),
+        claimedUsers: {},
+      };
+
+      // Store active live event in Firestore
+      await setDoc(doc(db, 'liveRedeemEvents', 'active'), eventData);
+      await setDoc(doc(db, 'liveRedeemEventsHistory', eventId), eventData);
+
+      let broadcastSent = false;
+      let broadcastError = '';
+
+      // Send Telegram Broadcast ONLY if requested
+      if (sendBroadcast && botToken) {
+        const rawChannel = channelUsername || adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername;
+        const cleanChannel = rawChannel ? rawChannel.replace(/^@/, '') : '';
+        const targetChat = cleanChannel ? `@${cleanChannel}` : (adminConfig?.adminTelegramId || adminConfig?.adminChatId);
+
+        if (targetChat) {
+          // Requirement: Broadcast text MUST NOT contain the redeem code!
+          const broadcastText =
+            `🚨 <b>Redeem Event Started!</b>\n\n` +
+            `⏳ <b>Code unlocks in ${numCountdown} seconds.</b>\n\n` +
+            `🤖 Open Roy Wallet Bot now and get ready.`;
+
+          const botLink = `https://t.me/${botUsername.replace(/^@/, '')}?start=live_event`;
+          const options = {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🎁 Open Roy Wallet Bot', url: botLink }],
+              ],
+            },
+          };
+
+          const tgRes = await sendTelegramMessage(botToken, targetChat, broadcastText, options);
+          if (tgRes && tgRes.ok) {
+            broadcastSent = true;
+          } else {
+            broadcastError = tgRes?.description || 'Failed to post broadcast to Telegram channel.';
+          }
+        } else {
+          broadcastError = 'No main channel or admin chat configured for broadcast.';
+        }
+      }
+
+      return res.json({
+        success: true,
+        event: {
+          id: eventData.id,
+          status: eventData.status,
+          unlocksAt: eventData.unlocksAt,
+          expiresAt: eventData.expiresAt,
+          maxUses: eventData.maxUses,
+          claimedCount: eventData.claimedCount,
+          countdownSeconds: eventData.countdownSeconds,
+        },
+        broadcastSent,
+        broadcastError,
+      });
+    } catch (err: any) {
+      console.error('Error starting live redeem event:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error starting live event' });
+    }
+  });
+
+  // 2. Get Active Live Event Status
+  app.get('/api/live-event/active', async (req, res) => {
+    try {
+      const activeDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
+      if (!activeDocSnap.exists()) {
+        return res.json({ success: true, activeEvent: null });
+      }
+
+      const data = activeDocSnap.data() as any;
+      const now = Date.now();
+
+      if (data.status !== 'active' || now > data.expiresAt || data.claimedCount >= data.maxUses) {
+        if (data.status === 'active') {
+          await setDoc(doc(db, 'liveRedeemEvents', 'active'), { status: 'ended' }, { merge: true });
+        }
+        return res.json({
+          success: true,
+          activeEvent: null,
+          message: now > data.expiresAt ? '⌛ This redeem event has ended.' : '❌ All redeem codes have already been claimed.',
+        });
+      }
+
+      const userKey = (req.query.userId || req.query.telegramId || '').toString().trim();
+      let userAlreadyClaimedCode = undefined;
+      if (userKey && data.claimedUsers && data.claimedUsers[userKey]) {
+        userAlreadyClaimedCode = data.claimedUsers[userKey].code;
+      }
+
+      const isUnlocked = now >= data.unlocksAt;
+
+      return res.json({
+        success: true,
+        activeEvent: {
+          id: data.id,
+          status: data.status,
+          unlocksAt: data.unlocksAt,
+          expiresAt: data.expiresAt,
+          maxUses: data.maxUses,
+          claimedCount: data.claimedCount,
+          countdownSeconds: data.countdownSeconds,
+          isUnlocked,
+          userAlreadyClaimedCode,
+        },
+      });
+    } catch (err: any) {
+      console.error('Error fetching active live event:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 3. Claim Live Redeem Event Code
+  app.post('/api/live-event/claim', async (req, res) => {
+    try {
+      const { userId, telegramId } = req.body;
+      const userKey = String(telegramId || userId || 'anon_user').trim();
+
+      if (!userKey) {
+        return res.status(400).json({ success: false, error: 'User identifier is required to claim code.' });
+      }
+
+      const activeDocRef = doc(db, 'liveRedeemEvents', 'active');
+      const activeDocSnap = await getDoc(activeDocRef);
+
+      if (!activeDocSnap.exists()) {
+        return res.status(400).json({ success: false, error: '⌛ This redeem event has ended.' });
+      }
+
+      const data = activeDocSnap.data() as any;
+      const now = Date.now();
+
+      if (data.status !== 'active' || now > data.expiresAt) {
+        if (data.status === 'active') {
+          await setDoc(activeDocRef, { status: 'ended' }, { merge: true });
+        }
+        return res.status(400).json({ success: false, error: '⌛ This redeem event has ended.' });
+      }
+
+      // Security: Countdown Check on Server
+      if (now < data.unlocksAt) {
+        return res.status(400).json({ success: false, error: '⏳ Code countdown has not finished yet!' });
+      }
+
+      // Stock Check
+      if (data.claimedCount >= data.maxUses) {
+        await setDoc(activeDocRef, { status: 'ended' }, { merge: true });
+        return res.status(400).json({ success: false, error: '❌ All redeem codes have already been claimed.' });
+      }
+
+      // User Duplicate Claim Check
+      const claimedUsers = data.claimedUsers || {};
+      if (claimedUsers[userKey]) {
+        return res.json({
+          success: true,
+          code: claimedUsers[userKey].code || data.code,
+          alreadyClaimed: true,
+          message: 'You have already claimed this redeem code!',
+        });
+      }
+
+      // Update Count and User Record
+      const updatedCount = (data.claimedCount || 0) + 1;
+      claimedUsers[userKey] = {
+        claimedAt: now,
+        code: data.code,
+      };
+
+      const isNowFull = updatedCount >= data.maxUses;
+      const updateData: any = {
+        claimedCount: updatedCount,
+        claimedUsers,
+        status: isNowFull ? 'ended' : 'active',
+      };
+
+      await setDoc(activeDocRef, updateData, { merge: true });
+      await setDoc(doc(db, 'liveRedeemEventsHistory', data.id), updateData, { merge: true });
+
+      return res.json({
+        success: true,
+        code: data.code,
+        claimedCount: updatedCount,
+        remainingCount: data.maxUses - updatedCount,
+      });
+    } catch (err: any) {
+      console.error('Error claiming live event code:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Server error claiming code' });
+    }
+  });
+
+  // 4. End Active Live Redeem Event (Admin Action)
+  app.post('/api/live-event/end', async (req, res) => {
+    try {
+      const activeDocRef = doc(db, 'liveRedeemEvents', 'active');
+      const snap = await getDoc(activeDocRef);
+
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        await setDoc(activeDocRef, { status: 'ended' }, { merge: true });
+        if (data.id) {
+          await setDoc(doc(db, 'liveRedeemEventsHistory', data.id), { status: 'ended' }, { merge: true });
+        }
+      }
+
+      return res.json({ success: true, message: 'Live event ended successfully.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 5. Get History of Live Redeem Events
+  app.get('/api/live-event/history', async (req, res) => {
+    try {
+      const colRef = collection(db, 'liveRedeemEventsHistory');
+      const snap = await getDocs(colRef);
+      const history: any[] = [];
+      snap.forEach((d) => {
+        history.push(d.data());
+      });
+      history.sort((a, b) => (b.unlocksAt || 0) - (a.unlocksAt || 0));
+      return res.json({ success: true, history: history.slice(0, 20) });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // 6. ANTI SELF-REFERRAL VERIFICATION ENDPOINTS
   app.get('/api/referral/token-info', async (req, res) => {
     try {

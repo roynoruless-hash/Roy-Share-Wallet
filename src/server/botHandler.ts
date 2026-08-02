@@ -1268,6 +1268,50 @@ export async function processTelegramUpdate(token: string, update: any) {
     console.log('PAYLOAD:', startParam || 'none');
 
     if (startParam) {
+      // 0. LIVE REDEEM EVENT FLOW
+      if (startParam.startsWith('live_event') || startParam.startsWith('live_redeem')) {
+        try {
+          const liveDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
+          let isEventActive = false;
+          if (liveDocSnap.exists()) {
+            const data = liveDocSnap.data() as any;
+            if (data.status === 'active' && Date.now() <= data.expiresAt && data.claimedCount < data.maxUses) {
+              isEventActive = true;
+            }
+          }
+
+          const baseUrl = process.env.APP_BASE_URL || process.env.APP_URL || '';
+          const liveAppUrl = baseUrl ? `${baseUrl.replace(/\/$/, '')}/live-redeem` : '';
+
+          if (isEventActive) {
+            const inline_keyboard: any[][] = [];
+            if (liveAppUrl) {
+              inline_keyboard.push([{ text: '🎁 Open Live Redeem Screen', web_app: { url: liveAppUrl } }]);
+              inline_keyboard.push([{ text: '🌐 Open Web Browser', url: liveAppUrl }]);
+            }
+
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: `🚨 <b>LIVE REDEEM EVENT IS ACTIVE!</b>\n\n` +
+                `⏳ Code unlocks in countdown.\n` +
+                `🤖 Tap below to open the Live Redeem Screen now and get ready:`,
+              parse_mode: 'HTML',
+              reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined,
+            });
+            return;
+          } else {
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: `⌛ <b>This redeem event has ended.</b>\n\nNo active live redeem event right now. Please wait for our channel notification!`,
+              parse_mode: 'HTML',
+            });
+            return;
+          }
+        } catch (err) {
+          console.error('Error handling live_event payload in botHandler:', err);
+        }
+      }
+
       // 1. VOTE FLOW
       if (startParam.startsWith('vote_')) {
         const vParts = startParam.split('_');
