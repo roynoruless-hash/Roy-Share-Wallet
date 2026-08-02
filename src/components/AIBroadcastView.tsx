@@ -137,6 +137,66 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
   const [historyList, setHistoryList] = useState<AIBroadcastItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
+  // Requirement 5 & 6: Telegram Connection Verification State
+  const [isTestingTgConnection, setIsTestingTgConnection] = useState(false);
+  const [tgConnectionStatus, setTgConnectionStatus] = useState<{
+    tested: boolean;
+    success: boolean;
+    failingStep?: string;
+    errorMessage?: string;
+    checks: Array<{ step: string; passed: boolean; message: string }>;
+    botUsername?: string;
+  }>({
+    tested: false,
+    success: false,
+    checks: [],
+  });
+
+  const handleTestTelegramConnection = async () => {
+    setIsTestingTgConnection(true);
+    try {
+      const res = await fetch('/api/ai-broadcast/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId: testTelegramId || config.adminTelegramId || config.adminChatId,
+          channelOrGroup: selectedTargetChat || channelOption || groupOption,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTgConnectionStatus({
+          tested: true,
+          success: true,
+          checks: data.checks || [],
+          botUsername: data.botInfo?.username,
+        });
+        showToast('✅ Telegram Connection Verified: All Checks Passed!', 'success');
+      } else {
+        setTgConnectionStatus({
+          tested: true,
+          success: false,
+          failingStep: data.failingStep,
+          errorMessage: data.error || 'Telegram connection check failed',
+          checks: data.checks || [],
+        });
+        showToast(data.error || 'Telegram connection test failed', 'error');
+      }
+    } catch (err: any) {
+      setTgConnectionStatus({
+        tested: true,
+        success: false,
+        errorMessage: err.message || 'Network error testing Telegram connection',
+        checks: [
+          { step: 'network', passed: false, message: `❌ Network Error: ${err.message}` },
+        ],
+      });
+      showToast('Network error testing Telegram connection', 'error');
+    } finally {
+      setIsTestingTgConnection(false);
+    }
+  };
+
   // Default target chat options from config
   const channelOption = config.mainChannelUsername ? `@${config.mainChannelUsername.replace(/^@/, '')}` : '';
   const groupOption = config.mainGroupUsername ? `@${config.mainGroupUsername.replace(/^@/, '')}` : '';
@@ -145,6 +205,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
   useEffect(() => {
     fetchConfig();
     fetchHistory();
+    handleTestTelegramConnection();
     if (channelOption) {
       setSelectedTargetChat(channelOption);
     } else if (groupOption) {
@@ -661,6 +722,96 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
             </p>
           )}
         </div>
+      </div>
+
+      {/* Requirement 5 & 6: Telegram Bot Connection Status & Verification Card */}
+      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-lg space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+              <Bot className="w-4.5 h-4.5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span>Telegram Bot Connection & Permissions</span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Using shared Telegram Bot instance ({tgConnectionStatus.botUsername ? `@${tgConnectionStatus.botUsername}` : config.botUsername ? `@${config.botUsername}` : 'Bot'})
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleTestTelegramConnection}
+            disabled={isTestingTgConnection}
+            className="px-4 py-2.5 rounded-xl text-xs font-bold bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 transition flex items-center gap-2 shrink-0 disabled:opacity-50"
+          >
+            {isTestingTgConnection ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+            )}
+            <span>Test Telegram Connection</span>
+          </button>
+        </div>
+
+        {/* Detailed Status Breakdown */}
+        {tgConnectionStatus.tested ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              {tgConnectionStatus.checks.map((check, idx) => (
+                <div
+                  key={idx}
+                  className={`p-3.5 rounded-xl border flex items-start gap-2.5 text-xs font-medium ${
+                    check.passed
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                      : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                  }`}
+                >
+                  {check.passed ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <XCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  )}
+                  <div>
+                    <p className="font-bold">{check.message}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {tgConnectionStatus.success ? (
+              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>✅ Bot Connected & Ready to Send Broadcast Messages</span>
+              </div>
+            ) : (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-300 space-y-1">
+                <p className="font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Failing Step: {tgConnectionStatus.failingStep || 'Connection Verification Failed'}</span>
+                </p>
+                <p className="text-slate-300 text-[11px] pl-6">{tgConnectionStatus.errorMessage}</p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
+            <div className="flex items-center gap-2">
+              <Info className="w-4 h-4 text-sky-400 shrink-0" />
+              <span>Verifying Bot Token, Chat ID, Channel/Group ID, and Send Message permissions...</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleTestTelegramConnection}
+              disabled={isTestingTgConnection}
+              className="text-xs text-sky-400 font-bold hover:underline shrink-0"
+            >
+              Test Now
+            </button>
+          </div>
+        )}
       </div>
 
       {/* STEP 2: Broadcast Type & Redeem Code Settings */}

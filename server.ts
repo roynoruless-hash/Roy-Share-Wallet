@@ -73,6 +73,25 @@ async function startServer() {
     }
   }
 
+  // Helper to load settings/config and decrypt sensitive fields
+  async function getDecryptedConfig(): Promise<any> {
+    try {
+      const configDoc = await getDoc(doc(db, 'settings', 'config'));
+      if (configDoc.exists()) {
+        const data = configDoc.data() || {};
+        return {
+          ...data,
+          botToken: decrypt(data.botToken || ''),
+          adminChatId: decrypt(data.adminChatId || ''),
+          adminMobileNumber: decrypt(data.adminMobileNumber || ''),
+        };
+      }
+    } catch (err) {
+      console.error('Error fetching decrypted config:', err);
+    }
+    return null;
+  }
+
   // 1. TELEGRAM WEBHOOK ENDPOINTS
   // Telegram sends updates here via POST
   const handleWebhook = async (req: express.Request, res: express.Response) => {
@@ -316,10 +335,9 @@ async function startServer() {
       console.log(`[War Notification] Event: ${type}`, JSON.stringify(payload));
 
       // Fetch Bot Token & Main Channel/Group from admin config in Firestore
-      const configDoc = await getDoc(doc(db, 'settings', 'adminConfig'));
-      const adminConfig = configDoc.exists() ? configDoc.data() : null;
-      const botToken = adminConfig?.botToken;
-      const targetChat = adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername || adminConfig?.adminTelegramId;
+      const adminConfig = await getDecryptedConfig();
+      const botToken = adminConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+      const targetChat = adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername || adminConfig?.adminTelegramId || adminConfig?.adminChatId;
 
       if (!botToken || !targetChat) {
         return res.json({ success: false, reason: 'No bot token or target chat configured for broadcasting' });
@@ -553,6 +571,237 @@ Return ONLY a strict JSON object with NO markdown wrapper:
     }
   });
 
+  // Test Telegram Connection (Bot Token, Chat ID, Channel/Group ID, Send Message Permission)
+  app.post('/api/ai-broadcast/test-connection', async (req, res) => {
+    try {
+      const config = await getDecryptedConfig();
+      const botToken = config?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+      const adminChatId = req.body?.chatId || config?.adminTelegramId || config?.adminChatId || '';
+      const channelOrGroup = req.body?.channelOrGroup || config?.mainChannelUsername || config?.mainGroupUsername || '';
+
+      const checks: Array<{ step: string; passed: boolean; message: string; details?: any }> = [];
+
+      // Check 1: Bot Token Verification
+      if (!botToken) {
+        checks.push({
+          step: 'bot_token',
+          passed: false,
+          message: '❌ Bot Token Missing: Telegram Bot Token is not configured in Telegram Settings.',
+        });
+        return res.status(400).json({
+          success: false,
+          failingStep: 'bot_token',
+          error: 'Telegram Bot Token is not configured in Telegram Settings.',
+          checks,
+        });
+      }
+
+      let botInfo: any = null;
+      try {
+        const getMeRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+        const getMeData = await getMeRes.json();
+        if (getMeData && getMeData.ok) {
+          botInfo = getMeData.result;
+          checks.push({
+            step: 'bot_token',
+            passed: true,
+            message: `✅ Bot Connected (@${botInfo.username || botInfo.first_name || 'Bot'})`,
+            details: { botUsername: botInfo.username, botName: botInfo.first_name, botId: botInfo.id },
+          });
+        } else {
+          checks.push({
+            step: 'bot_token',
+            passed: false,
+            message: `❌ Bot Token Invalid: ${getMeData?.description || 'Telegram API rejected token'}`,
+          });
+          return res.status(400).json({
+            success: false,
+            failingStep: 'bot_token',
+            error: `Bot Token Invalid: ${getMeData?.description || 'Telegram API rejected token'}`,
+            checks,
+          });
+        }
+      } catch (eErr: any) {
+        checks.push({
+          step: 'bot_token',
+          passed: false,
+          message: `❌ Bot Token Network Failure: ${eErr.message || 'Failed to reach api.telegram.org'}`,
+        });
+        return res.status(400).json({
+          success: false,
+          failingStep: 'bot_token',
+          error: `Network Failure: ${eErr.message}`,
+          checks,
+        });
+      }
+
+      // Check 2: Chat ID Verification
+      if (!adminChatId) {
+        checks.push({
+          step: 'chat_id',
+          passed: false,
+          message: '❌ Chat ID Missing: Admin Chat ID / Telegram ID is not configured.',
+        });
+        return res.status(400).json({
+          success: false,
+          failingStep: 'chat_id',
+          error: 'Admin Chat ID / Telegram ID is not configured in Telegram Settings.',
+          checks,
+        });
+      }
+
+      try {
+        const cleanChatId = String(adminChatId).startsWith('@') ? String(adminChatId) : String(adminChatId);
+        const getChatRes = await fetch(`https://api.telegram.org/bot${botToken}/getChat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: cleanChatId }),
+        });
+        const getChatData = await getChatRes.json();
+        if (getChatData && getChatData.ok) {
+          checks.push({
+            step: 'chat_id',
+            passed: true,
+            message: `✅ Chat ID Valid (${getChatData.result.username ? '@' + getChatData.result.username : getChatData.result.first_name || cleanChatId})`,
+            details: getChatData.result,
+          });
+        } else {
+          checks.push({
+            step: 'chat_id',
+            passed: false,
+            message: `❌ Chat ID Invalid: ${getChatData?.description || 'Bot cannot find Admin Chat ID. Ensure Admin has started bot.'}`,
+          });
+          return res.status(400).json({
+            success: false,
+            failingStep: 'chat_id',
+            error: `Chat ID Invalid: ${getChatData?.description || 'Ensure Admin has clicked /start on the bot'}`,
+            checks,
+          });
+        }
+      } catch (cErr: any) {
+        checks.push({
+          step: 'chat_id',
+          passed: false,
+          message: `❌ Chat ID Check Error: ${cErr.message}`,
+        });
+        return res.status(400).json({
+          success: false,
+          failingStep: 'chat_id',
+          error: `Chat ID Check Error: ${cErr.message}`,
+          checks,
+        });
+      }
+
+      // Check 3: Channel/Group ID Verification
+      if (channelOrGroup) {
+        try {
+          const cleanChannel = channelOrGroup.startsWith('@') ? channelOrGroup : `@${channelOrGroup.replace(/^https?:\/\/t\.me\//, '')}`;
+          const getChannelRes = await fetch(`https://api.telegram.org/bot${botToken}/getChat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: cleanChannel }),
+          });
+          const getChannelData = await getChannelRes.json();
+          if (getChannelData && getChannelData.ok) {
+            checks.push({
+              step: 'channel_group',
+              passed: true,
+              message: `✅ Channel/Group ID Valid (${getChannelData.result.title || cleanChannel})`,
+              details: getChannelData.result,
+            });
+          } else {
+            checks.push({
+              step: 'channel_group',
+              passed: false,
+              message: `❌ Channel/Group ID Invalid: ${getChannelData?.description || 'Bot is not an admin in channel/group or ID is invalid'}`,
+            });
+            return res.status(400).json({
+              success: false,
+              failingStep: 'channel_group',
+              error: `Channel/Group ID Invalid: ${getChannelData?.description || 'Ensure bot is added as admin to channel/group'}`,
+              checks,
+            });
+          }
+        } catch (cgErr: any) {
+          checks.push({
+            step: 'channel_group',
+            passed: false,
+            message: `❌ Channel/Group Check Error: ${cgErr.message}`,
+          });
+          return res.status(400).json({
+            success: false,
+            failingStep: 'channel_group',
+            error: `Channel/Group Check Error: ${cgErr.message}`,
+            checks,
+          });
+        }
+      } else {
+        checks.push({
+          step: 'channel_group',
+          passed: true,
+          message: `ℹ️ Channel/Group ID Not Set (Optional)`,
+        });
+      }
+
+      // Check 4: Send Message Permission
+      try {
+        const sendRes = await sendTelegramMessage(
+          botToken,
+          adminChatId,
+          `🤖 <b>Telegram Connection Verified</b>\n\nAll broadcast checks passed successfully!\n• Bot: @${botInfo?.username || 'Bot'}\n• Time: ${new Date().toLocaleTimeString()}`
+        );
+        if (sendRes && sendRes.ok) {
+          checks.push({
+            step: 'send_message',
+            passed: true,
+            message: '✅ Can Send Messages',
+            details: { messageId: sendRes.result?.message_id },
+          });
+        } else {
+          checks.push({
+            step: 'send_message',
+            passed: false,
+            message: `❌ Cannot Send Message: ${sendRes?.description || 'sendMessage API call failed'}`,
+          });
+          return res.status(400).json({
+            success: false,
+            failingStep: 'send_message',
+            error: `Cannot Send Message: ${sendRes?.description || 'sendMessage API call failed'}`,
+            checks,
+          });
+        }
+      } catch (sErr: any) {
+        checks.push({
+          step: 'send_message',
+          passed: false,
+          message: `❌ Send Message Error: ${sErr.message}`,
+        });
+        return res.status(400).json({
+          success: false,
+          failingStep: 'send_message',
+          error: `Send Message Error: ${sErr.message}`,
+          checks,
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: '✅ Telegram Connection Verified Successfully!',
+        botInfo: {
+          username: botInfo?.username,
+          first_name: botInfo?.first_name,
+        },
+        checks,
+      });
+    } catch (err: any) {
+      console.error('Error testing Telegram connection:', err);
+      return res.status(500).json({
+        success: false,
+        error: `Test Connection Error: ${err.message || 'Internal server error'}`,
+      });
+    }
+  });
+
   // Send AI Broadcast to Telegram (Supports Inline Buttons, Target Audience, Test Mode & Schedule)
   app.post('/api/ai-broadcast/send', async (req, res) => {
     try {
@@ -577,10 +826,9 @@ Return ONLY a strict JSON object with NO markdown wrapper:
         return res.status(400).json({ success: false, error: 'Broadcast message cannot be empty.' });
       }
 
-      // Fetch Bot Token and Channels from Admin Config
-      const configDoc = await getDoc(doc(db, 'settings', 'admin_config'));
-      const adminConfig = configDoc.exists() ? configDoc.data() : null;
-      const botToken = adminConfig?.botToken;
+      // Fetch Bot Token and Channels from Admin Config (dynamic reload without server restart)
+      const adminConfig = await getDecryptedConfig();
+      const botToken = adminConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
 
       if (!botToken) {
         return res.status(400).json({
@@ -607,7 +855,7 @@ Return ONLY a strict JSON object with NO markdown wrapper:
 
       // Handle Test Broadcast Mode
       if (isTestSend) {
-        const dest = testTelegramId || adminConfig?.adminTelegramId;
+        const dest = testTelegramId || adminConfig?.adminTelegramId || adminConfig?.adminChatId;
         if (!dest) {
           return res.status(400).json({
             success: false,
@@ -674,7 +922,7 @@ Return ONLY a strict JSON object with NO markdown wrapper:
       // Determine Target Destination for Live Broadcast
       let destinationChat = targetChat;
       if (!destinationChat) {
-        destinationChat = adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername || adminConfig?.adminTelegramId;
+        destinationChat = adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername || adminConfig?.adminTelegramId || adminConfig?.adminChatId;
       }
 
       if (!destinationChat) {
