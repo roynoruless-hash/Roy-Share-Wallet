@@ -63,12 +63,17 @@ export async function getActiveWarAndTeamByAlias(alias: string, specificWarId?: 
     let war: GiveawayWar | null = null;
     if (specificWarId) {
       war = await getGiveawayWarById(specificWarId);
+      if (!war && !specificWarId.startsWith('war_')) {
+        war = await getGiveawayWarById(`war_${specificWarId}`);
+      }
     }
     if (!war) {
-      const warsQuery = query(collection(db, WARS_COLLECTION), where('status', '==', 'live'), limit(1));
+      const warsQuery = query(collection(db, WARS_COLLECTION), orderBy('createdAt', 'desc'));
       const warsSnap = await getDocs(warsQuery);
       if (!warsSnap.empty) {
-        war = warsSnap.docs[0].data() as GiveawayWar;
+        const warsList = warsSnap.docs.map((d) => ({ ...(d.data() as GiveawayWar), id: d.id }));
+        const liveWar = warsList.find((w) => w.status === 'live');
+        war = liveWar || warsList[0];
       }
     }
     if (!war) return null;

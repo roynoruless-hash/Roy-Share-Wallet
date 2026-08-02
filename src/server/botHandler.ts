@@ -535,6 +535,22 @@ function logTelegramPayload(payload: string, detectedType: string, warId: string
   console.log(`========================================`);
 }
 
+function detectWarPayloadType(startParam: string): { type: 'TEAM_A' | 'TEAM_B' | 'WAR'; teamAlias: string } | null {
+  if (!startParam) return null;
+  const lower = startParam.toLowerCase().trim();
+
+  const isWar = lower.startsWith('teama') || lower.startsWith('teamb') || lower.startsWith('war_') || lower.includes('team');
+  if (!isWar) return null;
+
+  if (lower.includes('teamb') || lower.includes('team_b') || lower.includes('_b_')) {
+    return { type: 'TEAM_B', teamAlias: 'teamB' };
+  } else if (lower.includes('teama') || lower.includes('team_a') || lower.includes('_a_')) {
+    return { type: 'TEAM_A', teamAlias: 'teamA' };
+  } else {
+    return { type: 'WAR', teamAlias: 'teamA' };
+  }
+}
+
 interface ParsedWarParam {
   type: 'TEAM_A' | 'TEAM_B' | 'WAR';
   warId: string;
@@ -548,54 +564,39 @@ async function parseWarStartParam(startParam: string): Promise<ParsedWarParam | 
   const raw = startParam.trim();
   const lower = raw.toLowerCase();
 
-  let detectedType: 'TEAM_A' | 'TEAM_B' | 'WAR' | null = null;
-  let teamAlias = '';
+  const detected = detectWarPayloadType(raw);
+  if (!detected) return null;
 
-  if (lower.startsWith('teama_') || lower === 'teama') {
-    detectedType = 'TEAM_A';
-    teamAlias = 'teamA';
-  } else if (lower.startsWith('teamb_') || lower === 'teamb') {
-    detectedType = 'TEAM_B';
-    teamAlias = 'teamB';
-  } else if (lower.startsWith('war_') || lower.includes('team') || lower.startsWith('team')) {
-    detectedType = lower.includes('teamb') ? 'TEAM_B' : 'TEAM_A';
-    teamAlias = lower.includes('teamb') ? 'teamB' : 'teamA';
-  }
-
-  if (!detectedType) return null;
-
-  const parts = raw.split('_');
   let warId = '';
   let inviterTgId = '';
 
-  const tokens = [...parts];
-  if (tokens.length > 0 && (tokens[0].toLowerCase() === 'teama' || tokens[0].toLowerCase() === 'teamb')) {
-    tokens.shift();
+  const parts = raw.split('_');
+
+  if (lower.startsWith('teama_leader_') || lower.startsWith('teamb_leader_')) {
+    warId = parts[2] || '';
+    inviterTgId = parts[3] || '';
+  } else if (lower.startsWith('war_')) {
+    warId = parts[1] || '';
+    for (let i = 2; i < parts.length; i++) {
+      const p = parts[i].toLowerCase();
+      if ((p === 'ref' || p === 'lead') && parts[i + 1]) {
+        inviterTgId = parts[i + 1];
+      }
+    }
+  } else if (lower.startsWith('teama_war_') || lower.startsWith('teamb_war_')) {
+    warId = parts[2] || '';
+    inviterTgId = parts[3] || '';
+  } else if (lower.startsWith('teama_') || lower.startsWith('teamb_')) {
+    warId = parts[1] || '';
+    inviterTgId = parts[2] || '';
   }
 
-  if (tokens.length > 0 && (tokens[0].toLowerCase() === 'war' || tokens[0].toLowerCase() === 'leader' || tokens[0].toLowerCase() === 'team')) {
-    tokens.shift();
-  }
-
-  if (tokens.length > 0 && tokens[0]) {
-    warId = tokens[0];
-    tokens.shift();
-  }
-
-  if (tokens.length > 0 && (tokens[0].toLowerCase() === 'ref' || tokens[0].toLowerCase() === 'lead')) {
-    tokens.shift();
-  }
-
-  if (tokens.length > 0 && tokens[0]) {
-    inviterTgId = tokens[0];
-  }
-
-  const resolved = await getActiveWarAndTeamByAlias(teamAlias, warId);
+  const resolved = await getActiveWarAndTeamByAlias(detected.teamAlias, warId);
   if (!resolved) {
-    const fallback = await getActiveWarAndTeamByAlias(teamAlias);
+    const fallback = await getActiveWarAndTeamByAlias(detected.teamAlias);
     if (fallback) {
       return {
-        type: detectedType,
+        type: detected.type,
         warId: fallback.warId,
         teamId: fallback.teamId,
         teamName: fallback.teamName,
@@ -606,7 +607,7 @@ async function parseWarStartParam(startParam: string): Promise<ParsedWarParam | 
   }
 
   return {
-    type: detectedType,
+    type: detected.type,
     warId: resolved.warId,
     teamId: resolved.teamId,
     teamName: resolved.teamName,
@@ -1247,177 +1248,9 @@ export async function processTelegramUpdate(token: string, update: any) {
     return;
   }
 
-  // Pre-process: Parse referral, vote, or war parameters from /start command for unregistered users
-  if (!existingUser && (text === '/start' || text.startsWith('/start'))) {
-    let startParam = '';
-    const parts = text.split(/\s+/);
-    if (parts.length > 1 && parts[1]) {
-      startParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
-    } else {
-      const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
-      if (match && match[1] && match[1].toLowerCase() !== '/start') {
-        startParam = match[1].trim();
-      }
-    }
-
-    let referrerUid: string | undefined = undefined;
-    let pendingVote: { contestId: string; contestantId: string } | undefined = undefined;
-    let pendingWarJoin: { warId: string; teamId: string; inviterTgId?: string } | undefined = undefined;
-
-    if (startParam.startsWith('vote_')) {
-      const vParts = startParam.split('_');
-      if (vParts[1] && vParts[2]) {
-        pendingVote = { contestId: vParts[1], contestantId: vParts[2] };
-        logTelegramPayload(startParam, 'VOTE', 'none', chatId, 'Pending Vote Registration Initiated');
-      }
-    } else if (startParam) {
-      const warRes = await parseWarStartParam(startParam);
-      if (warRes) {
-        pendingWarJoin = { warId: warRes.warId, teamId: warRes.teamId, inviterTgId: warRes.inviterTgId };
-        logTelegramPayload(startParam, warRes.type, warRes.warId, chatId, 'Pending Team Join Registration Initiated');
-      } else {
-        const referrer = await getUserByUid(startParam);
-        if (referrer && String(referrer.telegramId) !== String(chatId)) {
-          referrerUid = String(referrer.uid);
-          logTelegramPayload(startParam, 'REFERRAL', 'none', chatId, 'Pending Referral Registration Initiated');
-        } else {
-          logTelegramPayload(startParam, 'UNKNOWN', 'none', chatId, 'Unrecognized Payload');
-        }
-      }
-    } else {
-      logTelegramPayload('none', 'NONE', 'none', chatId, 'Normal Welcome Flow');
-    }
-
-    const existingSess = userSessions.get(chatId);
-    const finalReferrerUid = referrerUid || existingSess?.referrerUid;
-    const finalPendingVote = pendingVote || existingSess?.pendingVote;
-    const finalPendingWarJoin = pendingWarJoin || existingSess?.pendingWarJoin;
-
-    userSessions.set(chatId, {
-      step: 'FORCE_JOIN',
-      referrerUid: finalReferrerUid,
-      pendingVote: finalPendingVote,
-      pendingWarJoin: finalPendingWarJoin,
-    });
-  }
-
-  // Check smart join verification status
-  const currentSess = userSessions.get(chatId);
-  const isOnboardingInput = currentSess && ['WAITING_NAME', 'WAITING_MOBILE', 'WAITING_CONTACT'].includes(currentSess.step);
-
-  if (!isOnboardingInput) {
-    const verifyRes = await verifyUserSmartJoin(token, chatId, existingUser);
-
-    if (!verifyRes.verified) {
-      // If verification failed:
-      // 1. Show the join message only once every 60 seconds.
-      // 2. During that time simply reply: "⚠️ Please complete the required join first."
-      const now = Date.now();
-      let lastSent = 0;
-      if (existingUser) {
-        lastSent = Number(existingUser.lastJoinMessageSentTime) || 0;
-      } else {
-        lastSent = Number(currentSess?.lastJoinMessageSentTime) || 0;
-      }
-
-      if (now - lastSent < 60 * 1000) {
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `⚠️ <b>Please complete the required join first.</b>`,
-          parse_mode: 'HTML',
-        });
-        return;
-      } else {
-        // Update lastSent time
-        if (existingUser) {
-          try {
-            await setDoc(doc(db, 'users', existingUser.id), {
-              lastJoinMessageSentTime: now,
-            }, { merge: true });
-          } catch (err) {
-            console.error('Failed to update user lastJoinMessageSentTime:', err);
-          }
-        } else {
-          let session = userSessions.get(chatId);
-          if (!session) {
-            session = { step: 'FORCE_JOIN' };
-            userSessions.set(chatId, session);
-          }
-          session.lastJoinMessageSentTime = now;
-        }
-
-        // Show smart force join keyboard containing only missing items
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: buildForceJoinText(verifyRes.missingItems, existingUser !== null),
-          parse_mode: 'HTML',
-          reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
-        });
-        return;
-      }
-    }
-
-    // If verification is successful:
-    // Check if they just transitioned from unverified to verified!
-    if (existingUser) {
-      const oldVersion = Number(existingUser.verificationVersion) || 0;
-      const adminConfig = await getAdminConfig();
-      const targetVersion = adminConfig?.verificationVersion || 1;
-
-      if (oldVersion < targetVersion) {
-        // Update the user's verification version so they are marked fully verified
-        try {
-          await setDoc(doc(db, 'users', existingUser.id), {
-            verificationVersion: targetVersion,
-            lastVerificationTime: new Date().toISOString(),
-          }, { merge: true });
-        } catch (err) {
-          console.error('Failed to update user verificationVersion on command transition:', err);
-        }
-
-        // Send success message
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `✅ <b>Verification Successful!</b>`,
-          parse_mode: 'HTML',
-        });
-      }
-    } else {
-      // Unregistered user is verified!
-      // If no session exists or they were at FORCE_JOIN, transition to WAITING_NAME
-      let session = userSessions.get(chatId);
-      if (!session || session.step === 'FORCE_JOIN') {
-        const finalReferrerUid = session?.referrerUid;
-        const finalPendingVote = session?.pendingVote;
-        const finalPendingWarJoin = session?.pendingWarJoin;
-        session = {
-          step: 'WAITING_NAME',
-          referrerUid: finalReferrerUid,
-          pendingVote: finalPendingVote,
-          pendingWarJoin: finalPendingWarJoin,
-          verifiedChannels: verifyRes.missingItems.length === 0 ? [] : undefined,
-        };
-        userSessions.set(chatId, session);
-
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `✅ <b>Verification Successful!</b>`,
-          parse_mode: 'HTML',
-        });
-
-        const welcomeSubtitle = finalPendingWarJoin
-          ? `⚔️ <b>Giveaway War Registration</b>\n\nLet's complete your registration to join your team.`
-          : `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration.`;
-
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `${welcomeSubtitle}\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
-          parse_mode: 'HTML',
-        });
-        return;
-      }
-    }
-  }
+  // Log incoming raw update and message text for debugging
+  console.log('RAW UPDATE:', JSON.stringify(update));
+  console.log('MESSAGE TEXT:', text);
 
   // A. COMMAND: /start
   if (text === '/start' || text.startsWith('/start')) {
@@ -1432,136 +1265,265 @@ export async function processTelegramUpdate(token: string, update: any) {
       }
     }
 
-    if (startParam.startsWith('vote_')) {
-      const voteParts = startParam.split('_');
-      const contestId = voteParts[1];
-      const contestantId = voteParts[2];
+    console.log('PAYLOAD:', startParam || 'none');
 
-      logTelegramPayload(startParam, 'VOTE', 'none', chatId, 'Vote Flow Initiated');
+    if (startParam) {
+      // 1. VOTE FLOW
+      if (startParam.startsWith('vote_')) {
+        const vParts = startParam.split('_');
+        const contestId = vParts[1];
+        const contestantId = vParts[2];
 
-      const contests = await getContests();
-      const contest = contests.find((c) => c.id === contestId);
-      const now = new Date();
+        console.log('PAYLOAD TYPE: VOTE');
+        console.log('WAR ID: none');
+        console.log('USER ID:', chatId);
+        console.log('JOIN SUCCESS: pending/executing');
+        logTelegramPayload(startParam, 'VOTE', 'none', chatId, 'Vote Flow Initiated');
 
-      if (!contest) {
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: '❌ <b>Contest not found.</b>',
-          parse_mode: 'HTML',
-        });
-        return;
-      }
+        const contests = await getContests();
+        const contest = contests.find((c) => c.id === contestId);
 
-      if (contest.status === 'completed' || contest.votingEndedProcessed) {
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: '🔒 <b>Voting Ended</b>\n\nVoting for this contest has concluded and voting links are now disabled.',
-          parse_mode: 'HTML',
-        });
-        return;
-      }
-
-      if (!contest.votingStarted) {
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: '⏳ <b>Voting Not Started</b>\n\nVoting for this contest has not been started yet by the administrator.',
-          parse_mode: 'HTML',
-        });
-        return;
-      }
-
-      if (existingUser) {
-        await sendContestantVoteCard(token, chatId, contestId, contestantId);
-        return;
-      } else {
-        const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
-        session.pendingVote = { contestId, contestantId };
-        userSessions.set(chatId, session);
-
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `👋 <b>Welcome to Roy Share Wallet!</b>\n\nTo complete your vote, please complete a quick registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
-          parse_mode: 'HTML',
-        });
-        return;
-      }
-    }
-
-    const warParam = await parseWarStartParam(startParam);
-
-    if (warParam) {
-      const { type, warId, teamId, inviterTgId } = warParam;
-      if (existingUser) {
-        const result = await joinWarTeam(
-          warId,
-          {
-            telegramId: String(chatId),
-            name: existingUser.firstName,
-            username: existingUser.username,
-          },
-          teamId,
-          { invitedByTelegramId: inviterTgId }
-        );
-
-        if (result.success && result.team) {
-          const botUsername = 'Roy_wallett_bot';
-          const isLeader = result.member?.isTeamLeader || String(result.team.leaderTelegramId) === String(chatId);
-          const actionText = isLeader ? 'Leader Created' : 'Team Joined';
-
-          logTelegramPayload(startParam, type, warId, chatId, actionText);
-
-          if (isLeader) {
-            const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${warId}_${chatId}`;
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
-                `You are now automatically assigned as the <b>👑 Official Team Leader</b> for <b>${result.team.name}</b>!\n\n` +
-                `🔗 <b>Your Personal Team Leader Invite Link:</b>\n` +
-                `<code>${leaderLink}</code>\n\n` +
-                `Share this link to recruit warriors directly to your team! Anyone joining through your link earns leadership bonus points for you!`,
-              parse_mode: 'HTML',
-            });
-          } else {
-            const myTeamRefLink = `https://t.me/${botUsername}?start=war_${warId}_team_${teamId}_ref_${chatId}`;
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
-                `You are now registered for <b>${result.team.name}</b> in Giveaway War!\n` +
-                `🔒 <b>Team Choice Locked.</b>\n\n` +
-                `🔗 <b>Your Unique Team Referral Link:</b>\n` +
-                `<code>${myTeamRefLink}</code>\n\n` +
-                `Share your referral link with friends! Anyone joining through your link automatically joins <b>${result.team.name}</b> and earns points for both you and your Team Leader!`,
-              parse_mode: 'HTML',
-            });
-          }
-        } else {
-          logTelegramPayload(startParam, type, warId, chatId, `Team Join Status: ${result.message}`);
+        if (!contest) {
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
-            text: `⚔️ <b>Giveaway War Team Status:</b>\n\n${result.message}`,
+            text: '❌ <b>Contest not found.</b>',
             parse_mode: 'HTML',
           });
+          return;
         }
-        return;
-      } else {
-        logTelegramPayload(startParam, type, warId, chatId, 'Pending Team Join Registration Initiated');
-        const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
-        session.pendingWarJoin = { warId, teamId, inviterTgId };
-        userSessions.set(chatId, session);
 
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `⚔️ <b>Welcome to Giveaway War!</b>\n\nTo join your team and unlock rewards, please complete a quick registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
-          parse_mode: 'HTML',
-        });
-        return;
+        if (contest.status === 'completed' || contest.votingEndedProcessed) {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: '🔒 <b>Voting Ended</b>\n\nVoting for this contest has concluded.',
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+
+        if (!contest.votingStarted) {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: '⏳ <b>Voting Not Started</b>\n\nVoting for this contest has not been started yet by admin.',
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+
+        if (existingUser) {
+          await sendContestantVoteCard(token, chatId, contestId, contestantId);
+          return;
+        } else {
+          const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
+          session.pendingVote = { contestId, contestantId };
+          userSessions.set(chatId, session);
+
+          const verifyRes = await verifyUserSmartJoin(token, chatId, null);
+          if (!verifyRes.verified) {
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: buildForceJoinText(verifyRes.missingItems, false),
+              parse_mode: 'HTML',
+              reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
+            });
+            return;
+          }
+
+          userSessions.set(chatId, { step: 'WAITING_NAME', pendingVote: { contestId, contestantId } });
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `👋 <b>Welcome to Roy Share Wallet!</b>\n\nTo complete your vote, please enter your details.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
       }
+
+      // 2. GIVEAWAY WAR FLOW
+      const warTypeDetected = detectWarPayloadType(startParam);
+      if (warTypeDetected) {
+        const warParam = await parseWarStartParam(startParam);
+
+        if (warParam) {
+          const { type, warId, teamId, teamName, inviterTgId } = warParam;
+          console.log('PAYLOAD TYPE:', type);
+          console.log('WAR ID:', warId);
+          console.log('USER ID:', chatId);
+
+          if (existingUser) {
+            const result = await joinWarTeam(
+              warId,
+              {
+                telegramId: String(chatId),
+                name: existingUser.firstName,
+                username: existingUser.username,
+              },
+              teamId,
+              { invitedByTelegramId: inviterTgId }
+            );
+
+            if (result.success && result.team) {
+              const botUsername = 'Roy_wallett_bot';
+              const isLeader = result.member?.isTeamLeader || String(result.team.leaderTelegramId) === String(chatId);
+              const actionText = isLeader ? 'Leader Created' : 'Team Joined';
+
+              console.log('JOIN SUCCESS: true');
+              logTelegramPayload(startParam, type, warId, chatId, actionText);
+
+              if (isLeader) {
+                const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${warId}_${chatId}`;
+                await sendTelegramApi(token, 'sendMessage', {
+                  chat_id: chatId,
+                  text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
+                    `You are now automatically assigned as the <b>👑 Official Team Leader</b> for <b>${result.team.name}</b>!\n\n` +
+                    `🔗 <b>Your Personal Team Leader Invite Link:</b>\n` +
+                    `<code>${leaderLink}</code>\n\n` +
+                    `Share this link to recruit warriors directly to your team! Anyone joining through your link earns leadership bonus points for you!`,
+                  parse_mode: 'HTML',
+                });
+              } else {
+                const myTeamRefLink = `https://t.me/${botUsername}?start=war_${warId}_team_${teamId}_ref_${chatId}`;
+                await sendTelegramApi(token, 'sendMessage', {
+                  chat_id: chatId,
+                  text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
+                    `You are now registered for <b>${result.team.name}</b> in Giveaway War!\n` +
+                    `🔒 <b>Team Choice Locked.</b>\n\n` +
+                    `🔗 <b>Your Unique Team Referral Link:</b>\n` +
+                    `<code>${myTeamRefLink}</code>\n\n` +
+                    `Share your referral link with friends! Anyone joining through your link automatically joins <b>${result.team.name}</b> and earns points for both you and your Team Leader!`,
+                  parse_mode: 'HTML',
+                });
+              }
+            } else {
+              console.log('JOIN SUCCESS: false');
+              logTelegramPayload(startParam, type, warId, chatId, `Team Join Status: ${result.message}`);
+              await sendTelegramApi(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `⚔️ <b>Giveaway War Team Status:</b>\n\n${result.message}`,
+                parse_mode: 'HTML',
+              });
+            }
+            return;
+          } else {
+            console.log('JOIN SUCCESS: pending_registration');
+            logTelegramPayload(startParam, type, warId, chatId, 'Pending Team Join Registration Initiated');
+
+            const pendingWarJoin = { warId, teamId, inviterTgId };
+            const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
+            session.pendingWarJoin = pendingWarJoin;
+            userSessions.set(chatId, session);
+
+            const verifyRes = await verifyUserSmartJoin(token, chatId, null);
+            if (!verifyRes.verified) {
+              await sendTelegramApi(token, 'sendMessage', {
+                chat_id: chatId,
+                text: buildForceJoinText(verifyRes.missingItems, false),
+                parse_mode: 'HTML',
+                reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
+              });
+              return;
+            }
+
+            userSessions.set(chatId, { step: 'WAITING_NAME', pendingWarJoin });
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: `⚔️ <b>Welcome to Giveaway War!</b>\n\nTo join <b>${teamName}</b> and unlock rewards, please complete a quick registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
+              parse_mode: 'HTML',
+            });
+            return;
+          }
+        } else {
+          console.log('PAYLOAD TYPE:', warTypeDetected.type);
+          console.log('WAR ID: none');
+          console.log('USER ID:', chatId);
+          console.log('JOIN SUCCESS: false');
+          logTelegramPayload(startParam, warTypeDetected.type, 'none', chatId, 'War Event Not Found or Inactive');
+
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `⚔️ <b>Giveaway War Event Not Found</b>\n\nUnable to find an active Giveaway War matching this link. Please check the link or contact admin.`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+      }
+
+      // 3. REFERRAL FLOW
+      const referrer = await getUserByUid(startParam);
+      if (referrer) {
+        console.log('PAYLOAD TYPE: REFERRAL');
+        console.log('WAR ID: none');
+        console.log('USER ID:', chatId);
+        console.log('JOIN SUCCESS: true');
+        logTelegramPayload(startParam, 'REFERRAL', 'none', chatId, 'Referral Flow Initiated');
+
+        if (existingUser) {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `👋 <b>Welcome back, ${existingUser.firstName}!</b>\n\n` +
+              `You are already registered in Roy Share Wallet.\n` +
+              `👛 <b>Wallet Balance:</b> ₹${existingUser.walletBalance || 0}`,
+            parse_mode: 'HTML',
+            reply_markup: {
+              keyboard: [
+                [{ text: '👛 Wallet' }, { text: '💸 Withdraw' }],
+                [{ text: '🎁 Refer & Earn' }, { text: '☎ Contact Us' }],
+              ],
+              resize_keyboard: true,
+            },
+          });
+          return;
+        } else {
+          const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
+          session.referrerUid = String(referrer.uid);
+          userSessions.set(chatId, session);
+
+          const verifyRes = await verifyUserSmartJoin(token, chatId, null);
+          if (!verifyRes.verified) {
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: buildForceJoinText(verifyRes.missingItems, false),
+              parse_mode: 'HTML',
+              reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
+            });
+            return;
+          }
+
+          userSessions.set(chatId, { step: 'WAITING_NAME', referrerUid: String(referrer.uid) });
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+      }
+
+      // 4. UNRECOGNIZED PAYLOAD
+      console.log('PAYLOAD TYPE: UNKNOWN');
+      console.log('WAR ID: none');
+      console.log('USER ID:', chatId);
+      console.log('JOIN SUCCESS: false');
+      logTelegramPayload(startParam, 'UNKNOWN', 'none', chatId, 'Unrecognized Payload');
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `⚠️ <b>Invalid or Expired Link</b>\n\nThe deep link you clicked is invalid or has expired.`,
+        parse_mode: 'HTML',
+      });
+      return;
     }
 
-    if (existingUser) {
-      // Requirement 1: If user exists in DB -> Open Main Menu
-      userSessions.delete(chatId);
+    // NO PAYLOAD - NORMAL WELCOME FLOW
+    console.log('PAYLOAD: none');
+    console.log('PAYLOAD TYPE: NONE');
+    console.log('WAR ID: none');
+    console.log('USER ID:', chatId);
+    console.log('JOIN SUCCESS: N/A');
+    logTelegramPayload('none', 'NONE', 'none', chatId, 'Normal Welcome Flow');
 
+    if (existingUser) {
+      userSessions.delete(chatId);
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
         text: `👋 <b>Welcome back, ${existingUser.firstName}!</b>\n\n` +
@@ -1578,70 +1540,26 @@ export async function processTelegramUpdate(token: string, update: any) {
         },
       });
       return;
-    }
-
-    // Parse referral parameter from command (e.g. /start 149595 or /start=149595)
-    let refParam = startParam;
-
-    let referrerUid: string | undefined = undefined;
-    if (refParam) {
-      const referrer = await getUserByUid(refParam);
-      if (referrer && String(referrer.telegramId) !== String(chatId)) {
-        referrerUid = String(referrer.uid);
+    } else {
+      const verifyRes = await verifyUserSmartJoin(token, chatId, null);
+      if (!verifyRes.verified) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: buildForceJoinText(verifyRes.missingItems, false),
+          parse_mode: 'HTML',
+          reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
+        });
+        return;
       }
-    }
 
-    // Load dynamic configuration from Firestore settings/config
-    const adminConfig = await getAdminConfig();
-    const forceJoinEnabled = adminConfig?.forceJoinEnabled !== false;
-
-    const existingSess = userSessions.get(chatId);
-    const finalReferrerUid = referrerUid || existingSess?.referrerUid;
-
-    if (!forceJoinEnabled) {
-      // Skip force join if disabled
-      userSessions.set(chatId, {
-        step: 'WAITING_NAME',
-        channelVerified: true,
-        groupVerified: true,
-        referrerUid: finalReferrerUid,
-      });
-
+      userSessions.set(chatId, { step: 'WAITING_NAME' });
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: '👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
+        text: `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
         parse_mode: 'HTML',
       });
       return;
     }
-
-    const activeItems = await getActiveChannelsAndGroups();
-
-    if (activeItems.length === 0) {
-      userSessions.set(chatId, {
-        step: 'WAITING_NAME',
-        channelVerified: true,
-        groupVerified: true,
-        referrerUid: finalReferrerUid,
-      });
-
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: '👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
-        parse_mode: 'HTML',
-      });
-      return;
-    }
-
-    userSessions.set(chatId, { step: 'FORCE_JOIN', referrerUid: finalReferrerUid });
-
-    await sendTelegramApi(token, 'sendMessage', {
-      chat_id: chatId,
-      text: buildForceJoinText(activeItems),
-      parse_mode: 'HTML',
-      reply_markup: buildForceJoinKeyboard(activeItems),
-    });
-    return;
   }
 
   // B. MAIN MENU BUTTON CLICK FOR EXISTING REGISTERED USERS
