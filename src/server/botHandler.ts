@@ -650,9 +650,9 @@ export async function processTelegramUpdate(token: string, update: any) {
     const chatId = String(cb.message?.chat?.id || cb.from?.id);
     const cbId = cb.id;
 
-    // COPY REDEEM CODE CALLBACK
-    if (data && data.startsWith('copy_code_')) {
-      const code = data.replace('copy_code_', '');
+    // COPY / CLAIM REDEEM CODE CALLBACK
+    if (data && (data.startsWith('copy_code_') || data.startsWith('claim_code_'))) {
+      const code = data.replace(/^(copy_code_|claim_code_)/, '');
       await sendTelegramApi(token, 'answerCallbackQuery', {
         callback_query_id: cbId,
         text: `📋 Code: ${code} (Copied!)`,
@@ -1347,7 +1347,10 @@ export async function processTelegramUpdate(token: string, update: any) {
             }
 
             const inline_keyboard: any[][] = [
-              [{ text: '📋 Copy Code', callback_data: `copy_code_${userCode}` }],
+              [
+                { text: '📋 Claim Now', callback_data: `claim_code_${userCode}` },
+                { text: '📋 Copy Code', callback_data: `copy_code_${userCode}` },
+              ],
             ];
             if (liveAppUrl) {
               inline_keyboard.push([{ text: '🎁 Open Live Redeem Screen', web_app: { url: liveAppUrl } }]);
@@ -1438,7 +1441,10 @@ export async function processTelegramUpdate(token: string, update: any) {
                   }
 
                   const unlockedKeyboard: any[][] = [
-                    [{ text: '📋 Copy Code', callback_data: `copy_code_${finalCode}` }],
+                    [
+                      { text: '📋 Claim Now', callback_data: `claim_code_${finalCode}` },
+                      { text: '📋 Copy Code', callback_data: `copy_code_${finalCode}` },
+                    ],
                   ];
                   if (liveAppUrl) {
                     unlockedKeyboard.push([{ text: '🎁 Open Live Redeem Screen', web_app: { url: liveAppUrl } }]);
