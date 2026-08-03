@@ -651,128 +651,44 @@ export async function processTelegramUpdate(token: string, update: any) {
     const cbId = cb.id;
 
     // COPY / CLAIM REDEEM CODE CALLBACK
-    if (data && (data === 'claim_event_code' || data === 'claim_live_code' || data.startsWith('claim_code_'))) {
+    if (data && (data === 'claim_event_code' || data === 'claim_live_code' || data.startsWith('claim_code_') || data.startsWith('copy_code_'))) {
       try {
         let liveDocSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
         if (!liveDocSnap.exists()) {
           liveDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
         }
 
-        if (!liveDocSnap.exists()) {
-          await sendTelegramApi(token, 'answerCallbackQuery', {
-            callback_query_id: cbId,
-            text: '⌛ This redeem event has ended.',
-            show_alert: true,
-          });
-          return;
-        }
-
-        const eventData = liveDocSnap.data() as any;
-        const now = Date.now();
-
-        const maxUses = Number(eventData.maxUses || eventData.totalCodesCount || 100);
-        const claimedUses = Number(eventData.claimedUses ?? eventData.claimedCount ?? 0);
-        const remainingUses = Number(eventData.remainingUses ?? Math.max(0, maxUses - claimedUses));
-        const isEnded = eventData.active === false || eventData.status === 'ended' || eventData.eventStatus === 'ENDED' || now > eventData.expiresAt || remainingUses <= 0;
-
-        const claimedUsers = eventData.claimedUsers || {};
-        let userCode = claimedUsers[chatId]?.code;
-
-        if (isEnded && !userCode) {
-          await sendTelegramApi(token, 'answerCallbackQuery', {
-            callback_query_id: cbId,
-            text: '❌ Redeem Event Ended or Out of Stock!',
-            show_alert: true,
-          });
-
-          if (cb.message?.message_id) {
-            await sendTelegramApi(token, 'editMessageText', {
-              chat_id: chatId,
-              message_id: cb.message.message_id,
-              text:
-                `━━━━━━━━━━━━━━\n\n` +
-                `🎁 <b>Redeem Event</b>\n\n` +
-                `⌛ <b>This redeem event has ended.</b>\n\n` +
-                `━━━━━━━━━━━━━━`,
-              parse_mode: 'HTML',
-            });
-          }
-          return;
-        }
-
-        if (!userCode) {
-          // Perform atomic claim
-          const codesPool: string[] = eventData.codesPool || (eventData.code ? [eventData.code] : ['ROY500']);
-          const newClaimedCount = claimedUses + 1;
-          const newRemaining = Math.max(0, maxUses - newClaimedCount);
-          userCode = codesPool[claimedUses] || codesPool[0] || eventData.code || 'ROY500';
-
-          claimedUsers[chatId] = {
-            claimedAt: now,
-            code: userCode,
-            ip: 'telegram_bot',
-          };
-
-          const isNowFull = newRemaining <= 0;
-          const updatePayload = {
-            active: !isNowFull,
-            claimedUses: newClaimedCount,
-            claimedCount: newClaimedCount,
-            remainingUses: newRemaining,
-            remainingCodesCount: newRemaining,
-            claimedUsers,
-            status: isNowFull ? 'ended' : 'active',
-            eventStatus: isNowFull ? 'ENDED' : 'LIVE',
-          };
-
-          await setDoc(doc(db, 'liveRedeem', 'current'), updatePayload, { merge: true });
-          await setDoc(doc(db, 'liveRedeemEvents', 'active'), updatePayload, { merge: true });
-        }
+        const adminConfig = await getAdminConfig();
+        const botUsername = adminConfig?.botUsername || 'Roy_wallett_bot';
+        const cleanBotName = botUsername.replace(/^@/, '');
+        const eventData = liveDocSnap.exists() ? liveDocSnap.data() as any : null;
+        const miniAppUrl = eventData?.miniAppUrl || eventData?.miniAppLink || `https://t.me/${cleanBotName}?startapp=live_event`;
 
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
-          text: '🎉 Code Claimed Successfully!',
-          show_alert: false,
+          text: '🎁 Please claim and view your code securely inside the Roy Wallet Mini App!',
+          show_alert: true,
         });
 
-        const inline_keyboard = [
-          [{ text: '📋 Copy Code', callback_data: `copy_code_${userCode}` }],
-        ];
-
         if (cb.message?.message_id) {
+          const inline_keyboard = [
+            [{ text: '🤖 Open Roy Wallet', web_app: { url: miniAppUrl } }],
+          ];
           await sendTelegramApi(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
             text:
-              `━━━━━━━━━━━━━━\n\n` +
-              `🎉 <b>Congratulations!</b>\n\n` +
-              `<b>Your Redeem Code:</b>\n\n` +
-              `<code>${userCode}</code>\n\n` +
-              `━━━━━━━━━━━━━━`,
+              `🎁 <b>Roy Wallet Live Redeem Event</b>\n\n` +
+              `Redeem codes are now securely managed inside the Roy Wallet Mini App to prevent bot scraping.\n\n` +
+              `Tap the button below to claim and view your code!`,
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard },
           });
         }
         return;
       } catch (err) {
-        console.error('Error handling claim code callback:', err);
-        await sendTelegramApi(token, 'answerCallbackQuery', {
-          callback_query_id: cbId,
-          text: 'Error processing claim.',
-          show_alert: true,
-        });
-        return;
+        console.error('Error in callback handler redirect:', err);
       }
-    }
-
-    if (data && data.startsWith('copy_code_')) {
-      const code = data.replace('copy_code_', '');
-      await sendTelegramApi(token, 'answerCallbackQuery', {
-        callback_query_id: cbId,
-        text: `📋 Code: ${code} (Copied!)`,
-        show_alert: true,
-      });
-      return;
     }
 
     if (data === 'check_membership') {
@@ -1392,110 +1308,142 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     console.log('PAYLOAD:', startParam || 'none');
 
-    if (startParam) {
-      // 0. LIVE REDEEM EVENT FLOW
-      if (
-        startParam === 'live' ||
-        startParam.startsWith('redeem_live') ||
-        startParam.startsWith('live_event') ||
-        startParam.startsWith('live_redeem') ||
-        startParam.startsWith('redeem_') ||
-        startParam.startsWith('live_')
-      ) {
-        try {
-          let liveDocSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
-          if (!liveDocSnap.exists()) {
-            liveDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
-          }
+    const isLivePayload = startParam && (
+      startParam === 'live' ||
+      startParam.startsWith('redeem_live') ||
+      startParam.startsWith('live_event') ||
+      startParam.startsWith('live_redeem') ||
+      startParam.startsWith('redeem_') ||
+      startParam.startsWith('live_')
+    );
 
-          let activeData: any = null;
-          if (liveDocSnap.exists()) {
-            const data = liveDocSnap.data() as any;
-            const now = Date.now();
-            const maxUses = Number(data.maxUses || data.totalCodesCount || 100);
-            const claimedUses = Number(data.claimedUses ?? data.claimedCount ?? 0);
-            const remainingUses = Number(data.remainingUses ?? Math.max(0, maxUses - claimedUses));
+    let shouldRunLiveEventFlow = isLivePayload;
+    let liveDocSnap: any = null;
 
-            const isExpired = now > data.expiresAt;
-            const isFull = remainingUses <= 0;
-            const isEnded = data.active === false || data.status === 'ended' || data.eventStatus === 'ENDED';
+    try {
+      liveDocSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
+      if (!liveDocSnap.exists()) {
+        liveDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
+      }
+    } catch (err) {
+      console.error('Error fetching live event document:', err);
+    }
 
-            if (!isExpired && !isFull && !isEnded) {
-              activeData = data;
-            }
-          }
+    const now = Date.now();
+    let liveEventState: 'IDLE' | 'WAITING_FOR_READY' | 'LIVE_COUNTDOWN' | 'UNLOCKED' | 'ENDED' = 'IDLE';
+    let activeData: any = null;
 
-          if (!activeData) {
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text:
-                `━━━━━━━━━━━━━━\n\n` +
-                `🎁 <b>Redeem Event</b>\n\n` +
-                `⌛ <b>This redeem event has ended.</b>\n\n` +
-                `No active live redeem event right now. Please wait for our channel notification!\n\n` +
-                `━━━━━━━━━━━━━━`,
-              parse_mode: 'HTML',
-            });
-            return;
-          }
+    if (liveDocSnap && liveDocSnap.exists()) {
+      activeData = liveDocSnap.data() as any;
+      const maxUses = Number(activeData.maxUses || activeData.totalCodesCount || 100);
+      const claimedUses = Number(activeData.claimedUses ?? activeData.claimedCount ?? 0);
+      const remainingUses = Math.max(0, maxUses - claimedUses);
+      const isExpired = now > activeData.expiresAt;
+      const isFull = remainingUses <= 0;
+      const isEnded = activeData.active === false || activeData.status === 'ended' || activeData.eventStatus === 'ENDED';
 
-          const now = Date.now();
+      if (isEnded || isExpired || isFull) {
+        liveEventState = 'ENDED';
+      } else if (activeData.eventStatus === 'WAITING_FOR_READY') {
+        liveEventState = 'WAITING_FOR_READY';
+      } else {
+        const unlockTime = activeData.unlockAt || activeData.unlockTime || activeData.unlocksAt || now;
+        if (now < unlockTime) {
+          liveEventState = 'LIVE_COUNTDOWN';
+        } else {
+          liveEventState = 'UNLOCKED';
+        }
+      }
+    }
+
+    if (!shouldRunLiveEventFlow && (!startParam || startParam === '')) {
+      if (liveEventState === 'WAITING_FOR_READY' || liveEventState === 'LIVE_COUNTDOWN' || liveEventState === 'UNLOCKED') {
+        shouldRunLiveEventFlow = true;
+      }
+    }
+
+    if (shouldRunLiveEventFlow) {
+      try {
+        const adminConfig = await getAdminConfig();
+        const botUsername = adminConfig?.botUsername || 'Roy_wallett_bot';
+        const cleanBotName = botUsername.replace(/^@/, '');
+        const miniAppUrl = activeData?.miniAppUrl || activeData?.miniAppLink || `https://t.me/${cleanBotName}?startapp=live_event`;
+
+        // 1. IDLE
+        if (liveEventState === 'IDLE') {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `No Live Event`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+
+        // 2. ENDED
+        if (liveEventState === 'ENDED') {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `Redeem Event Ended.`,
+            parse_mode: 'HTML',
+          });
+          return;
+        }
+
+        // 2.5 WAITING_FOR_READY (Waiting Room)
+        if (liveEventState === 'WAITING_FOR_READY') {
+          const inline_keyboard = [
+            [{ text: '⏳ Join Waiting Room', web_app: { url: miniAppUrl } }],
+          ];
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text:
+              `⏳ <b>Live Redeem Waiting Room</b>\n\n` +
+              `The event has been started, but is waiting for more participants to join before starting the countdown!\n\n` +
+              `<b>Ready participants:</b> ${activeData?.readyCount || 0} / ${activeData?.minReadyUsers || 0}\n\n` +
+              `Tap below to join the Waiting Room and press <b>"I'm Ready"</b>!`,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard },
+          });
+          return;
+        }
+
+        // Check if user already claimed
+        const claimedUsers = activeData?.claimedUsers || {};
+        const userCode = claimedUsers[chatId]?.code;
+        if (userCode) {
+          // Do NOT expose redeem code inside bot chat
+          const inline_keyboard = [
+            [{ text: '🤖 Open Roy Wallet', web_app: { url: miniAppUrl } }],
+          ];
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text:
+              `🎉 <b>Congratulations!</b>\n\n` +
+              `You have already claimed your redeem code!\n\n` +
+              `Tap below to open the Mini App and copy your code.`,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard },
+          });
+          return;
+        }
+
+        // 3. LIVE_COUNTDOWN
+        if (liveEventState === 'LIVE_COUNTDOWN') {
           const unlockTime = activeData.unlockAt || activeData.unlockTime || activeData.unlocksAt || now;
           let remainingSecs = Math.max(0, Math.ceil((unlockTime - now) / 1000));
 
-          // Check if user already claimed code
-          const claimedUsers = activeData.claimedUsers || {};
-          let userCode = claimedUsers[chatId]?.code;
+          const inline_keyboard = [
+            [{ text: '⏳ Open Waiting Room', web_app: { url: miniAppUrl } }],
+          ];
 
-          // 1. If user already claimed, display the code directly
-          if (userCode) {
-            const inline_keyboard = [
-              [{ text: '📋 Copy Code', callback_data: `copy_code_${userCode}` }],
-            ];
-
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text:
-                `━━━━━━━━━━━━━━\n\n` +
-                `🎉 <b>Congratulations!</b>\n\n` +
-                `<b>Your Redeem Code:</b>\n\n` +
-                `<code>${userCode}</code>\n\n` +
-                `━━━━━━━━━━━━━━`,
-              parse_mode: 'HTML',
-              reply_markup: { inline_keyboard },
-            });
-            return;
-          }
-
-          // 2. If countdown finished and user hasn't claimed yet
-          if (remainingSecs <= 0) {
-            const inline_keyboard = [
-              [{ text: '🎁 Claim Now', callback_data: 'claim_event_code' }],
-            ];
-
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text:
-                `━━━━━━━━━━━━━━\n\n` +
-                `🎉 <b>Code Unlocked!</b>\n\n` +
-                `Tap below to claim your code!\n\n` +
-                `━━━━━━━━━━━━━━`,
-              parse_mode: 'HTML',
-              reply_markup: { inline_keyboard },
-            });
-            return;
-          }
-
-          // 3. Live 10-Second Countdown Stage
           const sendRes = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
             text:
-              `━━━━━━━━━━━━━━\n\n` +
-              `🎁 <b>Redeem Event</b>\n\n` +
-              `⏳ <b>Code Unlocking...</b>\n\n` +
-              `<b>${remainingSecs}</b>\n\n` +
-              `━━━━━━━━━━━━━━`,
+              `🎁 <b>Live Redeem Event</b>\n\n` +
+              `Preparing Event...\n\n` +
+              `<b>${remainingSecs}</b>`,
             parse_mode: 'HTML',
+            reply_markup: { inline_keyboard },
           });
 
           const msgId = sendRes?.result?.message_id;
@@ -1505,42 +1453,90 @@ export async function processTelegramUpdate(token: string, update: any) {
               for (let sec = remainingSecs - 1; sec >= 0; sec--) {
                 await new Promise((resolve) => setTimeout(resolve, 1000));
 
-                if (sec > 0) {
-                  await sendTelegramApi(token, 'editMessageText', {
-                    chat_id: chatId,
-                    message_id: msgId,
-                    text:
-                      `━━━━━━━━━━━━━━\n\n` +
-                      `🎁 <b>Redeem Event</b>\n\n` +
-                      `⏳ <b>Code Unlocking...</b>\n\n` +
-                      `<b>${sec}</b>\n\n` +
-                      `━━━━━━━━━━━━━━`,
-                    parse_mode: 'HTML',
-                  });
-                } else {
-                  // Countdown hit 0 -> reveal Claim button
-                  await sendTelegramApi(token, 'editMessageText', {
-                    chat_id: chatId,
-                    message_id: msgId,
-                    text:
-                      `━━━━━━━━━━━━━━\n\n` +
-                      `🎉 <b>Code Unlocked!</b>\n\n` +
-                      `Tap below to claim your code!\n\n` +
-                      `━━━━━━━━━━━━━━`,
-                    parse_mode: 'HTML',
-                    reply_markup: {
-                      inline_keyboard: [[{ text: '🎁 Claim Now', callback_data: 'claim_event_code' }]],
-                    },
-                  });
+                // Check latest state inside loop
+                let loopSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
+                let loopData = loopSnap.exists() ? loopSnap.data() as any : null;
+                const loopNow = Date.now();
+                let currentLoopState: 'IDLE' | 'LIVE_COUNTDOWN' | 'UNLOCKED' | 'ENDED' = 'IDLE';
+
+                if (loopData) {
+                  const loopMax = Number(loopData.maxUses || loopData.totalCodesCount || 100);
+                  const loopClaimed = Number(loopData.claimedUses ?? loopData.claimedCount ?? 0);
+                  const loopRemaining = Math.max(0, loopMax - loopClaimed);
+                  if (loopData.active === false || loopData.status === 'ended' || loopData.eventStatus === 'ENDED' || loopNow > loopData.expiresAt || loopRemaining <= 0) {
+                    currentLoopState = 'ENDED';
+                  } else {
+                    const loopUnlock = loopData.unlockAt || loopData.unlockTime || loopData.unlocksAt || loopNow;
+                    if (loopNow < loopUnlock) {
+                      currentLoopState = 'LIVE_COUNTDOWN';
+                    } else {
+                      currentLoopState = 'UNLOCKED';
+                    }
+                  }
                 }
+
+                if (currentLoopState !== 'LIVE_COUNTDOWN') {
+                  if (currentLoopState === 'UNLOCKED') {
+                    const unlock_keyboard = [
+                      [{ text: '🎁 Claim Now', web_app: { url: miniAppUrl } }],
+                    ];
+                    await sendTelegramApi(token, 'editMessageText', {
+                      chat_id: chatId,
+                      message_id: msgId,
+                      text:
+                        `🔓 <b>Code Unlocked</b>\n\n` +
+                        `<code>Roy***99</code>`,
+                      parse_mode: 'HTML',
+                      reply_markup: { inline_keyboard: unlock_keyboard },
+                    });
+                  } else {
+                    await sendTelegramApi(token, 'editMessageText', {
+                      chat_id: chatId,
+                      message_id: msgId,
+                      text: `Redeem Event Ended.`,
+                      parse_mode: 'HTML',
+                    });
+                  }
+                  break;
+                }
+
+                await sendTelegramApi(token, 'editMessageText', {
+                  chat_id: chatId,
+                  message_id: msgId,
+                  text:
+                    `🎁 <b>Live Redeem Event</b>\n\n` +
+                    `Preparing Event...\n\n` +
+                    `<b>${sec}</b>`,
+                  parse_mode: 'HTML',
+                  reply_markup: { inline_keyboard },
+                });
               }
             })().catch((err) => console.error('Error in live event countdown loop:', err));
           }
           return;
-        } catch (err) {
-          console.error('Error handling live_event payload in botHandler:', err);
         }
+
+        // 4. UNLOCKED
+        if (liveEventState === 'UNLOCKED') {
+          const inline_keyboard = [
+            [{ text: '🎁 Claim Now', web_app: { url: miniAppUrl } }],
+          ];
+
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text:
+              `🔓 <b>Code Unlocked</b>\n\n` +
+              `<code>Roy***99</code>`,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard },
+          });
+          return;
+        }
+
+      } catch (err) {
+        console.error('Error in bot live event handler:', err);
       }
+    }
 
       // 1. VOTE FLOW
       if (startParam.startsWith('vote_')) {
@@ -1787,7 +1783,6 @@ export async function processTelegramUpdate(token: string, update: any) {
         parse_mode: 'HTML',
       });
       return;
-    }
 
     // NO PAYLOAD - NORMAL WELCOME FLOW
     console.log('PAYLOAD: none');

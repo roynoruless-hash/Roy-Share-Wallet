@@ -16,7 +16,7 @@ import { startContestScheduler } from './src/services/contestScheduler';
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const PORT = 3000;
 
   // Start background contest scheduler
   startContestScheduler();
@@ -38,8 +38,9 @@ async function startServer() {
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log('===================================================');
 
-  // Parse JSON payloads
-  app.use(express.json());
+  // Parse JSON payloads with increased limits for screenshot uploads
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
   // Global Request Logger Middleware
   app.use((req, res, next) => {
@@ -1545,6 +1546,7 @@ Claim now and don't forget to share your screenshot!`;
         sendToGroups = true,
         sendToUsers = false,
         selectedDestinations = [],
+        miniAppUrl, // Custom Mini App URL
       } = req.body;
 
       let codesPool: string[] = [];
@@ -1584,18 +1586,18 @@ Claim now and don't forget to share your screenshot!`;
       const serverTime = Date.now();
       const eventId = `live_${serverTime}`;
       const cleanBotName = botUsername.replace(/^@/, '') || 'Roy_wallett_bot';
-      const miniAppLink = `https://t.me/${cleanBotName}?startapp=live_event`;
+      const miniAppLink = (miniAppUrl && miniAppUrl.trim()) || `https://t.me/${cleanBotName}?startapp=live_event`;
 
       // STEP 1: Broadcast Announcement Message ONLY (NEVER include redeem code)
       const broadcastText =
-        `🚨 <b>REDEEM EVENT STARTED</b>\n\n` +
-        `⏳ <b>Code unlocks in 10 seconds.</b>\n\n` +
-        `👇 <b>Tap below to join the Live Event.</b>`;
+        `🚨 <b>Redeem Event Started!</b>\n\n` +
+        `⏳ <b>Code unlocks in ${numCountdown} seconds.</b>\n\n` +
+        `⚡ <b>Be ready.</b>`;
 
       const options = {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🤖 CLAIM NOW', url: miniAppLink }],
+            [{ text: '🤖 Open Roy Wallet', url: miniAppLink }],
           ],
         },
       };
@@ -1690,9 +1692,9 @@ Claim now and don't forget to share your screenshot!`;
         }
       }
 
-      // STEP 5: Set Firestore status. If minReadyUsers > 0, wait for ready first
-      const initialEventStatus = numMinReady > 0 ? 'WAITING_FOR_READY' : 'LIVE';
-      const unlockTime = initialEventStatus === 'LIVE' ? serverTime + (numCountdown * 1000) : serverTime + 999999;
+      // STEP 5: Set Firestore status based on state machine
+      const initialEventStatus = numMinReady > 0 ? 'WAITING_FOR_READY' : 'LIVE_COUNTDOWN';
+      const unlockTime = initialEventStatus === 'WAITING_FOR_READY' ? 0 : serverTime + (numCountdown * 1000);
       const expiresAt = serverTime + (numDuration * 60 * 1000);
 
       const eventData = {
@@ -1725,6 +1727,7 @@ Claim now and don't forget to share your screenshot!`;
         claimedUsers: {},
         antiCheatLogs: [],
         requestTimestamps: [],
+        miniAppUrl: miniAppLink,
         broadcastResult: {
           usersSent,
           channel: channelStatus,
@@ -1802,12 +1805,12 @@ Claim now and don't forget to share your screenshot!`;
       };
 
       const readyCount = Object.keys(readyUsers).length;
-      let newEventStatus = data.eventStatus || 'LIVE';
-      let unlockTime = data.unlockTime || data.unlocksAt;
+      let newEventStatus = data.eventStatus || 'WAITING_FOR_READY';
+      let unlockTime = data.unlockTime || data.unlocksAt || 0;
 
       // If waiting for ready users and threshold reached, start countdown now!
       if (data.eventStatus === 'WAITING_FOR_READY' && readyCount >= (data.minReadyUsers || 0)) {
-        newEventStatus = 'LIVE';
+        newEventStatus = 'LIVE_COUNTDOWN';
         unlockTime = Date.now() + (data.countdownSeconds || 10) * 1000;
       }
 
@@ -1901,19 +1904,17 @@ Claim now and don't forget to share your screenshot!`;
       const minReadyUsers = data.minReadyUsers || 0;
       const isUserReady = Boolean(userKey && readyUsers[userKey]);
 
-      let eventStatus = data.eventStatus || 'LIVE';
+      let eventStatus = data.eventStatus || 'LIVE_COUNTDOWN';
       let unlockTime = data.unlockAt || data.unlockTime || data.unlocksAt || now;
 
-      // Auto-unlock if WAITING_FOR_READY threshold met
-      if (eventStatus === 'WAITING_FOR_READY' && readyCount >= minReadyUsers) {
-        eventStatus = 'LIVE';
-        unlockTime = now + (data.countdownSeconds || 10) * 1000;
-        const unlockData = { eventStatus: 'LIVE', unlockTime, unlocksAt: unlockTime, unlockAt: unlockTime };
-        await setDoc(doc(db, 'liveRedeem', 'current'), unlockData, { merge: true });
-        await setDoc(doc(db, 'liveRedeemEvents', 'active'), unlockData, { merge: true });
+      // Auto-unlock if countdown threshold reached
+      if (eventStatus === 'LIVE_COUNTDOWN' && now >= unlockTime) {
+        eventStatus = 'UNLOCKED';
+        await setDoc(doc(db, 'liveRedeem', 'current'), { eventStatus: 'UNLOCKED' }, { merge: true });
+        await setDoc(doc(db, 'liveRedeemEvents', 'active'), { eventStatus: 'UNLOCKED' }, { merge: true });
       }
 
-      const isUnlocked = !isEnded && eventStatus === 'LIVE' && now >= unlockTime;
+      const isUnlocked = !isEnded && (eventStatus === 'UNLOCKED' || eventStatus === 'LIVE') && now >= unlockTime;
 
       // Compute total participants across online, ready, and claimed
       const allParticipants = new Set([

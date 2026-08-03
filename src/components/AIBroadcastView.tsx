@@ -140,6 +140,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
   const [liveSendToChannel, setLiveSendToChannel] = useState(true);
   const [liveSendToGroups, setLiveSendToGroups] = useState(true);
   const [liveSendToUsers, setLiveSendToUsers] = useState(false);
+  const [liveMiniAppUrl, setLiveMiniAppUrl] = useState('https://t.me/Roy_wallett_bot?startapp=live_event');
   const [isStartingLiveEvent, setIsStartingLiveEvent] = useState(false);
   const [activeLiveEvent, setActiveLiveEvent] = useState<any>(null);
   const [lastBroadcastSummary, setLastBroadcastSummary] = useState<any>(null);
@@ -208,6 +209,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
           sendToChannel: liveSendToChannel,
           sendToGroups: liveSendToGroups,
           sendToUsers: liveSendToUsers,
+          miniAppUrl: liveMiniAppUrl,
         }),
       });
       const data = await res.json();
@@ -1143,6 +1145,23 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                   className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono font-bold focus:outline-none focus:border-amber-500"
                 />
               </div>
+            </div>
+
+            {/* Custom Mini App Link Option */}
+            <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 space-y-1">
+              <label className="text-xs font-bold text-slate-300 block">
+                Mini App URL (Deep Link)
+              </label>
+              <input
+                type="text"
+                value={liveMiniAppUrl}
+                onChange={(e) => setLiveMiniAppUrl(e.target.value)}
+                placeholder="https://t.me/Roy_wallett_bot?startapp=live_event"
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-400 text-xs font-mono focus:outline-none focus:border-amber-500"
+              />
+              <span className="text-[10px] text-slate-400 font-mono block mt-1">
+                Enter your custom mini app link or leave default.
+              </span>
             </div>
 
             {/* Broadcast Destination Options */}
