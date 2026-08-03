@@ -83,6 +83,93 @@ async function startServer() {
     }
   }
 
+  // Helper to edit Telegram message text
+  async function editTelegramMessage(token: string, chatId: number | string, messageId: number | string, text: string, options: any = {}) {
+    try {
+      const payload: any = {
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: 'HTML',
+        ...options,
+      };
+      const response = await fetch(`https://api.telegram.org/editMessageText`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      return {
+        httpStatus: response.status,
+        ...data,
+      };
+    } catch (err: any) {
+      console.error('Error editing Telegram message:', err);
+      return {
+        httpStatus: 0,
+        ok: false,
+        error_code: 500,
+        description: err?.message || 'Network error connecting to Telegram API',
+      };
+    }
+  }
+
+  // Helper to handle transitioning the live event state to UNLOCKED and editing all broadcasted messages
+  async function performLiveEventUnlock(eventId: string, botToken: string) {
+    try {
+      // Fetch latest document
+      const currentDocRef = doc(db, 'liveRedeem', 'current');
+      const snap = await getDoc(currentDocRef);
+      if (!snap.exists()) return;
+      
+      const data = snap.data() as any;
+      if (data.eventId !== eventId) return; // different event
+      if (data.eventStatus === 'UNLOCKED' && data.unlockedBroadcast === true) {
+        return; // already unlocked and processed
+      }
+
+      console.log(`[LIVE REDEEM] Triggering unlock broadcast for event ${eventId}`);
+
+      const miniAppLink = data.miniAppUrl || `https://t.me/Roy_wallett_bot?startapp=live_event`;
+      const unlockedText =
+        `✅ <b>Code Unlocked</b>\n\n` +
+        `<b>Open Roy Wallet Bot to claim now.</b>`;
+
+      const unlockedOptions = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🤖 Open Roy Wallet Bot', url: miniAppLink }],
+          ],
+        },
+      };
+
+      const sentMessages = data.sentMessages || [];
+      for (const msg of sentMessages) {
+        if (msg.chatId && msg.messageId) {
+          try {
+            const editRes = await editTelegramMessage(botToken, msg.chatId, msg.messageId, unlockedText, unlockedOptions);
+            console.log(`[LIVE REDEEM] Edited message in chat ${msg.chatId}: ok = ${editRes.ok}`);
+          } catch (err) {
+            console.error(`[LIVE REDEEM] Failed to edit message in chat ${msg.chatId}:`, err);
+          }
+        }
+      }
+
+      // Update Firestore with UNLOCKED state and flag
+      const updatePayload = {
+        eventStatus: 'UNLOCKED',
+        unlockedBroadcast: true,
+      };
+
+      await setDoc(currentDocRef, updatePayload, { merge: true });
+      await setDoc(doc(db, 'liveRedeemEvents', 'active'), updatePayload, { merge: true });
+      await setDoc(doc(db, 'liveRedeemEventsHistory', eventId), updatePayload, { merge: true });
+
+    } catch (err) {
+      console.error('[LIVE REDEEM] Error in performLiveEventUnlock:', err);
+    }
+  }
+
   // Helper to strictly format Telegram destination targets (handles numeric Chat IDs vs usernames cleanly)
   function formatTelegramTarget(rawIdOrUser?: string): string {
     if (!rawIdOrUser) return '';
@@ -1590,14 +1677,15 @@ Claim now and don't forget to share your screenshot!`;
 
       // STEP 1: Broadcast Announcement Message ONLY (NEVER include redeem code)
       const broadcastText =
-        `🚨 <b>Redeem Event Started!</b>\n\n` +
-        `⏳ <b>Code unlocks in ${numCountdown} seconds.</b>\n\n` +
-        `⚡ <b>Be ready.</b>`;
+        `🔒 <b>Live Redeem Event Started</b>\n` +
+        `⏳ <b>Countdown Running</b>\n` +
+        `🎁 <b>Code Locked</b>\n\n` +
+        `👇 <b>Claim inside Roy Wallet</b>`;
 
       const options = {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '🤖 Open Roy Wallet', url: miniAppLink }],
+            [{ text: '🤖 Open Roy Wallet Bot', url: miniAppLink }],
           ],
         },
       };
@@ -1606,6 +1694,7 @@ Claim now and don't forget to share your screenshot!`;
       let usersSent = 0;
       let channelStatus = 'N/A';
       let groupsStatus = 'N/A';
+      const sentMessages: { chatId: string | number; messageId: number | string }[] = [];
 
       const allChannels = await getTelegramChannels();
       const processedTargets = new Set<string>();
@@ -1635,6 +1724,9 @@ Claim now and don't forget to share your screenshot!`;
         try {
           const cRes = await sendTelegramMessage(botToken, mainChan, broadcastText, options);
           channelStatus = cRes && cRes.ok ? 'Success' : (cRes?.description || 'Failed');
+          if (cRes && cRes.ok && cRes.result?.message_id) {
+            sentMessages.push({ chatId: mainChan, messageId: cRes.result.message_id });
+          }
         } catch (e: any) {
           channelStatus = e.message || 'Error';
         }
@@ -1645,6 +1737,9 @@ Claim now and don't forget to share your screenshot!`;
         try {
           const gRes = await sendTelegramMessage(botToken, mainGrp, broadcastText, options);
           groupsStatus = gRes && gRes.ok ? 'Success' : (gRes?.description || 'Failed');
+          if (gRes && gRes.ok && gRes.result?.message_id) {
+            sentMessages.push({ chatId: mainGrp, messageId: gRes.result.message_id });
+          }
         } catch (e: any) {
           groupsStatus = e.message || 'Error';
         }
@@ -1661,6 +1756,9 @@ Claim now and don't forget to share your screenshot!`;
               if (resObj && resObj.ok) {
                 if (dest.type === 'channel') channelStatus = 'Success';
                 if (dest.type === 'group') groupsStatus = 'Success';
+                if (resObj.result?.message_id) {
+                  sentMessages.push({ chatId: target, messageId: resObj.result.message_id });
+                }
               }
             } catch (err) {}
           }
@@ -1728,6 +1826,7 @@ Claim now and don't forget to share your screenshot!`;
         antiCheatLogs: [],
         requestTimestamps: [],
         miniAppUrl: miniAppLink,
+        sentMessages,
         broadcastResult: {
           usersSent,
           channel: channelStatus,
@@ -1739,6 +1838,17 @@ Claim now and don't forget to share your screenshot!`;
       await setDoc(doc(db, 'liveRedeem', 'current'), eventData);
       await setDoc(doc(db, 'liveRedeemEvents', 'active'), eventData);
       await setDoc(doc(db, 'liveRedeemEventsHistory', eventId), eventData);
+
+      // Start automatic setTimeout trigger if we are already in countdown mode
+      if (initialEventStatus === 'LIVE_COUNTDOWN') {
+        setTimeout(async () => {
+          try {
+            await performLiveEventUnlock(eventId, botToken);
+          } catch (e) {
+            console.error('Error in delayed performLiveEventUnlock:', e);
+          }
+        }, numCountdown * 1000);
+      }
 
       return res.json({
         success: true,
@@ -1812,6 +1922,18 @@ Claim now and don't forget to share your screenshot!`;
       if (data.eventStatus === 'WAITING_FOR_READY' && readyCount >= (data.minReadyUsers || 0)) {
         newEventStatus = 'LIVE_COUNTDOWN';
         unlockTime = Date.now() + (data.countdownSeconds || 10) * 1000;
+
+        const adminConfig = await getDecryptedConfig();
+        const botToken = adminConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+        const delaySeconds = data.countdownSeconds || 10;
+
+        setTimeout(async () => {
+          try {
+            await performLiveEventUnlock(data.eventId || data.id, botToken);
+          } catch (e) {
+            console.error('Error in delayed performLiveEventUnlock from ready transition:', e);
+          }
+        }, delaySeconds * 1000);
       }
 
       const updateData: any = {
@@ -1910,8 +2032,13 @@ Claim now and don't forget to share your screenshot!`;
       // Auto-unlock if countdown threshold reached
       if (eventStatus === 'LIVE_COUNTDOWN' && now >= unlockTime) {
         eventStatus = 'UNLOCKED';
-        await setDoc(doc(db, 'liveRedeem', 'current'), { eventStatus: 'UNLOCKED' }, { merge: true });
-        await setDoc(doc(db, 'liveRedeemEvents', 'active'), { eventStatus: 'UNLOCKED' }, { merge: true });
+        const adminConfig = await getDecryptedConfig();
+        const botToken = adminConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+        await performLiveEventUnlock(data.eventId || data.id, botToken);
+      } else if (eventStatus === 'UNLOCKED' && !data.unlockedBroadcast) {
+        const adminConfig = await getDecryptedConfig();
+        const botToken = adminConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+        await performLiveEventUnlock(data.eventId || data.id, botToken);
       }
 
       const isUnlocked = !isEnded && (eventStatus === 'UNLOCKED' || eventStatus === 'LIVE') && now >= unlockTime;
