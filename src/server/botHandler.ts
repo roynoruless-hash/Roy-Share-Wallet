@@ -412,115 +412,36 @@ async function verifyUserSmartJoin(
   const adminConfig = await getAdminConfig();
   const forceJoinEnabled = adminConfig?.forceJoinEnabled !== false;
 
-  if (!forceJoinEnabled) {
-    return { verified: true, missingItems: [] };
-  }
-
   const activeItems = await getActiveChannelsAndGroups();
   const requiredItems = activeItems.filter((i) => i.required !== false && i.active !== false);
 
-  if (requiredItems.length === 0) {
-    return { verified: true, missingItems: [] };
-  }
-
-  const targetVersion = adminConfig?.verificationVersion || 1;
-
-  // Fetch lists of already verified items
-  let verifiedChannels: string[] = [];
-  let verifiedGroups: string[] = [];
-  let userVersion = 0;
-
-  if (existingUser) {
-    verifiedChannels = Array.isArray(existingUser.verifiedChannels) ? existingUser.verifiedChannels : [];
-    verifiedGroups = Array.isArray(existingUser.verifiedGroups) ? existingUser.verifiedGroups : [];
-    userVersion = Number(existingUser.verificationVersion) || 0;
-  } else {
-    const session = userSessions.get(chatId);
-    if (session) {
-      verifiedChannels = Array.isArray(session.verifiedChannels) ? session.verifiedChannels : [];
-      verifiedGroups = Array.isArray(session.verifiedGroups) ? session.verifiedGroups : [];
-      userVersion = Number(session.verificationVersion) || 0;
-    }
-  }
-
-  // If user is already verified on the latest version, return verified: true
-  if (userVersion >= targetVersion) {
+  if (!forceJoinEnabled || requiredItems.length === 0) {
+    console.log(`[FORCE JOIN] Loaded Channels: ${activeItems.length}, Checking User: ${chatId}, Required Join Count: 0, Passed, Failed, Cache Cleared`);
     return { verified: true, missingItems: [] };
   }
 
   const missingItems: TelegramChannelGroupRecord[] = [];
-  let newlyVerifiedChannels = [...verifiedChannels];
-  let newlyVerifiedGroups = [...verifiedGroups];
-  let updated = false;
+  let passedCount = 0;
+  let failedCount = 0;
 
   for (const item of requiredItems) {
     const targetKey = item.chatId || item.username;
     if (!targetKey) continue;
 
-    const listToCheck = item.type === 'channel' ? verifiedChannels : verifiedGroups;
-    const isAlreadyVerified = listToCheck.includes(targetKey);
-
-    if (isAlreadyVerified) {
-      continue;
-    }
-
     const isMember = await checkChatMember(token, targetKey, chatId);
     if (isMember) {
-      if (item.type === 'channel') {
-        newlyVerifiedChannels.push(targetKey);
-      } else {
-        newlyVerifiedGroups.push(targetKey);
-      }
-      updated = true;
+      passedCount++;
     } else {
+      failedCount++;
       missingItems.push(item);
     }
   }
 
-  // Save updated verification cache
+  console.log(`[FORCE JOIN] Loaded Channels: ${activeItems.length}, Checking User: ${chatId}, Required Join Count: ${requiredItems.length}, Passed, Failed, Cache Cleared`);
+
   if (missingItems.length === 0) {
-    if (existingUser) {
-      try {
-        const userRef = doc(db, 'users', existingUser.id);
-        await setDoc(userRef, {
-          verifiedChannels: newlyVerifiedChannels,
-          verifiedGroups: newlyVerifiedGroups,
-          verificationVersion: targetVersion,
-          lastVerificationTime: new Date().toISOString(),
-        }, { merge: true });
-      } catch (err) {
-        console.error('Failed to update user verification in Firestore:', err);
-      }
-    } else {
-      const session = userSessions.get(chatId);
-      if (session) {
-        session.verifiedChannels = newlyVerifiedChannels;
-        session.verifiedGroups = newlyVerifiedGroups;
-        session.verificationVersion = targetVersion;
-        session.lastVerificationTime = new Date().toISOString();
-      }
-    }
     return { verified: true, missingItems: [] };
   } else {
-    if (updated) {
-      if (existingUser) {
-        try {
-          const userRef = doc(db, 'users', existingUser.id);
-          await setDoc(userRef, {
-            verifiedChannels: newlyVerifiedChannels,
-            verifiedGroups: newlyVerifiedGroups,
-          }, { merge: true });
-        } catch (err) {
-          console.error('Failed to update user partial verification in Firestore:', err);
-        }
-      } else {
-        const session = userSessions.get(chatId);
-        if (session) {
-          session.verifiedChannels = newlyVerifiedChannels;
-          session.verifiedGroups = newlyVerifiedGroups;
-        }
-      }
-    }
     return { verified: false, missingItems };
   }
 }
@@ -649,6 +570,27 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     const chatId = String(cb.message?.chat?.id || cb.from?.id);
     const cbId = cb.id;
+
+    // Enforce Required Join for all callbacks except check_membership and wdr_ admin actions
+    if (data && data !== 'check_membership' && !data.startsWith('wdr_')) {
+      const existingUser = await getUserByTelegramId(chatId);
+      const verifyRes = await verifyUserSmartJoin(token, chatId, existingUser);
+      if (!verifyRes.verified) {
+        await sendTelegramApi(token, 'answerCallbackQuery', {
+          callback_query_id: cbId,
+          text: '⚠️ Please join required channels/groups first!',
+          show_alert: true,
+        });
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: buildForceJoinText(verifyRes.missingItems, existingUser !== null),
+          parse_mode: 'HTML',
+          reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
+        });
+        return;
+      }
+    }
 
     // COPY / CLAIM REDEEM CODE CALLBACK
     if (data && (data === 'claim_event_code' || data === 'claim_live_code' || data.startsWith('claim_code_') || data.startsWith('copy_code_'))) {
@@ -1292,6 +1234,59 @@ export async function processTelegramUpdate(token: string, update: any) {
   // Log incoming raw update and message text for debugging
   console.log('[TELEGRAM WEBHOOK] Incoming RAW UPDATE:', JSON.stringify(update));
   console.log('[TELEGRAM WEBHOOK] Message Text:', text, 'Chat ID:', chatId);
+
+  // Enforce Required Join check for all messages except when completing the onboarding registration steps
+  const session = userSessions.get(chatId);
+  const isOnboardingMessage = session && 
+    (session.step === 'WAITING_NAME' || session.step === 'WAITING_MOBILE' || session.step === 'WAITING_CONTACT') &&
+    !text.startsWith('/') &&
+    !['👛 Wallet', '💸 Withdraw', '🎁 Refer & Earn', '☎ Contact Us', '🏆 Contests', '⚔️ Giveaway War'].includes(text);
+
+  if (!isOnboardingMessage) {
+    const verifyRes = await verifyUserSmartJoin(token, chatId, existingUser);
+    if (!verifyRes.verified) {
+      if (text.startsWith('/start')) {
+        let startParam = '';
+        const parts = text.split(/\s+/);
+        if (parts.length > 1 && parts[1]) {
+          startParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
+        } else {
+          const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
+          if (match && match[1] && match[1].toLowerCase() !== '/start') {
+            startParam = match[1].trim();
+          }
+        }
+
+        if (startParam) {
+          const sess = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
+          
+          if (startParam.startsWith('vote_')) {
+            const vParts = startParam.split('_');
+            sess.pendingVote = { contestId: vParts[1], contestantId: vParts[2] };
+          } else if (detectWarPayloadType(startParam)) {
+            const warParam = await parseWarStartParam(startParam);
+            if (warParam) {
+              sess.pendingWarJoin = { warId: warParam.warId, teamId: warParam.teamId, inviterTgId: warParam.inviterTgId };
+            }
+          } else {
+            const referrer = await getUserByUid(startParam);
+            if (referrer) {
+              sess.referrerUid = String(referrer.uid);
+            }
+          }
+          userSessions.set(chatId, sess);
+        }
+      }
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: buildForceJoinText(verifyRes.missingItems, existingUser !== null),
+        parse_mode: 'HTML',
+        reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
+      });
+      return;
+    }
+  }
 
   // A. COMMAND: /start
   if (text === '/start' || text.startsWith('/start')) {
@@ -2239,7 +2234,6 @@ export async function processTelegramUpdate(token: string, update: any) {
   }
 
   // C. ONBOARDING SESSION FLOW
-  const session = userSessions.get(chatId);
 
   // If no session exists and user is not registered, start onboarding
   if (!session && !existingUser) {
