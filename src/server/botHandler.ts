@@ -1290,8 +1290,8 @@ export async function processTelegramUpdate(token: string, update: any) {
   }
 
   // Log incoming raw update and message text for debugging
-  console.log('RAW UPDATE:', JSON.stringify(update));
-  console.log('MESSAGE TEXT:', text);
+  console.log('[TELEGRAM WEBHOOK] Incoming RAW UPDATE:', JSON.stringify(update));
+  console.log('[TELEGRAM WEBHOOK] Message Text:', text, 'Chat ID:', chatId);
 
   // A. COMMAND: /start
   if (text === '/start' || text.startsWith('/start')) {
@@ -1306,7 +1306,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       }
     }
 
-    console.log('PAYLOAD:', startParam || 'none');
+    console.log('[BOT START FLOW] User started bot. ChatId:', chatId, 'startParam:', startParam || 'none');
 
     const isLivePayload = startParam && (
       startParam === 'live' ||
@@ -1321,12 +1321,21 @@ export async function processTelegramUpdate(token: string, update: any) {
     let liveDocSnap: any = null;
 
     try {
+      console.log('[BOT START FLOW] Reading active live event from Firestore...');
       liveDocSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
-      if (!liveDocSnap.exists()) {
+      if (liveDocSnap && liveDocSnap.exists()) {
+        console.log('[BOT START FLOW] Active event found in liveRedeem/current');
+      } else {
+        console.log('[BOT START FLOW] No event in liveRedeem/current, checking liveRedeemEvents/active...');
         liveDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
+        if (liveDocSnap && liveDocSnap.exists()) {
+          console.log('[BOT START FLOW] Active event found in liveRedeemEvents/active');
+        } else {
+          console.log('[BOT START FLOW] No active live event found in either collection');
+        }
       }
     } catch (err) {
-      console.error('Error fetching live event document:', err);
+      console.error('[BOT START FLOW] Error fetching live event document:', err);
     }
 
     const now = Date.now();
@@ -1342,6 +1351,21 @@ export async function processTelegramUpdate(token: string, update: any) {
       const isFull = remainingUses <= 0;
       const isEnded = activeData.active === false || activeData.status === 'ended' || activeData.eventStatus === 'ENDED';
 
+      console.log('[BOT START FLOW] Active Event Details loaded:', {
+        eventId: activeData.eventId || activeData.id,
+        active: activeData.active,
+        status: activeData.status,
+        eventStatus: activeData.eventStatus,
+        maxUses,
+        claimedUses,
+        remainingUses,
+        isExpired,
+        isFull,
+        isEnded,
+        expiresAt: activeData.expiresAt,
+        now
+      });
+
       if (isEnded || isExpired || isFull) {
         liveEventState = 'ENDED';
       } else if (activeData.eventStatus === 'WAITING_FOR_READY') {
@@ -1354,13 +1378,19 @@ export async function processTelegramUpdate(token: string, update: any) {
           liveEventState = 'UNLOCKED';
         }
       }
+      console.log('[BOT START FLOW] Computed Live Event State:', liveEventState);
+    } else {
+      console.log('[BOT START FLOW] No active event data available, state defaults to IDLE');
     }
 
+    console.log('[BOT START FLOW] Pre-check shouldRunLiveEventFlow:', shouldRunLiveEventFlow);
     if (!shouldRunLiveEventFlow && (!startParam || startParam === '')) {
       if (liveEventState === 'WAITING_FOR_READY' || liveEventState === 'LIVE_COUNTDOWN' || liveEventState === 'UNLOCKED') {
         shouldRunLiveEventFlow = true;
+        console.log('[BOT START FLOW] Redirecting to live event flow because event is active and startParam is empty');
       }
     }
+    console.log('[BOT START FLOW] Final shouldRunLiveEventFlow decision:', shouldRunLiveEventFlow);
 
     if (shouldRunLiveEventFlow) {
       try {
@@ -1371,6 +1401,7 @@ export async function processTelegramUpdate(token: string, update: any) {
 
         // 1. IDLE
         if (liveEventState === 'IDLE') {
+          console.log('[BOT START FLOW] Sending response: "No Live Event" to chatId:', chatId);
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
             text: `No Live Event`,
@@ -1381,6 +1412,7 @@ export async function processTelegramUpdate(token: string, update: any) {
 
         // 2. ENDED
         if (liveEventState === 'ENDED') {
+          console.log('[BOT START FLOW] Sending response: "Redeem Event Ended" to chatId:', chatId);
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
             text: `Redeem Event Ended.`,
@@ -1391,6 +1423,7 @@ export async function processTelegramUpdate(token: string, update: any) {
 
         // 2.5 WAITING_FOR_READY (Waiting Room)
         if (liveEventState === 'WAITING_FOR_READY') {
+          console.log('[BOT START FLOW] Sending response: "Waiting Room" to chatId:', chatId);
           const inline_keyboard = [
             [{ text: '⏳ Join Waiting Room', web_app: { url: miniAppUrl } }],
           ];
@@ -1411,6 +1444,7 @@ export async function processTelegramUpdate(token: string, update: any) {
         const claimedUsers = activeData?.claimedUsers || {};
         const userCode = claimedUsers[chatId]?.code;
         if (userCode) {
+          console.log('[BOT START FLOW] Sending response: "Already Claimed" to chatId:', chatId);
           // Do NOT expose redeem code inside bot chat
           const inline_keyboard = [
             [{ text: '🤖 Open Roy Wallet', web_app: { url: miniAppUrl } }],
@@ -1431,6 +1465,7 @@ export async function processTelegramUpdate(token: string, update: any) {
         if (liveEventState === 'LIVE_COUNTDOWN') {
           const unlockTime = activeData.unlockAt || activeData.unlockTime || activeData.unlocksAt || now;
           let remainingSecs = Math.max(0, Math.ceil((unlockTime - now) / 1000));
+          console.log('[BOT START FLOW] Sending response: "LIVE_COUNTDOWN" to chatId:', chatId, 'remainingSecs:', remainingSecs);
 
           const inline_keyboard = [
             [{ text: '⏳ Open Waiting Room', web_app: { url: miniAppUrl } }],
@@ -1447,6 +1482,7 @@ export async function processTelegramUpdate(token: string, update: any) {
           });
 
           const msgId = sendRes?.result?.message_id;
+          console.log('[BOT START FLOW] Countdown message sent. Message ID:', msgId);
 
           if (msgId && remainingSecs > 0) {
             (async () => {
@@ -1518,6 +1554,7 @@ export async function processTelegramUpdate(token: string, update: any) {
 
         // 4. UNLOCKED
         if (liveEventState === 'UNLOCKED') {
+          console.log('[BOT START FLOW] Sending response: "UNLOCKED" to chatId:', chatId);
           const inline_keyboard = [
             [{ text: '🎁 Claim Now', web_app: { url: miniAppUrl } }],
           ];
@@ -1771,18 +1808,20 @@ export async function processTelegramUpdate(token: string, update: any) {
       }
 
       // 4. UNRECOGNIZED PAYLOAD
-      console.log('PAYLOAD TYPE: UNKNOWN');
-      console.log('WAR ID: none');
-      console.log('USER ID:', chatId);
-      console.log('JOIN SUCCESS: false');
-      logTelegramPayload(startParam, 'UNKNOWN', 'none', chatId, 'Unrecognized Payload');
+      if (startParam) {
+        console.log('PAYLOAD TYPE: UNKNOWN');
+        console.log('WAR ID: none');
+        console.log('USER ID:', chatId);
+        console.log('JOIN SUCCESS: false');
+        logTelegramPayload(startParam, 'UNKNOWN', 'none', chatId, 'Unrecognized Payload');
 
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `⚠️ <b>Invalid or Expired Link</b>\n\nThe deep link you clicked is invalid or has expired.`,
-        parse_mode: 'HTML',
-      });
-      return;
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `⚠️ <b>Invalid or Expired Link</b>\n\nThe deep link you clicked is invalid or has expired.`,
+          parse_mode: 'HTML',
+        });
+        return;
+      }
 
     // NO PAYLOAD - NORMAL WELCOME FLOW
     console.log('PAYLOAD: none');
