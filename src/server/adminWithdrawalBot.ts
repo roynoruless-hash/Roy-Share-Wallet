@@ -101,13 +101,20 @@ export async function sendAdminWithdrawalNotification(
     ? new Date(wData.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
     : new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
+  const requestedAmount = Number(wData.requestedAmount !== undefined ? wData.requestedAmount : wData.amount) || 0;
+  const feePercent = Number(wData.feePercent !== undefined ? wData.feePercent : 6);
+  const platformFee = Number(wData.platformFee !== undefined ? wData.platformFee : ((requestedAmount * feePercent) / 100).toFixed(2));
+  const payoutAmount = Number(wData.payoutAmount !== undefined ? wData.payoutAmount : (requestedAmount - platformFee).toFixed(2));
+
   const text =
     `💸 <b>New Withdrawal Request</b>\n\n` +
     `👤 <b>Name:</b> ${userData.firstName || userData.name || 'User'}\n` +
     `🆔 <b>UID:</b> <code>${userData.uid}</code>\n` +
     `📱 <b>Mobile:</b> <code>${userData.mobile || 'N/A'}</code>\n` +
-    `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n` +
-    `💸 <b>Withdrawal Amount:</b> ₹${wData.amount}\n` +
+    `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n\n` +
+    `💸 <b>Requested Amount:</b> ₹${requestedAmount}\n` +
+    `⚡ <b>Platform Fee (${feePercent}%):</b> ₹${platformFee}\n` +
+    `🎁 <b>Final Payout Amount:</b> ₹${payoutAmount}\n\n` +
     `🏦 <b>UPI ID:</b> ${methodDetail}\n` +
     `📅 <b>Request Time:</b> ${reqTime}\n` +
     `🆔 <b>Withdrawal ID:</b> <code>${wData.withdrawalId}</code>\n` +
@@ -260,14 +267,21 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
         ? new Date(wData.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
         : 'N/A';
 
+      const requestedAmount = Number(wData.requestedAmount !== undefined ? wData.requestedAmount : wData.amount) || 0;
+      const feePercent = Number(wData.feePercent !== undefined ? wData.feePercent : 6);
+      const platformFee = Number(wData.platformFee !== undefined ? wData.platformFee : ((requestedAmount * feePercent) / 100).toFixed(2));
+      const payoutAmount = Number(wData.payoutAmount !== undefined ? wData.payoutAmount : (requestedAmount - platformFee).toFixed(2));
+
       const approvedText =
         `🟢 <b>Approved</b>\n\n` +
         `💸 <b>Withdrawal Request Processed</b>\n\n` +
         `👤 <b>Name:</b> ${wData.userName || 'User'}\n` +
         `🆔 <b>UID:</b> <code>${wData.uid}</code>\n` +
         `📱 <b>Mobile:</b> <code>${wData.mobile || 'N/A'}</code>\n` +
-        `💰 <b>Wallet Balance:</b> ₹${freshUserBal}\n` +
-        `💸 <b>Withdrawal Amount:</b> ₹${wData.amount}\n` +
+        `💰 <b>Wallet Balance:</b> ₹${freshUserBal}\n\n` +
+        `💸 <b>Requested Amount:</b> ₹${requestedAmount}\n` +
+        `⚡ <b>Platform Fee (${feePercent}%):</b> ₹${platformFee}\n` +
+        `🎁 <b>Final Payout Amount:</b> ₹${payoutAmount}\n\n` +
         `🏦 <b>UPI ID:</b> ${methodDetail}\n` +
         `📅 <b>Request Time:</b> ${reqTime}\n` +
         `🆔 <b>Withdrawal ID:</b> <code>${wData.withdrawalId}</code>\n` +
@@ -467,13 +481,20 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
         methodDetail = `Redeem Code (${wData.redeemCodeDetails || 'N/A'})`;
       }
 
+      const requestedAmount = Number(wData.requestedAmount !== undefined ? wData.requestedAmount : wData.amount) || 0;
+      const feePercent = Number(wData.feePercent !== undefined ? wData.feePercent : 6);
+      const platformFee = Number(wData.platformFee !== undefined ? wData.platformFee : ((requestedAmount * feePercent) / 100).toFixed(2));
+      const payoutAmount = Number(wData.payoutAmount !== undefined ? wData.payoutAmount : (requestedAmount - platformFee).toFixed(2));
+
       const rejectedText =
         `🔴 <b>Rejected</b>\n\n` +
         `💸 <b>Withdrawal Request Rejected</b>\n\n` +
         `👤 <b>Name:</b> ${wData.userName || 'User'}\n` +
         `🆔 <b>UID:</b> <code>${wData.uid}</code>\n` +
-        `📱 <b>Mobile:</b> <code>${wData.mobile || 'N/A'}</code>\n` +
-        `💸 <b>Withdrawal Amount:</b> ₹${wData.amount}\n` +
+        `📱 <b>Mobile:</b> <code>${wData.mobile || 'N/A'}</code>\n\n` +
+        `💸 <b>Requested Amount:</b> ₹${requestedAmount}\n` +
+        `⚡ <b>Platform Fee (${feePercent}%):</b> ₹${platformFee}\n` +
+        `🎁 <b>Final Payout Amount:</b> ₹${payoutAmount}\n\n` +
         `🏦 <b>UPI ID:</b> ${methodDetail}\n` +
         `🆔 <b>Withdrawal ID:</b> <code>${wData.withdrawalId}</code>\n` +
         `❌ <b>Rejection Reason:</b> ${cleanReason}\n` +
@@ -878,14 +899,21 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
       } catch (e) {}
 
       if (wData.status === 'completed') {
+        const requestedAmount = Number(wData.requestedAmount !== undefined ? wData.requestedAmount : wData.amount) || 0;
+        const feePercent = Number(wData.feePercent !== undefined ? wData.feePercent : 6);
+        const platformFee = Number(wData.platformFee !== undefined ? wData.platformFee : ((requestedAmount * feePercent) / 100).toFixed(2));
+        const payoutAmount = Number(wData.payoutAmount !== undefined ? wData.payoutAmount : (requestedAmount - platformFee).toFixed(2));
+
         const approvedText =
           `🟢 <b>Approved</b>\n\n` +
           `💸 <b>Withdrawal Request Processed</b>\n\n` +
           `👤 <b>Name:</b> ${wData.userName || 'User'}\n` +
           `🆔 <b>UID:</b> <code>${wData.uid}</code>\n` +
           `📱 <b>Mobile:</b> <code>${userData.mobile || 'N/A'}</code>\n` +
-          `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n` +
-          `💸 <b>Withdrawal Amount:</b> ₹${wData.amount}\n` +
+          `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n\n` +
+          `💸 <b>Requested Amount:</b> ₹${requestedAmount}\n` +
+          `⚡ <b>Platform Fee (${feePercent}%):</b> ₹${platformFee}\n` +
+          `🎁 <b>Final Payout Amount:</b> ₹${payoutAmount}\n\n` +
           `🆔 <b>Withdrawal ID:</b> <code>${wData.withdrawalId}</code>\n` +
           `👑 <b>Approved By:</b> ${wData.approvedBy || 'Admin'}\n` +
           `⏱ <b>Approved At:</b> ${wData.approvedAt ? new Date(wData.approvedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'N/A'}`;
@@ -903,13 +931,20 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
       }
 
       if (wData.status === 'rejected') {
+        const requestedAmount = Number(wData.requestedAmount !== undefined ? wData.requestedAmount : wData.amount) || 0;
+        const feePercent = Number(wData.feePercent !== undefined ? wData.feePercent : 6);
+        const platformFee = Number(wData.platformFee !== undefined ? wData.platformFee : ((requestedAmount * feePercent) / 100).toFixed(2));
+        const payoutAmount = Number(wData.payoutAmount !== undefined ? wData.payoutAmount : (requestedAmount - platformFee).toFixed(2));
+
         const rejectedText =
           `🔴 <b>Rejected</b>\n\n` +
           `💸 <b>Withdrawal Request Rejected</b>\n\n` +
           `👤 <b>Name:</b> ${wData.userName || 'User'}\n` +
           `🆔 <b>UID:</b> <code>${wData.uid}</code>\n` +
-          `📱 <b>Mobile:</b> <code>${userData.mobile || 'N/A'}</code>\n` +
-          `💸 <b>Withdrawal Amount:</b> ₹${wData.amount}\n` +
+          `📱 <b>Mobile:</b> <code>${userData.mobile || 'N/A'}</code>\n\n` +
+          `💸 <b>Requested Amount:</b> ₹${requestedAmount}\n` +
+          `⚡ <b>Platform Fee (${feePercent}%):</b> ₹${platformFee}\n` +
+          `🎁 <b>Final Payout Amount:</b> ₹${payoutAmount}\n\n` +
           `🆔 <b>Withdrawal ID:</b> <code>${wData.withdrawalId}</code>\n` +
           `❌ <b>Rejection Reason:</b> ${wData.rejectReason || 'N/A'}\n` +
           `👑 <b>Rejected By:</b> ${wData.rejectedBy || 'Admin'}\n` +
@@ -952,13 +987,20 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
         ? new Date(wData.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
         : 'N/A';
 
+      const requestedAmountPending = Number(wData.requestedAmount !== undefined ? wData.requestedAmount : wData.amount) || 0;
+      const feePercentPending = Number(wData.feePercent !== undefined ? wData.feePercent : 6);
+      const platformFeePending = Number(wData.platformFee !== undefined ? wData.platformFee : ((requestedAmountPending * feePercentPending) / 100).toFixed(2));
+      const payoutAmountPending = Number(wData.payoutAmount !== undefined ? wData.payoutAmount : (requestedAmountPending - platformFeePending).toFixed(2));
+
       const pendingText =
         `💸 <b>New Withdrawal Request</b>\n\n` +
         `👤 <b>Name:</b> ${userData.firstName || userData.name || wData.userName || 'User'}\n` +
         `🆔 <b>UID:</b> <code>${userData.uid}</code>\n` +
         `📱 <b>Mobile:</b> <code>${userData.mobile || 'N/A'}</code>\n` +
-        `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n` +
-        `💸 <b>Withdrawal Amount:</b> ₹${wData.amount}\n` +
+        `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n\n` +
+        `💸 <b>Requested Amount:</b> ₹${requestedAmountPending}\n` +
+        `⚡ <b>Platform Fee (${feePercentPending}%):</b> ₹${platformFeePending}\n` +
+        `🎁 <b>Final Payout Amount:</b> ₹${payoutAmountPending}\n\n` +
         `🏦 <b>UPI ID:</b> ${methodDetail}\n` +
         `📅 <b>Request Time:</b> ${reqTime}\n` +
         `🆔 <b>Withdrawal ID:</b> <code>${wData.withdrawalId}</code>\n` +

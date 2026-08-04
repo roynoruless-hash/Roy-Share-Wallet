@@ -30,6 +30,7 @@ export const DEFAULT_CONFIG: AdminConfig = {
   minWithdrawal: 100,
   maxWithdrawal: 300,
   withdrawalTax: 5,
+  platformFeePercent: 6,
   uidLength: 6,
 
   // Withdrawal Settings

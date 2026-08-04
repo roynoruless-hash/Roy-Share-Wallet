@@ -14,6 +14,7 @@ import {
   Search,
   AlertCircle,
   DollarSign,
+  Percent,
   User,
   ShieldAlert,
   MessageSquare,
@@ -335,8 +336,8 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
           </div>
         </div>
 
-        {/* Min & Max Limits */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Min, Max Limits & Platform Fee */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
             <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
               <DollarSign className="w-4 h-4 text-emerald-400" />
@@ -362,6 +363,28 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               value={config.maxWithdrawal}
               onChange={(e) => updateConfig({ maxWithdrawal: Number(e.target.value) })}
               className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-500"
+            />
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+            <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Percent className="w-4 h-4 text-rose-400" />
+                <span>Platform Fee (%)</span>
+              </span>
+              <span className="text-[10px] text-slate-500">Default: 6%</span>
+            </label>
+            <input
+              type="number"
+              id="platform-fee-input"
+              value={config.platformFeePercent !== undefined ? config.platformFeePercent : 6}
+              onChange={(e) => {
+                const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                updateConfig({ platformFeePercent: val, withdrawalTax: val });
+              }}
+              min={0}
+              max={100}
+              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
             />
           </div>
         </div>
@@ -534,7 +557,9 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                   <th className="p-3.5">User Details</th>
                   <th className="p-3.5">Method</th>
                   <th className="p-3.5">Payout Details</th>
-                  <th className="p-3.5">Amount</th>
+                  <th className="p-3.5 text-slate-300">Requested</th>
+                  <th className="p-3.5 text-rose-400">Platform Fee</th>
+                  <th className="p-3.5 text-emerald-400 font-bold">Final Payout</th>
                   <th className="p-3.5">Status</th>
                   <th className="p-3.5 text-right">Actions</th>
                 </tr>
@@ -631,9 +656,22 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                         )}
                       </td>
 
-                      {/* Amount */}
-                      <td className="p-3.5 font-bold text-emerald-400 text-sm">
-                        ₹{w.amount}
+                      {/* Requested Amount */}
+                      <td className="p-3.5 font-medium text-slate-300 font-mono">
+                        ₹{w.requestedAmount !== undefined ? w.requestedAmount : w.amount}
+                      </td>
+
+                      {/* Platform Fee */}
+                      <td className="p-3.5 text-rose-400 font-medium font-mono">
+                        ₹{w.platformFee !== undefined ? w.platformFee : 0}
+                        {w.feePercent !== undefined && (
+                          <span className="text-[10px] text-slate-500 ml-1 font-sans">({w.feePercent}%)</span>
+                        )}
+                      </td>
+
+                      {/* Final Payout */}
+                      <td className="p-3.5 font-bold text-emerald-400 text-sm font-mono">
+                        ₹{w.payoutAmount !== undefined ? w.payoutAmount : (w.requestedAmount !== undefined ? w.requestedAmount : w.amount)}
                       </td>
 
                       {/* Status */}

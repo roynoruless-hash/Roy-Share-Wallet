@@ -881,6 +881,16 @@ export async function processTelegramUpdate(token: string, update: any) {
 
         const withdrawalId = `WDR_${Date.now().toString().slice(-6)}_${Math.floor(1000 + Math.random() * 9000)}`;
 
+        const feePercent = adminConfig?.platformFeePercent !== undefined ? Number(adminConfig.platformFeePercent) : 6;
+        const platformFee = Number(((amount * feePercent) / 100).toFixed(2));
+        const payoutAmount = Number((amount - platformFee).toFixed(2));
+
+        console.log(`[WITHDRAWAL SYSTEM LOG]
+Requested Amount: ₹${amount}
+Fee %: ${feePercent}%
+Platform Fee: ₹${platformFee}
+Final Payout: ₹${payoutAmount}`);
+
         // Add document to withdrawals collection first (maintaining status: pending)
         const withdrawalData = {
           withdrawalId,
@@ -889,6 +899,10 @@ export async function processTelegramUpdate(token: string, update: any) {
           telegramId: String(chatId),
           userName: freshUserData.firstName || 'User',
           amount: amount,
+          requestedAmount: amount,
+          platformFee: platformFee,
+          payoutAmount: payoutAmount,
+          feePercent: feePercent,
           method: method,
           upiId: upiId,
           qrImageUrl: qrImageUrl,
@@ -937,7 +951,9 @@ export async function processTelegramUpdate(token: string, update: any) {
           chat_id: chatId,
           text: `🎉 <b>Withdrawal Request Submitted!</b>\n\n` +
             `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
-            `💵 <b>Amount:</b> ₹${amount}\n` +
+            `💵 <b>Withdrawal Amount:</b> ₹${amount}\n` +
+            `⚡ <b>Platform Fee (${feePercent}%):</b> ₹${platformFee}\n` +
+            `🎁 <b>Amount You Will Receive:</b> ₹${payoutAmount}\n` +
             `📌 <b>Method:</b> ${method.toUpperCase()}\n` +
             userMsgDetail +
             `⏱ <b>Processing Time:</b> ${adminConfig?.processingTimeNotice || '24 Hours'}\n` +
@@ -2024,8 +2040,12 @@ export async function processTelegramUpdate(token: string, update: any) {
 
         activeSession.step = 'WITHDRAW_CONFIRM';
 
-        const walletBal = Number(existingUser.walletBalance) || 0;
         const amt = activeSession.withdrawAmount || 0;
+        const feePercent = adminConfig?.platformFeePercent !== undefined ? Number(adminConfig.platformFeePercent) : 6;
+        const platformFee = Number(((amt * feePercent) / 100).toFixed(2));
+        const payoutAmount = Number((amt - platformFee).toFixed(2));
+
+        const walletBal = Number(existingUser.walletBalance) || 0;
         const remaining = walletBal - amt;
         const notice = adminConfig?.processingTimeNotice || '24 Hours';
 
@@ -2041,7 +2061,9 @@ export async function processTelegramUpdate(token: string, update: any) {
         await sendTelegramApi(token, 'sendMessage', {
           chat_id: chatId,
           text: `📋 <b>Withdrawal Summary</b>\n\n` +
-            `💵 <b>Amount:</b> ₹${amt}\n` +
+            `💵 <b>Withdrawal Amount:</b> ₹${amt}\n` +
+            `⚡ <b>Platform Fee (${feePercent}%):</b> ₹${platformFee}\n` +
+            `🎁 <b>Amount You Will Receive:</b> ₹${payoutAmount}\n` +
             `📌 <b>Method:</b> ${methodName}\n` +
             `${detailDisplay}\n` +
             `⏱ <b>Processing Time:</b> ${notice}\n` +

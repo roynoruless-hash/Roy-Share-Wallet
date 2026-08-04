@@ -40,6 +40,7 @@ export interface AdminConfig {
   minWithdrawal: number;
   maxWithdrawal: number;
   withdrawalTax: number;
+  platformFeePercent?: number;
   uidLength: number;
 
   // Withdrawal Settings
@@ -301,6 +302,10 @@ export interface WithdrawalRecord {
   telegramId: string;
   userName?: string;
   amount: number;
+  requestedAmount?: number;
+  platformFee?: number;
+  payoutAmount?: number;
+  feePercent?: number;
   method: 'upi' | 'qr' | 'redeem_code';
   upiId?: string;
   qrImageUrl?: string;

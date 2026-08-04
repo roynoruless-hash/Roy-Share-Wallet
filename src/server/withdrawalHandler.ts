@@ -29,6 +29,10 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
   let redeemDetails = '';
   let userUid = '';
 
+  let platformFee = 0;
+  let payoutAmount = 0;
+  let feePercent = 6;
+
   try {
     const wRef = doc(db, 'withdrawals', withdrawalDocId);
     await runTransaction(db, async (transaction) => {
@@ -48,6 +52,10 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
       upiId = data.upiId || '';
       redeemDetails = data.redeemCodeDetails || '';
       userUid = data.uid;
+
+      feePercent = data.feePercent !== undefined ? Number(data.feePercent) : 6;
+      platformFee = data.platformFee !== undefined ? Number(data.platformFee) : Number(((amount * feePercent) / 100).toFixed(2));
+      payoutAmount = data.payoutAmount !== undefined ? Number(data.payoutAmount) : Number((amount - platformFee).toFixed(2));
 
       transaction.update(wRef, {
         status: 'completed',
@@ -83,7 +91,9 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
         botToken,
         telegramId,
         `✅ <b>Withdrawal Approved!</b>\n\n` +
-          `Your withdrawal request of <b>₹${amount}</b> (ID: <code>${withdrawalIdStr}</code>) ${detailText} has been approved and processed.\n\n` +
+          `Your withdrawal request of <b>₹${amount}</b> (ID: <code>${withdrawalIdStr}</code>) has been approved.\n` +
+          `⚡ <b>Platform Fee (${feePercent}%):</b> ₹${platformFee}\n` +
+          `🎁 <b>Payout Amount Sent:</b> <b>₹${payoutAmount}</b> ${detailText}\n\n` +
           `Thank you for using Roy Share Wallet!`
       );
     }
