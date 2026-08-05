@@ -497,13 +497,16 @@ export default function App() {
   const isContestRegistrationRoute = window.location.pathname.startsWith('/register-contest');
   const isWarPublicRoute = window.location.pathname.startsWith('/war/') || window.location.pathname.startsWith('/war');
   const urlParams = new URLSearchParams(window.location.search);
+  const tgStartParam = (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
   const isLiveRedeemRoute =
     window.location.pathname.startsWith('/live-redeem') ||
     window.location.pathname.startsWith('/live-event') ||
     window.location.pathname.startsWith('/redeem') ||
-    urlParams.get('start') === 'live_event' ||
-    urlParams.get('startapp') === 'live_event' ||
-    urlParams.get('tgWebAppStartParam') === 'live_event';
+    Boolean(urlParams.get('liveEventId')) ||
+    Boolean(urlParams.get('start')) ||
+    Boolean(urlParams.get('startapp')) ||
+    Boolean(urlParams.get('tgWebAppStartParam')) ||
+    Boolean(tgStartParam);
 
   if (isLiveRedeemRoute) {
     return <LiveRedeemView botUsername={config.botUsername || 'Roy_wallett_bot'} />;

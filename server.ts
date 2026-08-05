@@ -155,6 +155,40 @@ async function startServer() {
     }
   }
 
+  /**
+   * Helper to construct Telegram inline buttons for Mini Apps safely
+   */
+  function buildTelegramMiniAppButton(label: string, customUrl?: string, eventId?: string, isChannel = false, botUsername = 'Roy_wallett_bot') {
+    const cleanBot = (botUsername || 'Roy_wallett_bot').replace(/^@/, '');
+    const activeEventId = eventId || 'live_event';
+
+    let appBaseUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL || 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app';
+    if (customUrl && customUrl.startsWith('http') && !customUrl.includes('t.me/')) {
+      appBaseUrl = customUrl;
+    }
+
+    let webAppHttpsUrl = appBaseUrl;
+    try {
+      const u = new URL(appBaseUrl);
+      u.searchParams.set('liveEventId', activeEventId);
+      u.searchParams.set('startapp', activeEventId);
+      webAppHttpsUrl = u.toString();
+    } catch (e) {
+      webAppHttpsUrl = `${appBaseUrl}?liveEventId=${activeEventId}&startapp=${activeEventId}`;
+    }
+
+    const shortAppLink = `https://t.me/${cleanBot}?startapp=${activeEventId}`;
+
+    if (isChannel) {
+      const finalUrl = (customUrl && customUrl.includes('startapp=')) ? customUrl : shortAppLink;
+      console.log(`[LIVE_REDEEM_BUTTON_GEN] Target: Channel | Type: URL | URL: ${finalUrl} | EventID: ${activeEventId} | DocID: liveRedeem/current`);
+      return { text: label, url: finalUrl };
+    }
+
+    console.log(`[LIVE_REDEEM_BUTTON_GEN] Target: Direct/Group | Type: WEB_APP | WebApp URL: ${webAppHttpsUrl} | EventID: ${activeEventId} | DocID: liveRedeem/current`);
+    return { text: label, web_app: { url: webAppHttpsUrl } };
+  }
+
   // Helper to handle transitioning the live event state to UNLOCKED and editing all broadcasted messages
   async function performLiveEventUnlock(eventId: string, botToken: string) {
     try {
@@ -164,31 +198,31 @@ async function startServer() {
       if (!snap.exists()) return;
       
       const data = snap.data() as any;
-      if (data.eventId !== eventId) return; // different event
+      if (data.eventId !== eventId && data.liveEventId !== eventId) return; // different event
       if (data.eventStatus === 'UNLOCKED' && data.unlockedBroadcast === true) {
         return; // already unlocked and processed
       }
 
       console.log(`[LIVE REDEEM] Triggering unlock broadcast for event ${eventId}`);
 
-      let miniAppLink = data.miniAppUrl || `https://t.me/Roy_wallett_bot?start=live_event`;
-      miniAppLink = miniAppLink.replace(/startapp=/g, 'start=');
+      const adminConfig = await getDecryptedConfig();
+      const botUsername = adminConfig?.botUsername || 'Roy_wallett_bot';
+
       const unlockedText =
         `✅ <b>Code Unlocked</b>\n\n` +
         `<b>Open Roy Wallet Bot to claim now.</b>`;
-
-      const unlockedOptions = {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🤖 Open Roy Wallet Bot', url: miniAppLink }],
-          ],
-        },
-      };
 
       const sentMessages = data.sentMessages || [];
       for (const msg of sentMessages) {
         if (msg.chatId && msg.messageId) {
           try {
+            const isChannelTarget = String(msg.chatId).startsWith('-100');
+            const btn = buildTelegramMiniAppButton('🤖 Open Roy Wallet Bot', data.miniAppUrl, eventId, isChannelTarget, botUsername);
+            const unlockedOptions = {
+              reply_markup: {
+                inline_keyboard: [[btn]],
+              },
+            };
             const editRes = await editTelegramMessage(botToken, msg.chatId, msg.messageId, unlockedText, unlockedOptions);
             console.log(`[LIVE REDEEM] Edited message in chat ${msg.chatId}: ok = ${editRes.ok}`);
           } catch (err) {
@@ -1795,8 +1829,6 @@ Claim now and don't forget to share your screenshot!`;
       const serverTime = Date.now();
       const eventId = `live_${serverTime}`;
       const cleanBotName = botUsername.replace(/^@/, '') || 'Roy_wallett_bot';
-      let miniAppLink = (miniAppUrl && miniAppUrl.trim()) || `https://t.me/${cleanBotName}?start=live_event`;
-      miniAppLink = miniAppLink.replace(/startapp=/g, 'start=');
 
       const broadcastText =
         `🚀 <b>Live Redeem Event Started</b>\n\n` +
@@ -1804,13 +1836,11 @@ Claim now and don't forget to share your screenshot!`;
         `⏳ Waiting for Admin to release the redeem code...\n\n` +
         `👇 <b>Open Roy Wallet Bot to join the lobby!</b>`;
 
-      const options = {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🤖 Open Roy Wallet Bot', url: miniAppLink }],
-          ],
-        },
-      };
+      const channelBtn = buildTelegramMiniAppButton('👥 Open Waiting Lobby', miniAppUrl, eventId, true, cleanBotName);
+      const groupBtn = buildTelegramMiniAppButton('👥 Open Waiting Lobby', miniAppUrl, eventId, false, cleanBotName);
+
+      const channelOptions = { reply_markup: { inline_keyboard: [[channelBtn]] } };
+      const groupOptions = { reply_markup: { inline_keyboard: [[groupBtn]] } };
 
       let usersSent = 0;
       let channelStatus = 'N/A';
@@ -1841,7 +1871,7 @@ Claim now and don't forget to share your screenshot!`;
       if (sendToChannel && mainChan && !processedTargets.has(mainChan)) {
         processedTargets.add(mainChan);
         try {
-          const cRes = await sendTelegramMessage(botToken, mainChan, broadcastText, options);
+          const cRes = await sendTelegramMessage(botToken, mainChan, broadcastText, channelOptions);
           channelStatus = cRes && cRes.ok ? 'Success' : (cRes?.description || 'Failed');
           if (cRes && cRes.ok && cRes.result?.message_id) {
             sentMessages.push({ chatId: mainChan, messageId: cRes.result.message_id });
@@ -1854,7 +1884,7 @@ Claim now and don't forget to share your screenshot!`;
       if (sendToGroups && mainGrp && !processedTargets.has(mainGrp)) {
         processedTargets.add(mainGrp);
         try {
-          const gRes = await sendTelegramMessage(botToken, mainGrp, broadcastText, options);
+          const gRes = await sendTelegramMessage(botToken, mainGrp, broadcastText, groupOptions);
           groupsStatus = gRes && gRes.ok ? 'Success' : (gRes?.description || 'Failed');
           if (gRes && gRes.ok && gRes.result?.message_id) {
             sentMessages.push({ chatId: mainGrp, messageId: gRes.result.message_id });
@@ -1870,7 +1900,8 @@ Claim now and don't forget to share your screenshot!`;
           if (target && !processedTargets.has(target)) {
             processedTargets.add(target);
             try {
-              const resObj = await sendTelegramMessage(botToken, target, broadcastText, options);
+              const targetOpts = dest.type === 'channel' ? channelOptions : groupOptions;
+              const resObj = await sendTelegramMessage(botToken, target, broadcastText, targetOpts);
               if (resObj && resObj.ok) {
                 if (dest.type === 'channel') channelStatus = 'Success';
                 if (dest.type === 'group') groupsStatus = 'Success';
@@ -1899,7 +1930,7 @@ Claim now and don't forget to share your screenshot!`;
         for (const tid of registeredUsers) {
           try {
             await new Promise((resolve) => setTimeout(resolve, 35));
-            const uRes = await sendTelegramMessage(botToken, tid, broadcastText, options);
+            const uRes = await sendTelegramMessage(botToken, tid, broadcastText, groupOptions);
             if (uRes && uRes.ok) {
               usersSent++;
             }
@@ -1967,7 +1998,7 @@ Claim now and don't forget to share your screenshot!`;
         claimedUsers: {},
         antiCheatLogs: [],
         requestTimestamps: [],
-        miniAppUrl: miniAppLink,
+        miniAppUrl: groupBtn.web_app?.url || miniAppUrl || '',
         sentMessages,
         broadcastResult: {
           usersSent,

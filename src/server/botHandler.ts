@@ -44,17 +44,35 @@ interface TelegramChannelGroupRecord {
 /**
  * Helper to construct Telegram inline buttons for Mini Apps safely
  */
-function buildMiniAppButton(label: string, url: string) {
-  let cleanUrl = (url || '').trim();
-  cleanUrl = cleanUrl.replace(/startapp=/g, 'start=');
-  if (!cleanUrl) {
-    return { text: label, url: 'https://t.me/Roy_wallett_bot?start=live_event' };
+function buildMiniAppButton(label: string, customUrl?: string, eventId?: string, isChannel = false, botUsername = 'Roy_wallett_bot') {
+  const cleanBot = (botUsername || 'Roy_wallett_bot').replace(/^@/, '');
+  const activeEventId = eventId || 'live_event';
+
+  let appBaseUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL || 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app';
+  if (customUrl && customUrl.startsWith('http') && !customUrl.includes('t.me/')) {
+    appBaseUrl = customUrl;
   }
-  if (cleanUrl.startsWith('https://t.me/') || cleanUrl.startsWith('t.me/') || cleanUrl.startsWith('http://t.me/')) {
-    const fullUrl = cleanUrl.startsWith('http') ? cleanUrl : `https://${cleanUrl}`;
-    return { text: label, url: fullUrl };
+
+  let webAppHttpsUrl = appBaseUrl;
+  try {
+    const u = new URL(appBaseUrl);
+    u.searchParams.set('liveEventId', activeEventId);
+    u.searchParams.set('startapp', activeEventId);
+    webAppHttpsUrl = u.toString();
+  } catch (e) {
+    webAppHttpsUrl = `${appBaseUrl}?liveEventId=${activeEventId}&startapp=${activeEventId}`;
   }
-  return { text: label, web_app: { url: cleanUrl } };
+
+  const shortAppLink = `https://t.me/${cleanBot}?startapp=${activeEventId}`;
+
+  if (isChannel) {
+    const finalUrl = (customUrl && customUrl.includes('startapp=')) ? customUrl : shortAppLink;
+    console.log(`[BOT_BUTTON_GEN] Target: Channel | Type: URL | URL: ${finalUrl} | EventID: ${activeEventId} | DocID: liveRedeem/current`);
+    return { text: label, url: finalUrl };
+  }
+
+  console.log(`[BOT_BUTTON_GEN] Target: Direct/Group | Type: WEB_APP | WebApp URL: ${webAppHttpsUrl} | EventID: ${activeEventId} | DocID: liveRedeem/current`);
+  return { text: label, web_app: { url: webAppHttpsUrl } };
 }
 
 /**
@@ -1419,6 +1437,8 @@ Final Payout: ₹${payoutAmount}`);
 
         console.log('Mini App URL:', miniAppUrl);
 
+        const currentEventId = activeData?.eventId || activeData?.liveEventId || 'live_event';
+
         // 1. IDLE
         if (liveEventState === 'IDLE') {
           const res = await sendTelegramApi(token, 'sendMessage', {
@@ -1444,13 +1464,21 @@ Final Payout: ₹${payoutAmount}`);
         // 3. WAITING_FOR_ADMIN / WAITING_FOR_READY (Waiting Lobby)
         if (liveEventState === 'WAITING_FOR_ADMIN' || liveEventState === 'WAITING_FOR_READY') {
           const inline_keyboard = [
-            [buildMiniAppButton('👥 Open Waiting Lobby', miniAppUrl)],
+            [buildMiniAppButton('👥 Open Waiting Lobby', miniAppUrl, currentEventId, false, cleanBotName)],
           ];
           const textMsg =
             `👥 <b>Live Redeem Waiting Lobby</b>\n\n` +
             `⏳ Waiting for Admin to release the redeem code...\n\n` +
             `Ready participants: <b>${activeData?.readyCount || 0}</b> / <b>${activeData?.minReadyUsers || 0}</b>\n\n` +
-            `Tap the button below to open the Waiting Lobby in Roy Wallet!`;
+            `Tap the button below to open the Waiting Lobby directly in Roy Wallet!`;
+
+          console.log(`[TELEGRAM_WAITING_LOBBY_PAYLOAD]`, {
+            chatId,
+            currentEventId,
+            firestoreDocId: 'liveRedeem/current',
+            buttonType: 'web_app',
+            miniAppUrl,
+          });
 
           const res = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
@@ -1465,7 +1493,7 @@ Final Payout: ₹${payoutAmount}`);
         // 4. PAUSED
         if (liveEventState === 'PAUSED') {
           const inline_keyboard = [
-            [buildMiniAppButton('🤖 Open Roy Wallet Bot', miniAppUrl)],
+            [buildMiniAppButton('🤖 Open Roy Wallet Bot', miniAppUrl, currentEventId, false, cleanBotName)],
           ];
           const res = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
@@ -1480,7 +1508,7 @@ Final Payout: ₹${payoutAmount}`);
         // 5. LOCKED
         if (liveEventState === 'LOCKED') {
           const inline_keyboard = [
-            [buildMiniAppButton('🤖 Open Roy Wallet Bot', miniAppUrl)],
+            [buildMiniAppButton('🤖 Open Roy Wallet Bot', miniAppUrl, currentEventId, false, cleanBotName)],
           ];
           const res = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
@@ -1497,7 +1525,7 @@ Final Payout: ₹${payoutAmount}`);
         const userCode = claimedUsers[chatId]?.code;
         if (userCode) {
           const inline_keyboard = [
-            [buildMiniAppButton('🤖 Open Roy Wallet Bot', miniAppUrl)],
+            [buildMiniAppButton('🤖 Open Roy Wallet Bot', miniAppUrl, currentEventId, false, cleanBotName)],
           ];
           const res = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
@@ -1518,7 +1546,7 @@ Final Payout: ₹${payoutAmount}`);
           let remainingSecs = Math.max(0, Math.ceil((unlockTime - now) / 1000));
 
           const inline_keyboard = [
-            [buildMiniAppButton('⏳ Open Waiting Room', miniAppUrl)],
+            [buildMiniAppButton('⏳ Open Waiting Room', miniAppUrl, currentEventId, false, cleanBotName)],
           ];
 
           const sendRes = await sendTelegramApi(token, 'sendMessage', {
@@ -1606,7 +1634,7 @@ Final Payout: ₹${payoutAmount}`);
         // 7. UNLOCKED
         if (liveEventState === 'UNLOCKED') {
           const inline_keyboard = [
-            [buildMiniAppButton('🎁 Claim Now', miniAppUrl)],
+            [buildMiniAppButton('🎁 Claim Now', miniAppUrl, currentEventId, false, cleanBotName)],
           ];
 
           const res = await sendTelegramApi(token, 'sendMessage', {

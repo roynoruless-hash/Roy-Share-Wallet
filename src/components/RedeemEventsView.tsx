@@ -168,7 +168,7 @@ export const RedeemEventsView: React.FC<RedeemEventsViewProps> = ({ config, show
       // Execute live broadcast request to server
       const token = localStorage.getItem('adminSessionToken') || '';
       const botUsername = config.botUsername || 'Roy_wallett_bot';
-      const miniAppUrl = `https://t.me/${botUsername}?start=live_event`;
+      const miniAppUrl = window.location.origin;
 
       const payload = {
         code: wizardCode,
