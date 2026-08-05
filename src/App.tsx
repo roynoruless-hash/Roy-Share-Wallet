@@ -488,6 +488,60 @@ export default function App() {
     }
   };
 
+  // Telegram WebApp Detection and Zero-Click Authentication
+  const tgWebApp = (window as any).Telegram?.WebApp;
+  const isTelegramWebApp = Boolean(tgWebApp);
+  const urlParams = new URLSearchParams(window.location.search);
+  const tgStartParam = tgWebApp?.initDataUnsafe?.start_param || '';
+  const startAppParam = urlParams.get('startapp') || urlParams.get('tgWebAppStartParam') || urlParams.get('start') || tgStartParam || '';
+
+  const isLiveEventPayload =
+    startAppParam.includes('live_event') ||
+    startAppParam === 'live_event' ||
+    startAppParam.includes('live') ||
+    Boolean(urlParams.get('liveEventId'));
+
+  useEffect(() => {
+    if (isTelegramWebApp) {
+      console.log(`[WEBAPP_AUTH] Telegram WebApp detected via window.Telegram?.WebApp. initData present: ${Boolean(tgWebApp?.initData)}`);
+      const tgUser = tgWebApp?.initDataUnsafe?.user;
+      const tgId = tgUser?.id ? String(tgUser.id) : (localStorage.getItem('roy_user_id') || '');
+      const tgUserName = tgUser?.first_name ? `${tgUser.first_name} ${tgUser.last_name || ''}`.trim() : (tgUser?.username ? `@${tgUser.username}` : `User #${tgId}`);
+
+      console.log(`[TELEGRAM_USER] User info extracted from WebApp initDataUnsafe:`, {
+        telegramId: tgId,
+        userName: tgUserName,
+        startParam: startAppParam,
+        initDataUnsafe: tgWebApp?.initDataUnsafe,
+      });
+
+      if (tgId) {
+        fetch('/api/webapp-auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            telegramId: tgId,
+            username: tgUser?.username || '',
+            firstName: tgUser?.first_name || '',
+            lastName: tgUser?.last_name || '',
+            initData: tgWebApp?.initData || '',
+          }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.success) {
+              console.log(`[AUTO_LOGIN_SUCCESS] Zero-click Telegram authentication successful in Firestore for Telegram ID: ${tgId}`);
+            }
+          })
+          .catch((err) => console.error('[WEBAPP_AUTH] Error executing zero-click auth fetch:', err));
+      }
+
+      if (isLiveEventPayload || startAppParam === 'live_event') {
+        console.log(`[ROUTE_WAITING_LOBBY] Immediately routing user to Waiting Lobby for startapp: ${startAppParam || 'live_event'}`);
+      }
+    }
+  }, [isTelegramWebApp, startAppParam, isLiveEventPayload]);
+
   // Check if URL is for Referral Verification
   const isClaimRewardRoute = window.location.pathname.startsWith('/claim-reward');
   const isReferralVerifyRoute =
@@ -496,9 +550,10 @@ export default function App() {
   const isFeedbackRoute = window.location.pathname.startsWith('/feedback');
   const isContestRegistrationRoute = window.location.pathname.startsWith('/register-contest');
   const isWarPublicRoute = window.location.pathname.startsWith('/war/') || window.location.pathname.startsWith('/war');
-  const urlParams = new URLSearchParams(window.location.search);
-  const tgStartParam = (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
+
   const isLiveRedeemRoute =
+    isTelegramWebApp ||
+    isLiveEventPayload ||
     window.location.pathname.startsWith('/live-redeem') ||
     window.location.pathname.startsWith('/live-event') ||
     window.location.pathname.startsWith('/redeem') ||
@@ -509,6 +564,9 @@ export default function App() {
     Boolean(tgStartParam);
 
   if (isLiveRedeemRoute) {
+    if (isTelegramWebApp || isLiveEventPayload || startAppParam === 'live_event') {
+      console.log(`[ROUTE_WAITING_LOBBY] Zero-click routing directly to Waiting Lobby (LiveRedeemView) without any login screen.`);
+    }
     return <LiveRedeemView botUsername={config.botUsername || 'Roy_wallett_bot'} />;
   }
 

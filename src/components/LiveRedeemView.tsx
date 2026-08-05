@@ -180,26 +180,71 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
   const [uploadSuccess, setUploadSuccess] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string>('');
 
-  // Auto-generate fallback Telegram ID if not in Telegram WebApp
-  useEffect(() => {
-    if (!telegramId) {
-      const genId = 'user_' + Math.floor(100000 + Math.random() * 900000);
-      setTelegramId(genId);
-      localStorage.setItem('roy_user_id', genId);
-    }
-  }, [telegramId]);
-
-  // Expand Telegram WebApp if available
+  // Zero-click Telegram WebApp authentication and initialization
   useEffect(() => {
     try {
       const tg = (window as any).Telegram?.WebApp;
+      const isTelegramWebApp = Boolean(tg);
+
       if (tg) {
         tg.ready();
         if (typeof tg.expand === 'function') {
           tg.expand();
         }
       }
-    } catch (e) {}
+
+      if (isTelegramWebApp) {
+        console.log(`[WEBAPP_AUTH] Telegram WebApp detected via window.Telegram?.WebApp. initData present: ${Boolean(tg?.initData)}`);
+        const user = tg?.initDataUnsafe?.user;
+        const tgId = user?.id ? String(user.id) : (telegramId || localStorage.getItem('roy_user_id') || '');
+        const name = user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : (user?.username ? `@${user.username}` : (userName || `User #${tgId}`));
+
+        if (tgId && tgId !== telegramId) {
+          setTelegramId(tgId);
+          localStorage.setItem('roy_user_id', tgId);
+        }
+        if (name && name !== userName) {
+          setUserName(name);
+        }
+
+        console.log(`[TELEGRAM_USER] User identified from WebApp initDataUnsafe:`, { telegramId: tgId, username: user?.username || '', firstName: user?.first_name || '', lastName: user?.last_name || '' });
+
+        // Authenticate user in Firestore via backend API
+        fetch('/api/webapp-auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            telegramId: tgId,
+            username: user?.username || '',
+            firstName: user?.first_name || '',
+            lastName: user?.last_name || '',
+            initData: tg?.initData || '',
+          }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.success) {
+              console.log(`[AUTO_LOGIN_SUCCESS] Zero-click Telegram authentication successful in Firestore for Telegram ID: ${tgId}`);
+            }
+          })
+          .catch((err) => console.error('[WEBAPP_AUTH] Zero-click auth error:', err));
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const startParam = urlParams.get('startapp') || urlParams.get('tgWebAppStartParam') || tg?.initDataUnsafe?.start_param || '';
+
+        if (startParam.includes('live_event') || startParam === 'live_event' || !startParam) {
+          console.log(`[ROUTE_WAITING_LOBBY] Immediately routing user to Waiting Lobby for startapp: ${startParam || 'live_event'}`);
+        }
+      } else {
+        if (!telegramId) {
+          const genId = 'user_' + Math.floor(100000 + Math.random() * 900000);
+          setTelegramId(genId);
+          localStorage.setItem('roy_user_id', genId);
+        }
+      }
+    } catch (e) {
+      console.warn('[WEBAPP_AUTH] Telegram WebApp init warning:', e);
+    }
   }, []);
 
   // Poll event status every 2s

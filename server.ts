@@ -2882,6 +2882,62 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
+  // TELEGRAM MINI APP ZERO-CLICK AUTHENTICATION
+  app.post('/api/webapp-auth', async (req, res) => {
+    try {
+      const { telegramId, username, firstName, lastName, initData } = req.body || {};
+      const cleanTgId = String(telegramId || '').trim();
+
+      if (!cleanTgId) {
+        return res.status(400).json({ success: false, error: 'Telegram ID is required' });
+      }
+
+      console.log(`[WEBAPP_AUTH] Telegram WebApp auth request received. initData present: ${Boolean(initData)}`);
+      console.log(`[TELEGRAM_USER] Authenticating user:`, { telegramId: cleanTgId, username, firstName, lastName });
+
+      const userRef = doc(db, 'users', cleanTgId);
+      const userDoc = await getDoc(userRef);
+      const nowStr = new Date().toISOString();
+      let userData: any = null;
+
+      if (userDoc.exists()) {
+        userData = userDoc.data();
+        await setDoc(userRef, {
+          lastActive: nowStr,
+          username: username || userData.username || '',
+          firstName: firstName || userData.firstName || 'User',
+          lastName: lastName || userData.lastName || '',
+        }, { merge: true });
+        userData = { ...userData, lastActive: nowStr };
+        console.log(`[AUTO_LOGIN_SUCCESS] Existing Telegram user loaded from Firestore: ${cleanTgId}`);
+      } else {
+        const fullUserName = firstName ? `${firstName} ${lastName || ''}`.trim() : (username ? `@${username}` : `User #${cleanTgId}`);
+        userData = {
+          uid: cleanTgId,
+          telegramId: cleanTgId,
+          username: username || '',
+          firstName: firstName || fullUserName,
+          lastName: lastName || '',
+          mobile: 'N/A',
+          walletBalance: 0,
+          status: 'active',
+          banned: false,
+          channelVerified: true,
+          groupVerified: true,
+          createdAt: nowStr,
+          lastActive: nowStr,
+        };
+        await setDoc(userRef, userData);
+        console.log(`[AUTO_LOGIN_SUCCESS] New Telegram user auto-created in Firestore: ${cleanTgId}`);
+      }
+
+      return res.json({ success: true, user: userData });
+    } catch (err: any) {
+      console.error('[WEBAPP_AUTH] Error processing Telegram WebApp authentication:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // 3. Get Active Live Event Details & Real-time Metrics
   app.get('/api/live-event/active', async (req, res) => {
     try {
