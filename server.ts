@@ -102,6 +102,7 @@ async function startServer() {
         parse_mode: 'HTML',
         ...options,
       };
+      console.log('[TELEGRAM SEND MESSAGE PAYLOAD]:', JSON.stringify(payload));
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -170,7 +171,8 @@ async function startServer() {
 
       console.log(`[LIVE REDEEM] Triggering unlock broadcast for event ${eventId}`);
 
-      const miniAppLink = data.miniAppUrl || `https://t.me/Roy_wallett_bot?startapp=live_event`;
+      let miniAppLink = data.miniAppUrl || `https://t.me/Roy_wallett_bot?start=live_event`;
+      miniAppLink = miniAppLink.replace(/startapp=/g, 'start=');
       const unlockedText =
         `✅ <b>Code Unlocked</b>\n\n` +
         `<b>Open Roy Wallet Bot to claim now.</b>`;
@@ -1793,7 +1795,8 @@ Claim now and don't forget to share your screenshot!`;
       const serverTime = Date.now();
       const eventId = `live_${serverTime}`;
       const cleanBotName = botUsername.replace(/^@/, '') || 'Roy_wallett_bot';
-      const miniAppLink = (miniAppUrl && miniAppUrl.trim()) || `https://t.me/${cleanBotName}?start=live_event`;
+      let miniAppLink = (miniAppUrl && miniAppUrl.trim()) || `https://t.me/${cleanBotName}?start=live_event`;
+      miniAppLink = miniAppLink.replace(/startapp=/g, 'start=');
 
       const broadcastText =
         `🚀 <b>Live Redeem Event Started</b>\n\n` +

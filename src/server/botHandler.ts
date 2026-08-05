@@ -45,9 +45,10 @@ interface TelegramChannelGroupRecord {
  * Helper to construct Telegram inline buttons for Mini Apps safely
  */
 function buildMiniAppButton(label: string, url: string) {
-  const cleanUrl = (url || '').trim();
+  let cleanUrl = (url || '').trim();
+  cleanUrl = cleanUrl.replace(/startapp=/g, 'start=');
   if (!cleanUrl) {
-    return { text: label, url: 'https://t.me/Roy_wallett_bot?startapp=live_event' };
+    return { text: label, url: 'https://t.me/Roy_wallett_bot?start=live_event' };
   }
   if (cleanUrl.startsWith('https://t.me/') || cleanUrl.startsWith('t.me/') || cleanUrl.startsWith('http://t.me/')) {
     const fullUrl = cleanUrl.startsWith('http') ? cleanUrl : `https://${cleanUrl}`;
@@ -624,7 +625,8 @@ export async function processTelegramUpdate(token: string, update: any) {
         const botUsername = adminConfig?.botUsername || 'Roy_wallett_bot';
         const cleanBotName = botUsername.replace(/^@/, '');
         const eventData = liveDocSnap.exists() ? liveDocSnap.data() as any : null;
-        const miniAppUrl = eventData?.miniAppUrl || eventData?.miniAppLink || `https://t.me/${cleanBotName}?startapp=live_event`;
+        let miniAppUrl = eventData?.miniAppUrl || eventData?.miniAppLink || `https://t.me/${cleanBotName}?start=live_event`;
+        miniAppUrl = miniAppUrl.replace(/startapp=/g, 'start=');
 
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,

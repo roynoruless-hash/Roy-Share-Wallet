@@ -31,6 +31,12 @@ import { AIRevenueAutomationView } from './components/admin/AIRevenueAutomationV
 import { GiveawayWarPublicView } from './components/GiveawayWarPublicView';
 import { ContestRegistrationView } from './components/ContestRegistrationView';
 import { LiveRedeemView } from './components/LiveRedeemView';
+import { RedeemEventsView } from './components/RedeemEventsView';
+import { BroadcastHistoryView } from './components/BroadcastHistoryView';
+import { AnalyticsView } from './components/AnalyticsView';
+import { AdvancedView } from './components/AdvancedView';
+import { SettingsView } from './components/SettingsView';
+import { GlobalSearchModal } from './components/admin/GlobalSearchModal';
 import { ComingSoonView } from './components/ComingSoonView';
 import { Toast, ToastMessage } from './components/Toast';
 import { Loader2 } from 'lucide-react';
@@ -40,6 +46,11 @@ const SESSION_STORAGE_KEY = 'royshare_admin_session';
 function resolveTabFromPath(pathname: string): { tab: TabType; isUnknown: boolean } {
   const p = pathname.toLowerCase().replace(/\/$/, '');
   if (p === '' || p === '/' || p === '/dashboard') return { tab: 'dashboard', isUnknown: false };
+  if (p.startsWith('/redeem-events') || p.startsWith('/redeem_events') || p.startsWith('/events')) return { tab: 'redeem_events', isUnknown: false };
+  if (p.startsWith('/analytics')) return { tab: 'analytics', isUnknown: false };
+  if (p.startsWith('/history') || p.startsWith('/broadcast-history')) return { tab: 'history', isUnknown: false };
+  if (p.startsWith('/advanced') || p.startsWith('/pro')) return { tab: 'advanced', isUnknown: false };
+  if (p.startsWith('/settings')) return { tab: 'settings', isUnknown: false };
   if (p.startsWith('/giveaway-war') || p.startsWith('/giveaway_war') || p.startsWith('/war') || p.startsWith('/lucky-spin') || p.startsWith('/claim-rewards') || p.startsWith('/event-replay') || p.startsWith('/new-war')) return { tab: 'giveaway_war', isUnknown: false };
   if (p.startsWith('/ai-broadcast') || p.startsWith('/ai_broadcast') || p.startsWith('/broadcast')) return { tab: 'ai_broadcast', isUnknown: false };
   if (p.startsWith('/enterprise') || p.startsWith('/enterprise_ops') || p.startsWith('/enterprise-ops')) return { tab: 'enterprise_ops', isUnknown: false };
@@ -430,14 +441,28 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard':
         return 'Dashboard Overview';
+      case 'redeem_events':
+        return '🎁 Redeem Events & Live Lobby';
+      case 'voting_contests':
+        return '🏆 Voting Contest System';
+      case 'wallet':
+        return '💰 Wallet Settings & Payouts';
       case 'users':
-        return 'User Management';
+        return '👥 User Management';
+      case 'ai_broadcast':
+        return '📢 Broadcast & Telegram Channels';
+      case 'analytics':
+        return '📊 Traffic & System Analytics';
+      case 'history':
+        return '📜 Broadcast History';
+      case 'advanced':
+        return '⚡ Advanced Enterprise Tools';
+      case 'settings':
+        return '⚙️ System Configuration & Settings';
       case 'telegram':
         return 'Telegram Configuration';
       case 'channel':
         return 'Channel & Group';
-      case 'wallet':
-        return 'Wallet Settings';
       case 'withdrawal':
         return 'Withdrawal Settings';
       case 'referral':
@@ -448,12 +473,8 @@ export default function App() {
         return '⭐ Feedback Campaigns';
       case 'feedback_reviews':
         return 'Feedback Reviews';
-      case 'voting_contests':
-        return '🏆 Voting Contest System';
       case 'giveaway_war':
         return '⚔️ Giveaway War';
-      case 'ai_broadcast':
-        return '🎁 AI Redeem Code Broadcast';
       case 'support':
         return 'Support Settings';
       case 'security':
@@ -582,6 +603,32 @@ export default function App() {
             <>
               {activeTab === 'dashboard' && (
                 <DashboardView config={config} setActiveTab={setActiveTab} />
+              )}
+
+              {activeTab === 'redeem_events' && (
+                <RedeemEventsView config={config} showToast={showToast} />
+              )}
+
+              {activeTab === 'analytics' && (
+                <AnalyticsView />
+              )}
+
+              {activeTab === 'history' && (
+                <BroadcastHistoryView />
+              )}
+
+              {activeTab === 'advanced' && (
+                <AdvancedView config={config} showToast={showToast} />
+              )}
+
+              {activeTab === 'settings' && (
+                <SettingsView
+                  config={config}
+                  updateConfig={updateConfig}
+                  onSave={handleSaveConfiguration}
+                  isSaving={isSaving}
+                  showToast={showToast}
+                />
               )}
 
               {activeTab === 'users' && (

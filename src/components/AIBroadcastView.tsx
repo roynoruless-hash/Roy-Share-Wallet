@@ -141,7 +141,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
   const [liveSendToChannel, setLiveSendToChannel] = useState(true);
   const [liveSendToGroups, setLiveSendToGroups] = useState(true);
   const [liveSendToUsers, setLiveSendToUsers] = useState(false);
-  const [liveMiniAppUrl, setLiveMiniAppUrl] = useState('https://t.me/Roy_wallett_bot?startapp=live_event');
+  const [liveMiniAppUrl, setLiveMiniAppUrl] = useState('https://t.me/Roy_wallett_bot?start=live_event');
   const [isStartingLiveEvent, setIsStartingLiveEvent] = useState(false);
   const [activeLiveEvent, setActiveLiveEvent] = useState<any>(null);
   const [lastBroadcastSummary, setLastBroadcastSummary] = useState<any>(null);
@@ -1506,7 +1506,7 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                 type="text"
                 value={liveMiniAppUrl}
                 onChange={(e) => setLiveMiniAppUrl(e.target.value)}
-                placeholder="https://t.me/Roy_wallett_bot?startapp=live_event"
+                placeholder="https://t.me/Roy_wallett_bot?start=live_event"
                 className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-amber-400 text-xs font-mono focus:outline-none focus:border-amber-500"
               />
               <span className="text-[10px] text-slate-400 font-mono block mt-1">

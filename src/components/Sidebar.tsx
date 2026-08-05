@@ -1,30 +1,20 @@
 import React from 'react';
 import {
   LayoutDashboard,
-  Users,
-  Send,
-  Users2,
+  Gift,
+  Trophy,
   Wallet,
-  ArrowDownRight,
-  Share2,
-  Headphones,
-  ShieldAlert,
-  Activity,
-  FileText,
-  Save,
-  CheckCircle2,
+  Users,
+  Radio,
+  BarChart3,
+  Clock,
+  Zap,
+  Settings,
+  LogOut,
   X,
   Bot,
-  Zap,
-  LogOut,
-  Award,
-  MessageSquare,
-  Star,
-  ThumbsUp,
-  Swords,
-  Sparkles,
-  Server,
-  TrendingUp,
+  Save,
+  CheckCircle2,
 } from 'lucide-react';
 import { TabType } from '../types';
 
@@ -59,96 +49,59 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: undefined,
     },
     {
-      id: 'telegram' as TabType,
-      label: 'Telegram Configuration',
-      icon: Send,
-      badge: 'Core',
+      id: 'redeem_events' as TabType,
+      label: 'Redeem Events',
+      icon: Gift,
+      badge: 'LIVE',
     },
     {
-      id: 'channel' as TabType,
-      label: 'Channels & Groups',
-      icon: Users2,
-      badge: 'v2.0',
+      id: 'voting_contests' as TabType,
+      label: 'Voting',
+      icon: Trophy,
+      badge: undefined,
     },
     {
       id: 'wallet' as TabType,
-      label: 'Wallet Settings',
+      label: 'Wallet',
       icon: Wallet,
       badge: undefined,
     },
     {
-      id: 'withdrawal' as TabType,
-      label: 'Withdrawal Settings',
-      icon: ArrowDownRight,
+      id: 'users' as TabType,
+      label: 'Users',
+      icon: Users,
       badge: undefined,
     },
     {
-      id: 'referral' as TabType,
-      label: 'Referral Settings',
-      icon: Share2,
+      id: 'ai_broadcast' as TabType,
+      label: 'Broadcast',
+      icon: Radio,
       badge: undefined,
     },
     {
-      id: 'milestones' as TabType,
-      label: 'Referral Milestones',
-      icon: Award,
-      badge: 'New',
-    },
-    {
-      id: 'support' as TabType,
-      label: 'Support Settings',
-      icon: Headphones,
+      id: 'analytics' as TabType,
+      label: 'Analytics',
+      icon: BarChart3,
       badge: undefined,
     },
     {
-      id: 'security' as TabType,
-      label: 'System Settings',
-      icon: ShieldAlert,
+      id: 'history' as TabType,
+      label: 'History',
+      icon: Clock,
       badge: undefined,
     },
     {
-      id: 'security' as TabType,
-      label: 'Security',
-      icon: ShieldAlert,
-      badge: undefined,
+      id: 'advanced' as TabType,
+      label: 'Advanced',
+      icon: Zap,
+      badge: 'PRO',
     },
     {
-      id: 'diagnostics' as TabType,
-      label: 'Diagnostics',
-      icon: Activity,
-      badge: 'Live',
-    },
-    {
-      id: 'logs' as TabType,
-      label: 'Logs',
-      icon: FileText,
+      id: 'settings' as TabType,
+      label: 'Settings',
+      icon: Settings,
       badge: undefined,
     },
-  ];
-
-  // Remove duplicate id representation if needed, but keeping explicit list for menu navigation
-  // Let's filter out duplicates so 'security' is shown cleanly as System Settings / Security
-  const uniqueMenuItems = [
-    { id: 'dashboard' as TabType, label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'users' as TabType, label: 'User Management', icon: Users, badge: 'Users' },
-    { id: 'transactions' as TabType, label: 'Wallet Transactions', icon: FileText, badge: 'Passbook' },
-    { id: 'telegram' as TabType, label: 'Telegram Configuration', icon: Send, badge: 'Core' },
-    { id: 'channel' as TabType, label: 'Channel & Group', icon: Users2 },
-    { id: 'wallet' as TabType, label: 'Wallet Settings', icon: Wallet },
-    { id: 'withdrawal' as TabType, label: 'Withdrawal Settings', icon: ArrowDownRight },
-    { id: 'referral' as TabType, label: 'Referral Settings', icon: Share2 },
-    { id: 'milestones' as TabType, label: 'Referral Milestones', icon: Award, badge: 'New' },
-    { id: 'feedback_campaigns' as TabType, label: '⭐ Feedback Campaigns', icon: MessageSquare },
-    { id: 'feedback_reviews' as TabType, label: 'Feedback Reviews', icon: Star },
-    { id: 'voting_contests' as TabType, label: '🏆 Voting Contests', icon: ThumbsUp, badge: 'Contest' },
-    { id: 'giveaway_war' as TabType, label: '⚔️ Giveaway War', icon: Swords, badge: 'WAR' },
-    { id: 'ai_broadcast' as TabType, label: '🎁 AI Redeem Code Broadcast', icon: Sparkles, badge: 'AI' },
-    { id: 'enterprise_ops' as TabType, label: '🏢 Enterprise Operations', icon: Server, badge: 'Phase 13' },
-    { id: 'ai_revenue_automation' as TabType, label: '⚡ AI Revenue & Automation', icon: TrendingUp, badge: 'Phase 14' },
-    { id: 'support' as TabType, label: 'Support Settings', icon: Headphones },
-    { id: 'security' as TabType, label: 'System Settings', icon: ShieldAlert },
-    { id: 'diagnostics' as TabType, label: 'Diagnostics', icon: Activity, badge: 'Live' },
-    { id: 'logs' as TabType, label: 'Logs', icon: FileText },
   ];
 
   const handleTabClick = (tabId: TabType) => {
@@ -168,23 +121,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-50 w-72 bg-slate-900 border-r border-slate-800/80 flex flex-col transition-transform duration-300 ease-in-out lg:static lg:translate-x-0 ${
+        className={`fixed top-0 bottom-0 left-0 z-50 w-64 bg-slate-900/95 backdrop-blur-xl border-r border-slate-800/80 flex flex-col transition-transform duration-300 ease-in-out lg:static lg:translate-x-0 ${
           isMobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         {/* Brand / Logo Header */}
         <div className="p-5 border-b border-slate-800/80 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-500 to-cyan-400 p-0.5 shadow-lg shadow-sky-500/20">
-              <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center text-sky-400">
-                <Bot className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 via-sky-500 to-blue-600 p-0.5 shadow-lg shadow-amber-500/10">
+              <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center text-amber-400">
+                <Bot className="w-5 h-5" />
               </div>
             </div>
             <div>
-              <h2 className="text-base font-bold text-white tracking-wide">
-                Roy Share <span className="text-sky-400">Bot</span>
+              <h2 className="text-sm font-black text-white tracking-wide uppercase flex items-center gap-1.5">
+                ROY SHARE <span className="text-amber-400 font-bold text-xs bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">V2</span>
               </h2>
-              <p className="text-xs text-slate-400">Telegram Wallet Admin</p>
+              <p className="text-[11px] text-slate-400 font-medium">Enterprise Admin Panel</p>
             </div>
           </div>
 
@@ -198,11 +151,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Navigation Items */}
         <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-          <div className="px-3 mb-2 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-            Configuration Menu
+          <div className="px-3 mb-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+            Main Menu
           </div>
 
-          {uniqueMenuItems.map((item) => {
+          {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
             return (
@@ -210,16 +163,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 key={item.label}
                 id={`sidebar-nav-${item.id}`}
                 onClick={() => handleTabClick(item.id)}
-                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all duration-200 group ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 group ${
                   isActive
-                    ? 'bg-gradient-to-r from-sky-500/15 to-blue-600/10 text-sky-400 border border-sky-500/30 shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
+                    ? 'bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-transparent text-amber-400 border-l-4 border-amber-400 pl-2.5 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-l-4 border-transparent'
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <Icon
                     className={`w-4 h-4 transition-colors ${
-                      isActive ? 'text-sky-400' : 'text-slate-400 group-hover:text-slate-200'
+                      isActive ? 'text-amber-400' : 'text-slate-400 group-hover:text-slate-200'
                     }`}
                   />
                   <span>{item.label}</span>
@@ -227,9 +180,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                 {item.badge && (
                   <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider ${
+                    className={`px-2 py-0.5 rounded-md text-[9px] font-black tracking-wider ${
                       isActive
-                        ? 'bg-sky-500/20 text-sky-300'
+                        ? 'bg-amber-400 text-slate-950 shadow-sm'
                         : 'bg-slate-800 text-slate-400'
                     }`}
                   >
@@ -241,12 +194,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })}
         </div>
 
-        {/* Action Button: Save Configuration */}
-        <div className="p-4 border-t border-slate-800/80 bg-slate-900/60 space-y-3">
+        {/* Action Button: Save Configuration & Session */}
+        <div className="p-4 border-t border-slate-800/80 bg-slate-950/40 space-y-3">
           {hasUnsavedChanges && (
             <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-center gap-2">
               <Zap className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>Settings have unsaved modifications</span>
+              <span>Unsaved changes</span>
             </div>
           )}
 
@@ -257,25 +210,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
               setIsMobileOpen(false);
             }}
             disabled={isSaving}
-            className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-bold bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white shadow-lg shadow-sky-500/20 hover:shadow-sky-500/30 transition-all duration-200 disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-lg shadow-amber-500/20 transition-all duration-200 disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
-            <span>{isSaving ? 'Saving Settings...' : 'Save Configuration'}</span>
+            <span>{isSaving ? 'Saving...' : 'Save Configuration'}</span>
           </button>
 
-          <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 flex flex-col gap-1.5">
-            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Admin Session Timer</span>
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400 font-medium">Session expires in:</span>
-              <span className="text-xs text-sky-400 font-mono font-black tracking-wider">
-                {(() => {
-                  const h = Math.floor(sessionTimeLeft / 3600);
-                  const m = Math.floor((sessionTimeLeft % 3600) / 60);
-                  const s = sessionTimeLeft % 60;
-                  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-                })()}
-              </span>
-            </div>
+          <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800/80 flex items-center justify-between">
+            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Session</span>
+            <span className="text-xs text-amber-400 font-mono font-black tracking-wider">
+              {(() => {
+                const h = Math.floor(sessionTimeLeft / 3600);
+                const m = Math.floor((sessionTimeLeft % 3600) / 60);
+                const s = sessionTimeLeft % 60;
+                return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+              })()}
+            </span>
           </div>
 
           {onLogout && (
@@ -285,19 +235,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onLogout();
                 setIsMobileOpen(false);
               }}
-              className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-xl text-xs font-bold bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-300 border border-slate-700/80 transition"
+              className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-xl text-xs font-bold bg-slate-800/60 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 border border-slate-700/60 transition"
             >
-              <LogOut className="w-4 h-4" />
-              <span>Logout Admin Session</span>
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Logout</span>
             </button>
           )}
 
-          <div className="text-[11px] text-center text-slate-500 flex items-center justify-center gap-1">
-            <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-            <span>Firestore Config Engine v1.0</span>
+          <div className="text-[10px] text-center text-slate-500 flex items-center justify-center gap-1">
+            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+            <span>Firestore Engine v2.0</span>
           </div>
         </div>
       </aside>
     </>
   );
 };
+

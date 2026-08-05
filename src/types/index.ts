@@ -107,11 +107,18 @@ export interface DiagnosticItem {
 
 export type TabType =
   | 'dashboard'
+  | 'redeem_events'
+  | 'voting_contests'
+  | 'wallet'
   | 'users'
+  | 'ai_broadcast'
+  | 'analytics'
+  | 'history'
+  | 'advanced'
+  | 'settings'
   | 'transactions'
   | 'telegram'
   | 'channel'
-  | 'wallet'
   | 'withdrawal'
   | 'referral'
   | 'milestones'
@@ -121,9 +128,7 @@ export type TabType =
   | 'diagnostics'
   | 'feedback_campaigns'
   | 'feedback_reviews'
-  | 'voting_contests'
   | 'giveaway_war'
-  | 'ai_broadcast'
   | 'enterprise_ops'
   | 'ai_revenue_automation';
 
