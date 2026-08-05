@@ -1793,7 +1793,7 @@ Claim now and don't forget to share your screenshot!`;
       const serverTime = Date.now();
       const eventId = `live_${serverTime}`;
       const cleanBotName = botUsername.replace(/^@/, '') || 'Roy_wallett_bot';
-      const miniAppLink = (miniAppUrl && miniAppUrl.trim()) || `https://t.me/${cleanBotName}?startapp=live_event`;
+      const miniAppLink = (miniAppUrl && miniAppUrl.trim()) || `https://t.me/${cleanBotName}?start=live_event`;
 
       const broadcastText =
         `🚀 <b>Live Redeem Event Started</b>\n\n` +

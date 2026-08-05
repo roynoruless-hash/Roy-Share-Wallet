@@ -42,6 +42,21 @@ interface TelegramChannelGroupRecord {
 }
 
 /**
+ * Helper to construct Telegram inline buttons for Mini Apps safely
+ */
+function buildMiniAppButton(label: string, url: string) {
+  const cleanUrl = (url || '').trim();
+  if (!cleanUrl) {
+    return { text: label, url: 'https://t.me/Roy_wallett_bot?startapp=live_event' };
+  }
+  if (cleanUrl.startsWith('https://t.me/') || cleanUrl.startsWith('t.me/') || cleanUrl.startsWith('http://t.me/')) {
+    const fullUrl = cleanUrl.startsWith('http') ? cleanUrl : `https://${cleanUrl}`;
+    return { text: label, url: fullUrl };
+  }
+  return { text: label, web_app: { url: cleanUrl } };
+}
+
+/**
  * Fetch all active Telegram channels and groups from Firestore collection 'telegramChannels'
  */
 async function getActiveChannelsAndGroups(): Promise<TelegramChannelGroupRecord[]> {
@@ -541,6 +556,11 @@ async function parseWarStartParam(startParam: string): Promise<ParsedWarParam | 
  */
 export async function processTelegramUpdate(token: string, update: any) {
   if (!token || !update) return;
+
+  console.log('Received Telegram Update:', JSON.stringify(update));
+  if (update?.message?.web_app_data) {
+    console.log('Received Web App Data:', JSON.stringify(update.message.web_app_data));
+  }
 
   // 1. IGNORE EDITED MESSAGES, CHANNEL POSTS, AND NON-PRIVATE UPDATES
   if (update.edited_message || update.channel_post || update.edited_channel_post || update.my_chat_member || update.chat_member) {
@@ -1309,48 +1329,42 @@ Final Payout: ₹${payoutAmount}`);
     let startParam = '';
     const parts = text.split(/\s+/);
     if (parts.length > 1 && parts[1]) {
-      startParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
+      startParam = parts[1].replace(/^(?:\?|\/)?(?:start=|startapp=)/i, '').trim();
     } else {
-      const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
+      const match = text.match(/^\/start(?:=|\?start=|\?startapp=|startapp=)?(\S+)/i);
       if (match && match[1] && match[1].toLowerCase() !== '/start') {
-        startParam = match[1].trim();
+        startParam = match[1].trim().replace(/^(?:\?|\/)?(?:start=|startapp=)/i, '');
       }
     }
 
-    console.log('[BOT START FLOW] User started bot. ChatId:', chatId, 'startParam:', startParam || 'none');
+    console.log('Received Payload:', startParam || 'none');
 
-    const isLivePayload = startParam && (
-      startParam === 'live' ||
-      startParam.startsWith('redeem_live') ||
-      startParam.startsWith('live_event') ||
-      startParam.startsWith('live_redeem') ||
-      startParam.startsWith('redeem_') ||
-      startParam.startsWith('live_')
+    const lowerParam = (startParam || '').toLowerCase();
+    const isLivePayload = lowerParam !== '' && (
+      lowerParam === 'live' ||
+      lowerParam.includes('live_event') ||
+      lowerParam.includes('live_redeem') ||
+      lowerParam.includes('redeem_live') ||
+      lowerParam.startsWith('redeem_') ||
+      lowerParam.startsWith('live_') ||
+      lowerParam.startsWith('live')
     );
 
-    let shouldRunLiveEventFlow = isLivePayload;
     let liveDocSnap: any = null;
-
     try {
-      console.log('[BOT START FLOW] Reading active live event from Firestore...');
       liveDocSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
-      if (liveDocSnap && liveDocSnap.exists()) {
-        console.log('[BOT START FLOW] Active event found in liveRedeem/current');
-      } else {
-        console.log('[BOT START FLOW] No event in liveRedeem/current, checking liveRedeemEvents/active...');
+      if (!liveDocSnap || !liveDocSnap.exists()) {
         liveDocSnap = await getDoc(doc(db, 'liveRedeemEvents', 'active'));
-        if (liveDocSnap && liveDocSnap.exists()) {
-          console.log('[BOT START FLOW] Active event found in liveRedeemEvents/active');
-        } else {
-          console.log('[BOT START FLOW] No active live event found in either collection');
-        }
       }
     } catch (err) {
-      console.error('[BOT START FLOW] Error fetching live event document:', err);
+      console.error('Error fetching live event from Firestore:', err);
     }
 
+    const hasActiveEvent = Boolean(liveDocSnap && liveDocSnap.exists());
+    console.log('Detected Live Event:', hasActiveEvent ? 'true' : 'false');
+
     const now = Date.now();
-    let liveEventState: 'IDLE' | 'WAITING_FOR_READY' | 'LIVE_COUNTDOWN' | 'UNLOCKED' | 'ENDED' = 'IDLE';
+    let liveEventState: 'IDLE' | 'WAITING_FOR_ADMIN' | 'WAITING_FOR_READY' | 'LIVE_COUNTDOWN' | 'UNLOCKED' | 'PAUSED' | 'LOCKED' | 'ENDED' = 'IDLE';
     let activeData: any = null;
 
     if (liveDocSnap && liveDocSnap.exists()) {
@@ -1358,29 +1372,24 @@ Final Payout: ₹${payoutAmount}`);
       const maxUses = Number(activeData.maxUses || activeData.totalCodesCount || 100);
       const claimedUses = Number(activeData.claimedUses ?? activeData.claimedCount ?? 0);
       const remainingUses = Math.max(0, maxUses - claimedUses);
-      const isExpired = now > activeData.expiresAt;
-      const isFull = remainingUses <= 0;
+      const isExpired = Boolean(activeData.expiresAt && now > activeData.expiresAt);
+      const isFull = Boolean(maxUses > 0 && remainingUses <= 0);
       const isEnded = activeData.active === false || activeData.status === 'ended' || activeData.eventStatus === 'ENDED';
 
-      console.log('[BOT START FLOW] Active Event Details loaded:', {
-        eventId: activeData.eventId || activeData.id,
-        active: activeData.active,
-        status: activeData.status,
-        eventStatus: activeData.eventStatus,
-        maxUses,
-        claimedUses,
-        remainingUses,
-        isExpired,
-        isFull,
-        isEnded,
-        expiresAt: activeData.expiresAt,
-        now
-      });
-
-      if (isEnded || isExpired || isFull) {
+      if (isEnded || isFull) {
         liveEventState = 'ENDED';
+      } else if (activeData.eventStatus === 'WAITING_FOR_ADMIN' || activeData.eventStatus === 'WAITING_FOR_LOBBY') {
+        liveEventState = 'WAITING_FOR_ADMIN';
       } else if (activeData.eventStatus === 'WAITING_FOR_READY') {
         liveEventState = 'WAITING_FOR_READY';
+      } else if (activeData.eventStatus === 'PAUSED' || activeData.isPaused === true) {
+        liveEventState = 'PAUSED';
+      } else if (activeData.eventStatus === 'LOCKED' || activeData.isLocked === true) {
+        liveEventState = 'LOCKED';
+      } else if (isExpired) {
+        liveEventState = 'ENDED';
+      } else if (activeData.eventStatus === 'RELEASED' || activeData.isReleased === true || activeData.isUnlocked === true) {
+        liveEventState = 'UNLOCKED';
       } else {
         const unlockTime = activeData.unlockAt || activeData.unlockTime || activeData.unlocksAt || now;
         if (now < unlockTime) {
@@ -1389,65 +1398,95 @@ Final Payout: ₹${payoutAmount}`);
           liveEventState = 'UNLOCKED';
         }
       }
-      console.log('[BOT START FLOW] Computed Live Event State:', liveEventState);
-    } else {
-      console.log('[BOT START FLOW] No active event data available, state defaults to IDLE');
     }
 
-    console.log('[BOT START FLOW] Pre-check shouldRunLiveEventFlow:', shouldRunLiveEventFlow);
-    if (!shouldRunLiveEventFlow && (!startParam || startParam === '')) {
-      if (liveEventState === 'WAITING_FOR_READY' || liveEventState === 'LIVE_COUNTDOWN' || liveEventState === 'UNLOCKED') {
-        shouldRunLiveEventFlow = true;
-        console.log('[BOT START FLOW] Redirecting to live event flow because event is active and startParam is empty');
-      }
+    console.log('Current Event State:', liveEventState);
+
+    let shouldRunLiveEventFlow = isLivePayload;
+    if (!shouldRunLiveEventFlow && liveEventState !== 'IDLE' && liveEventState !== 'ENDED') {
+      shouldRunLiveEventFlow = true;
+      console.log(`[BOT START FLOW] shouldRunLiveEventFlow set to true because active live event exists in state: ${liveEventState}`);
     }
-    console.log('[BOT START FLOW] Final shouldRunLiveEventFlow decision:', shouldRunLiveEventFlow);
 
     if (shouldRunLiveEventFlow) {
       try {
         const adminConfig = await getAdminConfig();
         const botUsername = adminConfig?.botUsername || 'Roy_wallett_bot';
         const cleanBotName = botUsername.replace(/^@/, '');
-        const miniAppUrl = activeData?.miniAppUrl || activeData?.miniAppLink || `https://t.me/${cleanBotName}?startapp=live_event`;
+        const miniAppUrl = activeData?.miniAppUrl || activeData?.miniAppLink || `https://t.me/${cleanBotName}?start=live_event`;
+
+        console.log('Mini App URL:', miniAppUrl);
 
         // 1. IDLE
         if (liveEventState === 'IDLE') {
-          console.log('[BOT START FLOW] Sending response: "No Live Event" to chatId:', chatId);
-          await sendTelegramApi(token, 'sendMessage', {
+          const res = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
-            text: `No Live Event`,
+            text: `ℹ️ <b>No Active Live Event</b>\n\nThere is no live redeem event active at the moment.`,
             parse_mode: 'HTML',
           });
+          console.log('Response Sent:', JSON.stringify(res));
           return;
         }
 
         // 2. ENDED
         if (liveEventState === 'ENDED') {
-          console.log('[BOT START FLOW] Sending response: "Redeem Event Ended" to chatId:', chatId);
-          await sendTelegramApi(token, 'sendMessage', {
+          const res = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
-            text: `Redeem Event Ended.`,
+            text: `🏁 <b>Redeem Event Ended</b>\n\nThis event has ended or code stock has been fully claimed. Stay tuned for the next live event!`,
             parse_mode: 'HTML',
           });
+          console.log('Response Sent:', JSON.stringify(res));
           return;
         }
 
-        // 2.5 WAITING_FOR_READY (Waiting Room)
-        if (liveEventState === 'WAITING_FOR_READY') {
-          console.log('[BOT START FLOW] Sending response: "Waiting Room" to chatId:', chatId);
+        // 3. WAITING_FOR_ADMIN / WAITING_FOR_READY (Waiting Lobby)
+        if (liveEventState === 'WAITING_FOR_ADMIN' || liveEventState === 'WAITING_FOR_READY') {
           const inline_keyboard = [
-            [{ text: '⏳ Join Waiting Room', web_app: { url: miniAppUrl } }],
+            [buildMiniAppButton('👥 Open Waiting Lobby', miniAppUrl)],
           ];
-          await sendTelegramApi(token, 'sendMessage', {
+          const textMsg =
+            `👥 <b>Live Redeem Waiting Lobby</b>\n\n` +
+            `⏳ Waiting for Admin to release the redeem code...\n\n` +
+            `Ready participants: <b>${activeData?.readyCount || 0}</b> / <b>${activeData?.minReadyUsers || 0}</b>\n\n` +
+            `Tap the button below to open the Waiting Lobby in Roy Wallet!`;
+
+          const res = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
-            text:
-              `⏳ <b>Live Redeem Waiting Room</b>\n\n` +
-              `The event has been started, but is waiting for more participants to join before starting the countdown!\n\n` +
-              `<b>Ready participants:</b> ${activeData?.readyCount || 0} / ${activeData?.minReadyUsers || 0}\n\n` +
-              `Tap below to join the Waiting Room and press <b>"I'm Ready"</b>!`,
+            text: textMsg,
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard },
           });
+          console.log('Response Sent:', JSON.stringify(res));
+          return;
+        }
+
+        // 4. PAUSED
+        if (liveEventState === 'PAUSED') {
+          const inline_keyboard = [
+            [buildMiniAppButton('🤖 Open Roy Wallet Bot', miniAppUrl)],
+          ];
+          const res = await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `⛔ <b>Live Event Paused</b>\n\nThe event has been temporarily paused by Admin. Please stay tuned!`,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard },
+          });
+          console.log('Response Sent:', JSON.stringify(res));
+          return;
+        }
+
+        // 5. LOCKED
+        if (liveEventState === 'LOCKED') {
+          const inline_keyboard = [
+            [buildMiniAppButton('🤖 Open Roy Wallet Bot', miniAppUrl)],
+          ];
+          const res = await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `🚨 <b>Live Event Emergency Locked</b>\n\nSubmissions are currently locked by Admin.`,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard },
+          });
+          console.log('Response Sent:', JSON.stringify(res));
           return;
         }
 
@@ -1455,31 +1494,29 @@ Final Payout: ₹${payoutAmount}`);
         const claimedUsers = activeData?.claimedUsers || {};
         const userCode = claimedUsers[chatId]?.code;
         if (userCode) {
-          console.log('[BOT START FLOW] Sending response: "Already Claimed" to chatId:', chatId);
-          // Do NOT expose redeem code inside bot chat
           const inline_keyboard = [
-            [{ text: '🤖 Open Roy Wallet', web_app: { url: miniAppUrl } }],
+            [buildMiniAppButton('🤖 Open Roy Wallet Bot', miniAppUrl)],
           ];
-          await sendTelegramApi(token, 'sendMessage', {
+          const res = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
             text:
               `🎉 <b>Congratulations!</b>\n\n` +
               `You have already claimed your redeem code!\n\n` +
-              `Tap below to open the Mini App and copy your code.`,
+              `Tap below to open the Mini App and view your code.`,
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard },
           });
+          console.log('Response Sent:', JSON.stringify(res));
           return;
         }
 
-        // 3. LIVE_COUNTDOWN
+        // 6. LIVE_COUNTDOWN
         if (liveEventState === 'LIVE_COUNTDOWN') {
           const unlockTime = activeData.unlockAt || activeData.unlockTime || activeData.unlocksAt || now;
           let remainingSecs = Math.max(0, Math.ceil((unlockTime - now) / 1000));
-          console.log('[BOT START FLOW] Sending response: "LIVE_COUNTDOWN" to chatId:', chatId, 'remainingSecs:', remainingSecs);
 
           const inline_keyboard = [
-            [{ text: '⏳ Open Waiting Room', web_app: { url: miniAppUrl } }],
+            [buildMiniAppButton('⏳ Open Waiting Room', miniAppUrl)],
           ];
 
           const sendRes = await sendTelegramApi(token, 'sendMessage', {
@@ -1487,20 +1524,19 @@ Final Payout: ₹${payoutAmount}`);
             text:
               `🎁 <b>Live Redeem Event</b>\n\n` +
               `Preparing Event...\n\n` +
-              `<b>${remainingSecs}</b>`,
+              `<b>${remainingSecs}s</b> remaining until code release!`,
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard },
           });
+          console.log('Response Sent:', JSON.stringify(sendRes));
 
           const msgId = sendRes?.result?.message_id;
-          console.log('[BOT START FLOW] Countdown message sent. Message ID:', msgId);
 
           if (msgId && remainingSecs > 0) {
             (async () => {
               for (let sec = remainingSecs - 1; sec >= 0; sec--) {
                 await new Promise((resolve) => setTimeout(resolve, 1000));
 
-                // Check latest state inside loop
                 let loopSnap = await getDoc(doc(db, 'liveRedeem', 'current'));
                 let loopData = loopSnap.exists() ? loopSnap.data() as any : null;
                 const loopNow = Date.now();
@@ -1525,24 +1561,26 @@ Final Payout: ₹${payoutAmount}`);
                 if (currentLoopState !== 'LIVE_COUNTDOWN') {
                   if (currentLoopState === 'UNLOCKED') {
                     const unlock_keyboard = [
-                      [{ text: '🎁 Claim Now', web_app: { url: miniAppUrl } }],
+                      [buildMiniAppButton('🎁 Claim Now', miniAppUrl)],
                     ];
-                    await sendTelegramApi(token, 'editMessageText', {
+                    const editRes = await sendTelegramApi(token, 'editMessageText', {
                       chat_id: chatId,
                       message_id: msgId,
                       text:
                         `🔓 <b>Code Unlocked</b>\n\n` +
-                        `<code>Roy***99</code>`,
+                        `Open Roy Wallet Bot now to claim your code!`,
                       parse_mode: 'HTML',
                       reply_markup: { inline_keyboard: unlock_keyboard },
                     });
+                    console.log('Response Sent (Countdown Unlock):', JSON.stringify(editRes));
                   } else {
-                    await sendTelegramApi(token, 'editMessageText', {
+                    const editRes = await sendTelegramApi(token, 'editMessageText', {
                       chat_id: chatId,
                       message_id: msgId,
                       text: `Redeem Event Ended.`,
                       parse_mode: 'HTML',
                     });
+                    console.log('Response Sent (Countdown Ended):', JSON.stringify(editRes));
                   }
                   break;
                 }
@@ -1553,7 +1591,7 @@ Final Payout: ₹${payoutAmount}`);
                   text:
                     `🎁 <b>Live Redeem Event</b>\n\n` +
                     `Preparing Event...\n\n` +
-                    `<b>${sec}</b>`,
+                    `<b>${sec}s</b> remaining until code release!`,
                   parse_mode: 'HTML',
                   reply_markup: { inline_keyboard },
                 });
@@ -1563,27 +1601,29 @@ Final Payout: ₹${payoutAmount}`);
           return;
         }
 
-        // 4. UNLOCKED
+        // 7. UNLOCKED
         if (liveEventState === 'UNLOCKED') {
-          console.log('[BOT START FLOW] Sending response: "UNLOCKED" to chatId:', chatId);
           const inline_keyboard = [
-            [{ text: '🎁 Claim Now', web_app: { url: miniAppUrl } }],
+            [buildMiniAppButton('🎁 Claim Now', miniAppUrl)],
           ];
 
-          await sendTelegramApi(token, 'sendMessage', {
+          const res = await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
             text:
-              `🔓 <b>Code Unlocked</b>\n\n` +
-              `<code>Roy***99</code>`,
+              `🔓 <b>Code Unlocked!</b>\n\n` +
+              `Open Roy Wallet Bot now to claim your code before stock runs out!`,
             parse_mode: 'HTML',
             reply_markup: { inline_keyboard },
           });
+          console.log('Response Sent:', JSON.stringify(res));
           return;
         }
 
       } catch (err) {
         console.error('Error in bot live event handler:', err);
       }
+    } else {
+      console.log('Reason if redirected to Welcome Screen:', `No active live event found in Firestore (state=${liveEventState}) and no live event startParam provided (payload=${startParam || 'none'}).`);
     }
 
       // 1. VOTE FLOW
@@ -1835,6 +1875,7 @@ Final Payout: ₹${payoutAmount}`);
       }
 
     // NO PAYLOAD - NORMAL WELCOME FLOW
+    console.log('Reason if redirected to Welcome Screen:', 'No active live event in Firestore and no startParam provided. Reached normal welcome flow.');
     console.log('PAYLOAD: none');
     console.log('PAYLOAD TYPE: NONE');
     console.log('WAR ID: none');
