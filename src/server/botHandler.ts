@@ -135,7 +135,7 @@ export async function checkLiveEventActive(): Promise<{
         }
       }
 
-      const hasActiveEvent = liveEventState !== 'IDLE' && liveEventState !== 'ENDED';
+      const hasActiveEvent = (liveEventState as string) !== 'IDLE' && liveEventState !== 'ENDED';
       return { hasActiveEvent, liveEventState, activeData };
     }
   } catch (err) {
@@ -146,7 +146,7 @@ export async function checkLiveEventActive(): Promise<{
 
 export async function sendLiveEventInfoMessage(
   token: string,
-  chatId: number,
+  chatId: number | string,
   liveEventState: string,
   activeData: any
 ) {
