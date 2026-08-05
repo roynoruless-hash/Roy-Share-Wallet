@@ -26,6 +26,7 @@ import {
   ChevronDown,
   ChevronUp,
   Filter,
+  Trophy,
 } from 'lucide-react';
 
 interface AIBroadcastViewProps {
@@ -240,6 +241,111 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
     } catch (err: any) {
       showToast(err.message || 'Error ending live event', 'error');
     }
+  };
+
+  const [isReleasingCode, setIsReleasingCode] = useState(false);
+  const [isPausingEvent, setIsPausingEvent] = useState(false);
+
+  const handleReleaseLiveEvent = async () => {
+    setIsReleasingCode(true);
+    try {
+      const res = await fetch('/api/live-event/release', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🔓 Redeem Code Released! Input box enabled in Mini App.', 'success');
+        fetchLiveEvent();
+      } else {
+        showToast(data.error || 'Failed to release redeem code', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error releasing redeem code', 'error');
+    } finally {
+      setIsReleasingCode(false);
+    }
+  };
+
+  const handlePauseLiveEvent = async () => {
+    setIsPausingEvent(true);
+    try {
+      const res = await fetch('/api/live-event/pause', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message || 'Live Redeem Event status updated', 'info');
+        fetchLiveEvent();
+      } else {
+        showToast(data.error || 'Failed to pause/resume event', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error updating event status', 'error');
+    } finally {
+      setIsPausingEvent(false);
+    }
+  };
+
+  const [isEmergencyLocking, setIsEmergencyLocking] = useState(false);
+
+  const handleEmergencyLockLiveEvent = async () => {
+    setIsEmergencyLocking(true);
+    try {
+      const res = await fetch('/api/live-event/emergency-lock', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🚨 Emergency Lock Activated! Inputs & submissions frozen.', 'error');
+        fetchLiveEvent();
+      } else {
+        showToast(data.error || 'Failed to activate emergency lock', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error triggering emergency lock', 'error');
+    } finally {
+      setIsEmergencyLocking(false);
+    }
+  };
+
+  const handleExportPNG = () => {
+    const winners = activeLiveEvent?.winnersTimeline || [];
+    const stats = activeLiveEvent?.summaryStats || {};
+    const content = `🏆 LIVE REDEEM EVENT WINNER TIMELINE 🏆\n\n` +
+      `Event ID: ${activeLiveEvent?.id || 'N/A'}\n` +
+      `Duration: ${stats.eventDurationSec || 0} seconds\n` +
+      `Total Participants: ${stats.totalParticipants || 0}\n` +
+      `Total Claims: ${stats.totalClaims || 0}\n` +
+      `Average Claim Time: ${stats.avgClaimTimeSec || 0}s\n\n` +
+      `----------------------------------------\n` +
+      `WINNERS:\n` +
+      `----------------------------------------\n` +
+      winners.map((w: any) => `#${w.rank} ${w.userName} (@${w.telegramId}) - Time: ${w.claimTime} | Speed: ${w.typingSpeedSec}s | Prize: ${w.reward} pts`).join('\n');
+
+    const element = document.createElement('a');
+    const file = new Blob([content], { type: 'text/plain' });
+    element.href = URL.createObjectURL(file);
+    element.download = `event_winner_timeline_${activeLiveEvent?.id || Date.now()}.txt`;
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+    showToast('📄 Winner Timeline exported as text/summary file!', 'success');
+  };
+
+  const handleExportPDF = () => {
+    window.print();
+  };
+
+  const handleShareToTelegram = () => {
+    const winners = (activeLiveEvent?.winnersTimeline || []).slice(0, 10);
+    const stats = activeLiveEvent?.summaryStats || {};
+    const message = `🏆 LIVE EVENT RESULT TIMELINE 🏆\n\n` +
+      `📊 Event Summary:\n` +
+      `⏱ Duration: ${stats.eventDurationSec || 0}s\n` +
+      `👥 Total Participants: ${stats.totalParticipants || 0}\n` +
+      `🎁 Total Claims: ${stats.totalClaims || 0}\n` +
+      `⚡ Avg Speed: ${stats.avgClaimTimeSec || 0}s\n\n` +
+      `🏅 WINNERS:\n` +
+      winners.map((w: any) => `${w.rank === 1 ? '🥇' : w.rank === 2 ? '🥈' : w.rank === 3 ? '🥉' : '🏅'} #${w.rank} ${w.userName} (@${w.telegramId}) - ${w.typingSpeedSec}s speed (${w.reward} pts)`).join('\n') +
+      `\n\nCongratulations to all winners! 🎉`;
+
+    setEditableMessage(message);
+    setBroadcastType('custom_text');
+    showToast('✈️ Result summary copied into Broadcast Composer! Scroll down to Send.', 'info');
   };
 
   // Fetch dynamic destinations from Firestore
@@ -904,8 +1010,50 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
               <div className="space-y-0.5">
                 <span className="text-xs font-bold text-slate-400">Active Live Redeem Event</span>
                 <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-xs font-mono font-bold">
-                    {activeLiveEvent.eventStatus === 'WAITING_FOR_READY' ? '⏳ WAITING FOR READY' : '🟢 LIVE'}
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-mono font-bold flex items-center gap-1.5 shadow ${
+                    activeLiveEvent.isLocked || activeLiveEvent.eventStatus === 'LOCKED'
+                      ? 'bg-red-500/20 text-red-400 border border-red-500/40 animate-pulse'
+                      : activeLiveEvent.eventStatus === 'RELEASED' || activeLiveEvent.isReleased
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse'
+                      : activeLiveEvent.eventStatus === 'PAUSED' || activeLiveEvent.isPaused
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : activeLiveEvent.eventStatus === 'ENDED'
+                      ? 'bg-slate-800 text-slate-400 border border-slate-700'
+                      : activeLiveEvent.eventStatus === 'WAITING_FOR_ADMIN' || activeLiveEvent.eventStatus === 'WAITING_FOR_READY'
+                      ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/40'
+                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse'
+                  }`}>
+                    {activeLiveEvent.isLocked || activeLiveEvent.eventStatus === 'LOCKED' ? (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                        <span>🔴 LOCKED</span>
+                      </>
+                    ) : activeLiveEvent.eventStatus === 'RELEASED' || activeLiveEvent.isReleased ? (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                        <span>⚡ RELEASED</span>
+                      </>
+                    ) : activeLiveEvent.eventStatus === 'PAUSED' || activeLiveEvent.isPaused ? (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-amber-400" />
+                        <span>⛔ PAUSED</span>
+                      </>
+                    ) : activeLiveEvent.eventStatus === 'ENDED' ? (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-slate-400" />
+                        <span>🏁 ENDED</span>
+                      </>
+                    ) : activeLiveEvent.eventStatus === 'WAITING_FOR_ADMIN' || activeLiveEvent.eventStatus === 'WAITING_FOR_READY' ? (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+                        <span>🟡 WAITING</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                        <span>🟢 LIVE</span>
+                      </>
+                    )}
                   </span>
                   <span className="text-xs text-slate-400 font-mono">
                     ID: {activeLiveEvent.id}
@@ -913,14 +1061,98 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={handleEndLiveEvent}
-                className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold transition ml-auto"
-              >
-                🛑 End Event Now
-              </button>
+              {/* 5 ADMIN DASHBOARD CONTROL BUTTONS */}
+              <div className="flex items-center flex-wrap gap-2 ml-auto">
+                {/* 🚀 Start Live Event Status Badge / Active */}
+                <button
+                  type="button"
+                  disabled={true}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold transition flex items-center gap-1.5 opacity-80"
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-400" />
+                  <span>🚀 Live Event Active</span>
+                </button>
+
+                {/* 🔓 Release Redeem Code */}
+                <button
+                  type="button"
+                  onClick={handleReleaseLiveEvent}
+                  disabled={isReleasingCode || activeLiveEvent.isReleased || activeLiveEvent.eventStatus === 'RELEASED' || activeLiveEvent.isLocked}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md ${
+                    activeLiveEvent.isReleased || activeLiveEvent.eventStatus === 'RELEASED'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 cursor-not-allowed opacity-80'
+                      : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black'
+                  }`}
+                >
+                  {isReleasingCode ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <span>🔓 Release Redeem Code</span>
+                  )}
+                </button>
+
+                {/* ⛔ Pause Event */}
+                <button
+                  type="button"
+                  onClick={handlePauseLiveEvent}
+                  disabled={isPausingEvent || activeLiveEvent.isLocked}
+                  className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isPausingEvent ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <span>{activeLiveEvent.eventStatus === 'PAUSED' ? '▶️ Resume Event' : '⛔ Pause Event'}</span>
+                  )}
+                </button>
+
+                {/* 🚨 Emergency Lock */}
+                <button
+                  type="button"
+                  onClick={handleEmergencyLockLiveEvent}
+                  disabled={isEmergencyLocking || activeLiveEvent.isLocked || activeLiveEvent.eventStatus === 'LOCKED'}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition flex items-center gap-1.5 cursor-pointer shadow-lg ${
+                    activeLiveEvent.isLocked || activeLiveEvent.eventStatus === 'LOCKED'
+                      ? 'bg-red-950/60 text-red-400 border border-red-800 cursor-not-allowed'
+                      : 'bg-red-600 hover:bg-red-500 text-white border border-red-400 animate-pulse'
+                  }`}
+                >
+                  {isEmergencyLocking ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <span>🚨 Emergency Lock</span>
+                  )}
+                </button>
+
+                {/* 🛑 End Event */}
+                <button
+                  type="button"
+                  onClick={handleEndLiveEvent}
+                  className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>🛑 End Event</span>
+                </button>
+              </div>
             </div>
+
+            {/* EMERGENCY LOCK ALERT BANNER IF LOCKED */}
+            {(activeLiveEvent.isLocked || activeLiveEvent.eventStatus === 'LOCKED') && (
+              <div className="p-3.5 rounded-2xl bg-red-950/80 border-2 border-red-500 text-red-200 text-xs font-bold flex items-center justify-between animate-pulse">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="w-5 h-5 text-red-400 animate-bounce" />
+                  <div>
+                    <span className="block font-black text-sm text-red-300">🚨 EVENT TEMPORARILY LOCKED BY ADMIN</span>
+                    <span className="text-[11px] text-red-400/90 font-mono">All redeem input boxes and code claims are frozen across all Mini Apps.</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePauseLiveEvent}
+                  className="px-3 py-1.5 rounded-xl bg-red-500 hover:bg-red-400 text-white font-black text-xs transition cursor-pointer shadow"
+                >
+                  ▶️ Unlock & Resume
+                </button>
+              </div>
+            )}
 
             {/* REAL-TIME DASHBOARD METRICS GRID */}
             <div className="grid grid-cols-2 sm:grid-cols-7 gap-2.5 font-mono text-xs">
@@ -989,6 +1221,124 @@ export const AIBroadcastView: React.FC<AIBroadcastViewProps> = ({ config, showTo
                   {activeLiveEvent.requestsPerSecond ?? 0} RPS
                 </div>
                 <span className="text-[9px] text-slate-500 block">5s moving avg</span>
+              </div>
+            </div>
+
+            {/* LIVE ACTIVITY FEED */}
+            <div className="p-3.5 rounded-xl bg-slate-900/90 border border-emerald-500/30 space-y-2">
+              <div className="flex justify-between items-center text-xs text-emerald-400 font-bold">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  ⚡ Live Event Activity Feed (2s Auto-Refresh):
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {(activeLiveEvent.activityFeed || []).length} Events
+                </span>
+              </div>
+              <div className="max-h-36 overflow-y-auto space-y-1 font-mono text-xs">
+                {activeLiveEvent.activityFeed && activeLiveEvent.activityFeed.length > 0 ? (
+                  activeLiveEvent.activityFeed.slice(-15).reverse().map((item: any, idx: number) => (
+                    <div key={item.id || idx} className="p-1.5 rounded bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 truncate">
+                        <span className="text-sm">{item.icon || '⚡'}</span>
+                        <span className="text-slate-200 font-medium">{item.text}</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 shrink-0 font-mono">{item.time}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-2 text-center text-slate-500 text-xs italic">Waiting for live activities...</div>
+                )}
+              </div>
+            </div>
+
+            {/* WINNER TIMELINE & RESULT REPORT */}
+            <div className="p-4 rounded-xl bg-slate-900/90 border border-amber-500/30 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <Trophy className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs font-black text-amber-300 uppercase tracking-wider">
+                    Winner Timeline & Event Results ({activeLiveEvent.winnersTimeline?.length || 0})
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleExportPNG}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold border border-slate-700 flex items-center gap-1 cursor-pointer transition"
+                  >
+                    📷 PNG
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportPDF}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold border border-slate-700 flex items-center gap-1 cursor-pointer transition"
+                  >
+                    📄 PDF
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleShareToTelegram}
+                    className="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shadow"
+                  >
+                    ✈️ Share to Telegram
+                  </button>
+                </div>
+              </div>
+
+              {/* Summary Stats Badges */}
+              {activeLiveEvent.summaryStats && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+                  <div className="p-2 rounded-lg bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">Duration</span>
+                    <span className="font-bold text-amber-300">{activeLiveEvent.summaryStats.eventDurationSec || 0}s</span>
+                  </div>
+                  <div className="p-2 rounded-lg bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">Total Claims</span>
+                    <span className="font-bold text-emerald-300">{activeLiveEvent.summaryStats.totalClaims || 0}</span>
+                  </div>
+                  <div className="p-2 rounded-lg bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">Avg Claim Time</span>
+                    <span className="font-bold text-sky-300">{activeLiveEvent.summaryStats.avgClaimTimeSec || 0}s</span>
+                  </div>
+                  <div className="p-2 rounded-lg bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">Fastest Typist</span>
+                    <span className="font-bold text-indigo-300 truncate block">
+                      {activeLiveEvent.summaryStats.fastestTypist?.userName || 'N/A'} ({activeLiveEvent.summaryStats.fastestTypist?.typingSpeedSec || 0}s)
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Winners Timeline List */}
+              <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 font-mono text-xs">
+                {activeLiveEvent.winnersTimeline && activeLiveEvent.winnersTimeline.length > 0 ? (
+                  activeLiveEvent.winnersTimeline.map((winner: any) => (
+                    <div key={winner.rank} className="p-2 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className={`w-6 h-6 rounded-full flex items-center justify-center font-black text-xs shrink-0 ${
+                          winner.rank === 1 ? 'bg-amber-400 text-slate-950' : winner.rank === 2 ? 'bg-slate-300 text-slate-950' : winner.rank === 3 ? 'bg-amber-700 text-amber-100' : 'bg-slate-800 text-slate-300'
+                        }`}>
+                          #{winner.rank}
+                        </span>
+                        <div className="truncate">
+                          <span className="font-bold text-slate-200 block truncate">{winner.userName}</span>
+                          <span className="text-[10px] text-slate-400 font-mono block">@{winner.telegramId} • Code: {winner.code}</span>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <span className="text-emerald-400 font-black block">+{winner.reward} pts</span>
+                        <span className="text-[10px] text-slate-400 font-mono block">{winner.typingSpeedSec}s • {winner.claimTime}</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-4 text-center text-slate-500 text-xs italic">
+                    No claims recorded yet. Winners will appear in real time once codes are claimed.
+                  </div>
+                )}
               </div>
             </div>
 

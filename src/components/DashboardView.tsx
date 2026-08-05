@@ -16,6 +16,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { AdminConfig, TabType } from '../types';
+import { AdminCommandCenter } from './admin/AdminCommandCenter';
 
 interface DashboardViewProps {
   config: AdminConfig;
@@ -76,6 +77,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
 
   return (
     <div className="space-y-6">
+      {/* PHASE XII: Admin Command Center */}
+      <AdminCommandCenter />
+
       {/* Bot Connection Banner */}
       <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900/90 to-sky-950/40 border border-slate-800 relative overflow-hidden shadow-xl">
         <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-gradient-to-l from-sky-500/10 to-transparent pointer-events-none" />

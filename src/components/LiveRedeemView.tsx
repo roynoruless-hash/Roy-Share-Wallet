@@ -1,17 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { Gift, Zap, Copy, Check, Clock, AlertTriangle, Sparkles, RefreshCw, ArrowLeft, Camera, ShieldCheck } from 'lucide-react';
+import { Gift, Zap, Copy, Check, Clock, AlertTriangle, Sparkles, RefreshCw, ArrowLeft, Camera, ShieldCheck, Film, BarChart2, History, TestTube, Radio, Award } from 'lucide-react';
+import { LiveReplayModal } from './live-event/LiveReplayModal';
+import { EventAnalyticsView } from './live-event/EventAnalyticsView';
+import { UserRedeemHistory } from './live-event/UserRedeemHistory';
+import { LiveNotificationCenter } from './live-event/LiveNotificationCenter';
+import { SpectatorView } from './live-event/SpectatorView';
+import { SeasonsView } from './live-event/SeasonsView';
 
 interface LiveEventData {
   id: string;
   status: 'active' | 'ended';
-  eventStatus: 'IDLE' | 'LIVE_COUNTDOWN' | 'UNLOCKED' | 'ENDED' | 'WAITING_FOR_READY' | 'LIVE';
+  eventStatus: 'IDLE' | 'LIVE_COUNTDOWN' | 'UNLOCKED' | 'ENDED' | 'WAITING_FOR_READY' | 'WAITING_FOR_ADMIN' | 'RELEASED' | 'LIVE' | 'PAUSED' | 'LOCKED';
+  isReleased?: boolean;
+  isLocked?: boolean;
+  isPaused?: boolean;
+  isGhostMode?: boolean;
   unlocksAt: number;
   unlockTime: number;
   unlockAt: number;
   expiresAt: number;
   maxUses: number;
-  claimedCount: number;
-  remainingCodesCount: number;
+  claimedCount: number | string;
+  remainingCodesCount: number | string;
   totalCodesCount: number;
   countdownSeconds: number;
   minReadyUsers: number;
@@ -23,10 +33,40 @@ interface LiveEventData {
   maskedCode?: string;
   userAlreadyClaimedCode?: string;
   screenshotUploadsCount?: number;
+  userSecurityScore?: { score: number; badge: 'TRUSTED' | 'SUSPICIOUS' | 'HIGH_RISK'; factors: string[] };
+  serverHealth?: {
+    serverStatus: string;
+    requestsPerSec: number;
+    cpuLoad: string;
+    memoryUsageMB: string;
+    responseTimeMs: string;
+    dbLatencyMs: string;
+    firestoreStatus: string;
+    telegramApiStatus: string;
+    queueMetrics: { activeQueueLength: number; totalRequestsProcessed: number; isProcessing: boolean };
+  } | null;
+  activityFeed?: Array<{ id: string; time: string; text: string; icon: string }>;
+  winnersTimeline?: Array<{
+    rank: number;
+    telegramId: string;
+    userName: string;
+    claimTime: string;
+    claimedAt: number;
+    typingSpeedSec: number;
+    code: string;
+    reward: number;
+    score?: number;
+    badge?: string;
+  }>;
   summaryStats?: {
+    eventDurationSec: number;
     totalParticipants: number;
-    successfulClaims: number;
-    remainingCodes: number;
+    totalClaims: number | string;
+    successfulClaims: number | string;
+    remainingCodes: number | string;
+    avgClaimTimeSec: number;
+    fastestTypist?: any;
+    goldenCodeWinner?: any;
   };
 }
 
@@ -42,6 +82,24 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
   const [eventData, setEventData] = useState<LiveEventData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [serverError, setServerError] = useState<string>('');
+
+  // Phase XII View Tabs & Modals
+  const [activeTab, setActiveTab] = useState<'live' | 'spectator' | 'seasons' | 'analytics' | 'history'>('live');
+  const [isReplayModalOpen, setIsReplayModalOpen] = useState<boolean>(false);
+  const [isSandboxMode, setIsSandboxMode] = useState<boolean>(false);
+
+  const handleToggleSandbox = async () => {
+    try {
+      const res = await fetch('/api/live-event/sandbox-mode', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setIsSandboxMode(data.isSandbox);
+        setClaimStatusMsg({ type: 'info', text: data.message });
+      }
+    } catch (err) {
+      console.error('Failed to toggle sandbox mode:', err);
+    }
+  };
 
   // Countdown & Unlocked states
   const [remainingSeconds, setRemainingSeconds] = useState<number>(10);
@@ -74,11 +132,47 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
   });
 
   // Handle Claim & Copy states
+  const [inputCode, setInputCode] = useState<string>('');
+  const [typingStartTime, setTypingStartTime] = useState<number | null>(null);
+  const [pasteDetected, setPasteDetected] = useState<boolean>(false);
+  const [typingSpeedResult, setTypingSpeedResult] = useState<number | null>(null);
+
   const [isClaiming, setIsClaiming] = useState<boolean>(false);
   const [isReadySubmitting, setIsReadySubmitting] = useState<boolean>(false);
   const [claimedCode, setClaimedCode] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
   const [claimStatusMsg, setClaimStatusMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [queueStatus, setQueueStatus] = useState<string | null>(null);
+
+  // Synchronized Live Decryption Animation State
+  const [unlockAnimProgress, setUnlockAnimProgress] = useState<number>(0);
+  const [isDecryptingAnim, setIsDecryptingAnim] = useState<boolean>(false);
+  const [animStepText, setAnimStepText] = useState<string>('🔒 Code Locked...');
+  const [hasSeenUnlockAnim, setHasSeenUnlockAnim] = useState<boolean>(false);
+
+  // Trigger typing notification to backend
+  const notifyTypingToBackend = async () => {
+    try {
+      fetch('/api/live-event/typing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: telegramId, telegramId }),
+      }).catch(() => {});
+    } catch (e) {}
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value.toUpperCase();
+    setInputCode(val);
+    if (!typingStartTime && val.length > 0) {
+      setTypingStartTime(Date.now());
+      notifyTypingToBackend();
+    }
+  };
+
+  const handlePaste = () => {
+    setPasteDetected(true);
+  };
 
   // Screenshot Upload states
   const [isUploading, setIsUploading] = useState<boolean>(false);
@@ -166,6 +260,55 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
     return () => clearInterval(timer);
   }, [eventData, eventExpired]);
 
+  // Handle Synchronized Code Release Animation Sequence
+  useEffect(() => {
+    if (!eventData) return;
+
+    const isReleasedNow = Boolean(eventData.isReleased || eventData.eventStatus === 'RELEASED');
+
+    if (isReleasedNow && !hasSeenUnlockAnim && !isDecryptingAnim) {
+      setIsDecryptingAnim(true);
+      setUnlockAnimProgress(10);
+      setAnimStepText('🔒 Code Locked...');
+
+      const t1 = setTimeout(() => {
+        setUnlockAnimProgress(30);
+        setAnimStepText('Decrypting Secure Code...');
+      }, 500);
+
+      const t2 = setTimeout(() => {
+        setUnlockAnimProgress(50);
+        setAnimStepText('Decrypting Secure Code... (50%)');
+      }, 1000);
+
+      const t3 = setTimeout(() => {
+        setUnlockAnimProgress(75);
+        setAnimStepText('Decrypting Secure Code... (75%)');
+      }, 1500);
+
+      const t4 = setTimeout(() => {
+        setUnlockAnimProgress(100);
+        setAnimStepText('🔓 Code Released Successfully!');
+      }, 2000);
+
+      const t5 = setTimeout(() => {
+        setIsDecryptingAnim(false);
+        setHasSeenUnlockAnim(true);
+        if (!typingStartTime) {
+          setTypingStartTime(Date.now());
+        }
+      }, 2400);
+
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+        clearTimeout(t3);
+        clearTimeout(t4);
+        clearTimeout(t5);
+      };
+    }
+  }, [eventData?.isReleased, eventData?.eventStatus, hasSeenUnlockAnim, isDecryptingAnim]);
+
   // Handle Submit "I'M READY" status
   const handleSubmitReady = async () => {
     setIsReadySubmitting(true);
@@ -199,13 +342,19 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
 
   // Handle Claim Button Press
   const handleClaimCode = async () => {
-    if (remainingSeconds > 0) {
-      setClaimStatusMsg({ type: 'error', text: '⏳ Countdown has not finished yet!' });
+    if (!inputCode.trim()) {
+      setClaimStatusMsg({ type: 'error', text: 'Please enter or paste the redeem code.' });
       return;
     }
 
+    const finishTime = Date.now();
+    const startTime = typingStartTime || finishTime;
+    const computedSpeedSec = Math.max(0.01, Number(((finishTime - startTime) / 1000).toFixed(2)));
+    setTypingSpeedResult(computedSpeedSec);
+
     setIsClaiming(true);
     setClaimStatusMsg(null);
+    setQueueStatus('⏳ Entering Smart Queue...');
 
     try {
       const res = await fetch('/api/live-event/claim', {
@@ -215,14 +364,21 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
           userId: telegramId,
           telegramId: telegramId,
           userName: userName,
+          code: inputCode.trim(),
+          typingSpeedSec: computedSpeedSec,
+          pasteDetected: pasteDetected,
         }),
       });
 
       const data = await res.json();
 
-      if (data.success && data.code) {
-        setClaimedCode(data.code);
-        setClaimStatusMsg({ type: 'success', text: '🎉 Code Claimed Successfully!' });
+      if (data.queueNumber) {
+        setQueueStatus(`⚡ Queue #${data.queueNumber} Processed (Position: ${data.queuePosition || 0})`);
+      }
+
+      if (data.success) {
+        setClaimedCode(data.code || inputCode.trim());
+        setClaimStatusMsg({ type: 'success', text: `🎉 Code Claimed! Typing Speed: ${computedSpeedSec} sec (Queue #${data.queueNumber || 1})` });
       } else {
         const errorText = data.error || 'Failed to claim code';
         setClaimStatusMsg({ type: 'error', text: errorText });
@@ -442,8 +598,8 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
       {/* Background Glow */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[350px] h-[350px] bg-gradient-to-tr from-amber-500/20 via-orange-500/10 to-rose-500/10 rounded-full blur-3xl pointer-events-none animate-pulse" />
 
-      {/* Top Header Bar */}
-      <div className="w-full max-w-md flex items-center justify-between z-10 pt-2">
+      {/* Top Header Bar with LiveNotificationCenter & Sandbox Mode toggle */}
+      <div className="w-full max-w-4xl flex items-center justify-between z-10 pt-2 gap-3">
         {onClose && (
           <button
             type="button"
@@ -453,17 +609,122 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
             <ArrowLeft className="w-5 h-5" />
           </button>
         )}
-        <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-full text-xs font-bold text-amber-400 shadow-lg ml-auto">
-          <Zap className="w-4 h-4 text-amber-400 animate-pulse" />
-          <span>ROY WALLET LIVE</span>
+
+        <div className="flex items-center gap-2 ml-auto">
+          <button
+            onClick={handleToggleSandbox}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition ${
+              isSandboxMode
+                ? 'bg-purple-500/20 border-purple-500/50 text-purple-300'
+                : 'bg-slate-900/80 border-slate-800 text-slate-400 hover:text-slate-200'
+            }`}
+            title="Toggle Admin Sandbox Test Mode"
+          >
+            <TestTube className="w-3.5 h-3.5" />
+            <span>{isSandboxMode ? '🧪 Sandbox Active' : '🧪 Sandbox'}</span>
+          </button>
+
+          <button
+            onClick={() => setIsReplayModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 text-xs font-bold transition shadow-lg"
+          >
+            <Film className="w-3.5 h-3.5" />
+            <span>Replay</span>
+          </button>
+
+          <LiveNotificationCenter telegramId={telegramId} />
         </div>
       </div>
 
-      {/* Main Content Area */}
-      <div className="w-full max-w-md my-auto flex flex-col items-center text-center z-10 py-6 space-y-6">
+      {/* Navigation Tab Bar */}
+      <div className="w-full max-w-xl my-3 flex items-center justify-center p-1 rounded-2xl border border-slate-800 bg-slate-900/90 z-10 gap-1 font-bold text-xs overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('live')}
+          className={`px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 transition whitespace-nowrap ${
+            activeTab === 'live'
+              ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+          }`}
+        >
+          <Zap className="w-3.5 h-3.5" />
+          <span>Live Arena</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('spectator')}
+          className={`px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 transition whitespace-nowrap ${
+            activeTab === 'spectator'
+              ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+          }`}
+        >
+          <Radio className="w-3.5 h-3.5 text-red-500" />
+          <span>Spectator</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('seasons')}
+          className={`px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 transition whitespace-nowrap ${
+            activeTab === 'seasons'
+              ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+          }`}
+        >
+          <Award className="w-3.5 h-3.5" />
+          <span>Seasons</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('analytics')}
+          className={`px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 transition whitespace-nowrap ${
+            activeTab === 'analytics'
+              ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+          }`}
+        >
+          <BarChart2 className="w-3.5 h-3.5" />
+          <span>Analytics</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('history')}
+          className={`px-3 py-2 rounded-xl flex items-center justify-center gap-1.5 transition whitespace-nowrap ${
+            activeTab === 'history'
+              ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+          }`}
+        >
+          <History className="w-3.5 h-3.5" />
+          <span>History</span>
+        </button>
+      </div>
+
+      {/* Tab Views */}
+      {activeTab === 'spectator' ? (
+        <div className="w-full max-w-2xl z-10 my-4">
+          <SpectatorView
+            eventData={eventData}
+            onExitSpectator={() => setActiveTab('live')}
+          />
+        </div>
+      ) : activeTab === 'seasons' ? (
+        <div className="w-full max-w-3xl z-10 my-4">
+          <SeasonsView />
+        </div>
+      ) : activeTab === 'analytics' ? (
+        <div className="w-full max-w-4xl z-10 my-4">
+          <EventAnalyticsView />
+        </div>
+      ) : activeTab === 'history' ? (
+        <div className="w-full max-w-2xl z-10 my-4">
+          <UserRedeemHistory telegramId={telegramId} />
+        </div>
+      ) : (
+        /* Main Content Area: Live Arena */
+        <div className="w-full max-w-md my-auto flex flex-col items-center text-center z-10 py-6 space-y-6">
 
         {isFinished ? (
-          /* EVENT FINISHED / OUT OF STOCK VIEW */
+          /* EVENT FINISHED / OUT OF STOCK VIEW WITH WINNERS TIMELINE */
           <div className="w-full bg-slate-900/90 border border-amber-500/30 rounded-3xl p-6 shadow-2xl backdrop-blur-md space-y-5 text-center font-sans">
             <div className="text-slate-400 font-mono text-xs tracking-widest">
               ━━━━━━━━━━━━━━
@@ -472,7 +733,31 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
             <div className="space-y-1">
               <div className="text-3xl mb-1">🎉</div>
               <h2 className="text-2xl font-black text-amber-300">Event Finished</h2>
+              <p className="text-xs text-slate-400 font-mono">Official Winner Timeline & Results</p>
             </div>
+
+            {/* Winner Timeline Cards */}
+            {eventData?.winnersTimeline && eventData.winnersTimeline.length > 0 && (
+              <div className="space-y-2 text-left font-mono text-xs max-h-56 overflow-y-auto pr-1">
+                <span className="text-[10px] font-bold text-amber-400 block uppercase">🏆 Winner Timeline:</span>
+                {eventData.winnersTimeline.map((winner: any) => (
+                  <div key={winner.rank} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`w-6 h-6 rounded-full flex items-center justify-center font-black text-xs shrink-0 ${
+                        winner.rank === 1 ? 'bg-amber-400 text-slate-950' : winner.rank === 2 ? 'bg-slate-300 text-slate-950' : winner.rank === 3 ? 'bg-amber-700 text-amber-100' : 'bg-slate-800 text-slate-300'
+                      }`}>
+                        #{winner.rank}
+                      </span>
+                      <div className="truncate">
+                        <span className="font-bold text-slate-200 block truncate">{winner.userName}</span>
+                        <span className="text-[10px] text-slate-500 block">{winner.typingSpeedSec}s speed</span>
+                      </div>
+                    </div>
+                    <span className="text-emerald-400 font-black text-xs">+{winner.reward} pts</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <p className="text-sm font-bold text-rose-400 flex items-center justify-center gap-1">
               <span>Thank you for participating</span>
@@ -509,161 +794,224 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
               </span>
             </div>
 
-            {eventData?.eventStatus === 'WAITING_FOR_READY' ? (
-              /* WAITING ROOM STAGE */
-              <div className="space-y-5 py-2 animate-in fade-in duration-300">
-                <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
-                  <span className="text-amber-400 font-bold flex items-center gap-1 animate-pulse">
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping inline-block" />
-                    ⏳ Waiting Room
-                  </span>
-                  <span>Online: {eventData?.onlineUsersCount || 0}</span>
+            {/* GHOST MODE BANNER */}
+            {eventData?.isGhostMode && (
+              <div className="p-3.5 rounded-2xl bg-purple-950/80 border border-purple-500/50 text-purple-200 text-center text-xs font-mono font-bold space-y-0.5 shadow-xl">
+                <span>👻 GHOST MODE ACTIVE</span>
+                <p className="text-[10px] text-purple-300 font-normal">Statistics, rankings & claims are hidden until event ends.</p>
+              </div>
+            )}
+
+            {/* SECURITY SCORE BADGE */}
+            {eventData?.userSecurityScore && (
+              <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between font-mono text-xs">
+                <span className="text-slate-400 font-sans text-[11px]">🛡️ Your Security Score:</span>
+                <span className={`px-2 py-0.5 rounded font-black text-[11px] ${
+                  eventData.userSecurityScore.badge === 'TRUSTED'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    : eventData.userSecurityScore.badge === 'SUSPICIOUS'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                    : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                }`}>
+                  {eventData.userSecurityScore.score}/100 • {eventData.userSecurityScore.badge}
+                </span>
+              </div>
+            )}
+
+            {/* EMERGENCY LOCK ALERT BANNER */}
+            {(eventData?.isLocked || eventData?.eventStatus === 'LOCKED') && (
+              <div className="p-4 rounded-2xl bg-red-950/90 border-2 border-red-500 text-red-200 text-center space-y-1 animate-pulse shadow-2xl">
+                <div className="text-2xl">🚨</div>
+                <h3 className="text-sm font-black text-red-300 uppercase">Event Temporarily Locked</h3>
+                <p className="text-xs text-red-400 font-mono">Please wait for Admin.</p>
+              </div>
+            )}
+
+            {/* LIVE WAITING LOBBY HUD */}
+            <div className="grid grid-cols-3 gap-2 py-1 font-mono text-xs">
+              <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-0.5">
+                <span className="text-[10px] text-slate-400 block uppercase font-sans">👥 Online</span>
+                <span className="text-amber-400 font-black text-sm">{eventData?.onlineUsersCount || 1}</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-0.5">
+                <span className="text-[10px] text-slate-400 block uppercase font-sans">🙋 Ready</span>
+                <span className="text-emerald-400 font-black text-sm">{eventData?.readyCount || 0}</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-0.5">
+                <span className="text-[10px] text-slate-400 block uppercase font-sans">⏳ Status</span>
+                <span className={`font-black text-xs ${
+                  eventData?.isLocked || eventData?.eventStatus === 'LOCKED'
+                    ? 'text-red-400'
+                    : eventData?.isReleased || eventData?.eventStatus === 'RELEASED'
+                    ? 'text-emerald-400'
+                    : 'text-amber-400 animate-pulse'
+                }`}>
+                  {eventData?.isLocked || eventData?.eventStatus === 'LOCKED'
+                    ? 'LOCKED'
+                    : eventData?.isReleased || eventData?.eventStatus === 'RELEASED'
+                    ? 'RELEASED'
+                    : 'WAITING'}
+                </span>
+              </div>
+            </div>
+
+            {/* LIVE DECRYPTION ANIMATION CONSOLE */}
+            {isDecryptingAnim ? (
+              <div className="p-5 rounded-2xl bg-slate-950 border-2 border-emerald-500/60 font-mono space-y-4 shadow-2xl animate-in zoom-in-95 duration-300">
+                <div className="flex items-center justify-between text-xs text-emerald-400 font-bold border-b border-slate-800 pb-2">
+                  <span>🔓 DECRYPTION IN PROGRESS</span>
+                  <span className="text-amber-400 font-black">{unlockAnimProgress}%</span>
                 </div>
 
-                <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-center space-y-3">
-                  <h3 className="text-sm font-black text-slate-200 uppercase tracking-wider">Waiting for participants...</h3>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    Once enough participants join the waiting room and mark themselves as ready, the countdown will start automatically!
-                  </p>
-                  
-                  {/* Progress bar */}
-                  <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden mt-2 border border-slate-700">
-                    <div 
-                      className="bg-gradient-to-r from-amber-500 to-yellow-400 h-full rounded-full transition-all duration-500"
-                      style={{ width: `${Math.min(100, ((eventData?.readyCount || 0) / (eventData?.minReadyUsers || 1)) * 100)}%` }}
+                <div className="space-y-1 text-left text-xs">
+                  <div className="text-slate-300 font-bold text-center py-2">{animStepText}</div>
+                  <div className="w-full bg-slate-900 h-3.5 rounded-full overflow-hidden border border-slate-800 my-2">
+                    <div
+                      className="bg-gradient-to-r from-emerald-500 via-teal-400 to-amber-400 h-full transition-all duration-300 ease-out"
+                      style={{ width: `${unlockAnimProgress}%` }}
                     />
                   </div>
-                  <div className="flex justify-between text-[11px] font-mono text-slate-400">
-                    <span>Ready participants:</span>
-                    <span className="text-amber-400 font-bold">
-                      {eventData?.readyCount || 0} / {eventData?.minReadyUsers || 0}
-                    </span>
+                  <div className="text-[10px] text-slate-500 flex justify-between font-mono">
+                    <span>10%</span>
+                    <span>30%</span>
+                    <span>50%</span>
+                    <span>75%</span>
+                    <span>100%</span>
                   </div>
                 </div>
+              </div>
+            ) : !(eventData?.isReleased || eventData?.eventStatus === 'RELEASED') ? (
+              /* LOBBY / BEFORE RELEASE STATE */
+              <div className="space-y-4 py-2">
+                <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center justify-center gap-2">
+                  <Clock className="w-4 h-4 animate-spin text-amber-400" />
+                  <span>⏳ Waiting for Admin to release redeem code...</span>
+                </div>
 
-                {eventData?.isUserReady ? (
-                  /* USER IS READY badge */
-                  <div className="p-4 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 text-center text-emerald-300 text-xs font-bold flex items-center justify-center gap-2 animate-pulse shadow-inner">
-                    <Check className="w-5 h-5 text-emerald-400" />
-                    <span>You are ready! Waiting for others to join...</span>
-                  </div>
-                ) : (
-                  /* "I'M READY" button */
+                <div className="space-y-2 text-left">
+                  <label className="text-xs font-bold text-slate-400 block">Paste Redeem Code</label>
+                  <input
+                    type="text"
+                    disabled={true}
+                    placeholder="Waiting for Admin..."
+                    className="w-full px-4 py-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 text-slate-500 font-mono text-center text-sm cursor-not-allowed select-none"
+                  />
                   <button
                     type="button"
-                    onClick={handleSubmitReady}
-                    disabled={isReadySubmitting}
-                    className="w-full py-4 px-6 rounded-2xl text-base font-black bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-xl shadow-emerald-500/10 transition transform active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+                    disabled={true}
+                    className="w-full py-4 px-6 rounded-2xl text-base font-black bg-slate-800 text-slate-500 border border-slate-700/60 flex items-center justify-center gap-2 cursor-not-allowed"
                   >
-                    {isReadySubmitting ? (
+                    <span>Submit</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* RELEASED STATE -> INPUT ENABLED & TYPING SPEED MEASURED */
+              <div className="space-y-4 py-2 animate-in fade-in zoom-in duration-300">
+                <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-center gap-2 animate-pulse">
+                  <Zap className="w-4 h-4 text-emerald-400" />
+                  <span>🔓 Redeem Code Released! Enter code below:</span>
+                </div>
+
+                {typingSpeedResult && (
+                  <div className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono text-xs font-black flex items-center justify-center gap-1.5">
+                    <Zap className="w-4 h-4 text-amber-400" />
+                    <span>⚡ Typing Speed: {typingSpeedResult.toFixed(2)} sec</span>
+                  </div>
+                )}
+
+                <div className="space-y-2 text-left">
+                  <label className="text-xs font-bold text-amber-300 block">Paste Redeem Code</label>
+                  <input
+                    type="text"
+                    value={inputCode}
+                    onChange={handleInputChange}
+                    onPaste={handlePaste}
+                    placeholder="ENTER REDEEM CODE"
+                    disabled={isClaiming || Boolean(eventData?.isLocked || eventData?.eventStatus === 'LOCKED')}
+                    className="w-full px-4 py-3.5 rounded-2xl bg-slate-950 border-2 border-amber-500/60 text-amber-300 font-mono font-bold text-center text-lg uppercase tracking-wider focus:outline-none focus:border-amber-400 shadow-inner disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleClaimCode}
+                    disabled={isClaiming || !inputCode.trim() || Boolean(eventData?.isLocked || eventData?.eventStatus === 'LOCKED')}
+                    className="w-full py-4 px-6 rounded-2xl text-base font-black bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:from-amber-400 hover:to-yellow-300 text-slate-950 shadow-xl shadow-amber-500/20 transition transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    {isClaiming ? (
                       <>
                         <RefreshCw className="w-5 h-5 animate-spin" />
-                        <span>Submitting Ready...</span>
+                        <span>Validating Code...</span>
                       </>
                     ) : (
                       <>
-                        <span>🙋 I'M READY</span>
+                        <span>Submit</span>
                       </>
                     )}
                   </button>
-                )}
+                </div>
               </div>
-            ) : remainingSeconds > 0 ? (
-              /* ANIMATED COUNTDOWN STAGE (When remainingSeconds > 0) */
-              <div className="space-y-4 py-2">
-                <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
-                  <span className="text-amber-400 font-bold flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5 text-amber-400 animate-spin" /> Live Countdown
+            )}
+
+            {/* LIVE SERVER HEALTH METRICS PANEL (Admin / Health HUD) */}
+            {eventData?.serverHealth && (
+              <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-left space-y-2 font-mono text-[11px] shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+                  <span className="text-[10px] font-bold text-emerald-400 uppercase flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
+                    LIVE EVENT HEALTH (2s Sync)
                   </span>
-                  <span>Online: {eventData?.onlineUsersCount || 0}</span>
+                  <span className="text-[10px] text-slate-400">{eventData.serverHealth.serverStatus}</span>
                 </div>
-
-                <p className="text-xs font-bold text-slate-300">
-                  ⏳ Code unlocks in {remainingSeconds} seconds.
-                </p>
-
-                {/* Animated Synchronized Countdown Display */}
-                <div className="relative py-3">
-                  <div className="text-6xl sm:text-7xl font-black font-mono text-transparent bg-clip-text bg-gradient-to-b from-amber-200 via-amber-400 to-orange-500 drop-shadow-lg transition-all duration-300 transform scale-105 animate-pulse">
-                    {remainingSeconds}
+                <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  <div className="bg-slate-900 p-2 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 block">⚡ Req / sec:</span>
+                    <span className="text-amber-400 font-bold">{eventData.serverHealth.requestsPerSec} req/s</span>
                   </div>
-                  <span className="text-[11px] font-mono font-bold text-slate-400 uppercase tracking-widest block mt-1">
-                    seconds remaining
-                  </span>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800/80 text-xs text-slate-400 font-mono space-y-1">
-                  <div className="flex justify-between">
-                    <span>Remaining Stock:</span>
-                    <span className="text-amber-400 font-bold">
-                      {eventData?.remainingCodesCount || 0} / {eventData?.totalCodesCount || 0}
-                    </span>
+                  <div className="bg-slate-900 p-2 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 block">🔥 CPU Load:</span>
+                    <span className="text-orange-400 font-bold">{eventData.serverHealth.cpuLoad}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Server Status:</span>
-                    <span className="text-sky-400 font-bold">🔒 Synchronized</span>
+                  <div className="bg-slate-900 p-2 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 block">💾 Memory:</span>
+                    <span className="text-cyan-400 font-bold">{eventData.serverHealth.memoryUsageMB}</span>
+                  </div>
+                  <div className="bg-slate-900 p-2 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 block">📡 Response / DB:</span>
+                    <span className="text-emerald-400 font-bold">{eventData.serverHealth.responseTimeMs} / {eventData.serverHealth.dbLatencyMs}</span>
                   </div>
                 </div>
-
-                {/* PREMATURE LOCKED "Claim Now" BUTTON */}
-                <button
-                  type="button"
-                  disabled={true}
-                  className="w-full py-4 px-6 rounded-2xl text-base font-black bg-slate-800 text-slate-500 border border-slate-700/60 flex items-center justify-center gap-2 cursor-not-allowed shadow"
-                >
-                  <Clock className="w-5 h-5" />
-                  <span>Locked • Waiting for countdown...</span>
-                </button>
+                <div className="text-[9px] text-slate-500 flex justify-between pt-1 border-t border-slate-900">
+                  <span>Firestore: {eventData.serverHealth.firestoreStatus}</span>
+                  <span>Telegram: {eventData.serverHealth.telegramApiStatus}</span>
+                </div>
               </div>
-            ) : (
-              /* COUNTDOWN FINISHED -> SHOW MASKED CODE & "🎁 Claim Now" BUTTON */
-              <div className="space-y-5 animate-in fade-in zoom-in duration-300">
-                <div className="space-y-1">
-                  <h2 className="text-xl font-black text-amber-300 flex items-center justify-center gap-2">
-                    <Sparkles className="w-6 h-6 text-amber-400 animate-bounce" />
-                    <span>🎉 Code Unlocked</span>
-                  </h2>
-                </div>
+            )}
 
-                {/* Masked Code Display */}
-                <div className="py-3 px-4 rounded-2xl bg-slate-950 border-2 border-amber-500/40 shadow-inner">
-                  <code className="text-2xl font-mono font-black tracking-widest text-amber-400/80 blur-[1px]">
-                    {eventData?.maskedCode || 'Roy***99'}
-                  </code>
-                  <p className="text-[10px] text-slate-500 font-mono mt-1 uppercase">
-                    (Code is hidden until claimed)
-                  </p>
-                </div>
-
-                {/* 🎁 Claim Now BUTTON */}
-                <button
-                  type="button"
-                  onClick={handleClaimCode}
-                  disabled={isClaiming}
-                  className="w-full py-4 px-6 rounded-2xl text-base font-black bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:from-amber-400 hover:to-yellow-300 text-slate-950 shadow-xl shadow-amber-500/25 transition transform active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  {isClaiming ? (
-                    <>
-                      <RefreshCw className="w-5 h-5 animate-spin" />
-                      <span>Validating Claim...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="w-3 h-3 rounded-full bg-slate-950 animate-ping inline-block" />
-                      <span>🎁 Claim Now</span>
-                    </>
-                  )}
-                </button>
-
-                <div className="flex justify-between text-[11px] font-mono text-slate-400">
-                  <span>Stock Left: {eventData?.remainingCodesCount || 0}</span>
-                  <span>Server Validated ✓</span>
+            {/* LIVE ACTIVITY TICKER FEED */}
+            {eventData?.activityFeed && eventData.activityFeed.length > 0 && (
+              <div className="p-3 rounded-2xl bg-slate-950 border border-slate-800/80 text-left space-y-1 font-mono text-[11px]">
+                <span className="text-[10px] font-bold text-slate-400 uppercase block">⚡ Live Activity Feed:</span>
+                <div className="max-h-24 overflow-y-auto space-y-1">
+                  {eventData.activityFeed.slice(-5).reverse().map((item: any, idx: number) => (
+                    <div key={item.id || idx} className="flex items-center justify-between text-slate-300 gap-1.5">
+                      <span className="truncate">{item.icon || '⚡'} {item.text}</span>
+                      <span className="text-[9px] text-slate-500 shrink-0">{item.time}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
           </div>
         )}
       </div>
+      )}
+
+      {/* Queue Processing Status */}
+      {queueStatus && (
+        <div className="w-full max-w-md p-3 rounded-2xl text-xs font-mono font-bold bg-amber-500/10 border border-amber-500/30 text-amber-300 flex items-center justify-center gap-2 mb-2 animate-pulse">
+          <span>{queueStatus}</span>
+        </div>
+      )}
 
       {/* Claim Status Error / Info Alert */}
       {claimStatusMsg && (
@@ -692,6 +1040,13 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
         <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
         <span>Server Validated • One Claim Per Telegram Account</span>
       </div>
+
+      {/* Live Event Replay Modal */}
+      <LiveReplayModal
+        isOpen={isReplayModalOpen}
+        onClose={() => setIsReplayModalOpen(false)}
+        eventId={eventData?.id}
+      />
     </div>
   );
 };

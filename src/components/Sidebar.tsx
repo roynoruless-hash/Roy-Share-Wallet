@@ -23,6 +23,8 @@ import {
   ThumbsUp,
   Swords,
   Sparkles,
+  Server,
+  TrendingUp,
 } from 'lucide-react';
 import { TabType } from '../types';
 
@@ -141,6 +143,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'voting_contests' as TabType, label: '🏆 Voting Contests', icon: ThumbsUp, badge: 'Contest' },
     { id: 'giveaway_war' as TabType, label: '⚔️ Giveaway War', icon: Swords, badge: 'WAR' },
     { id: 'ai_broadcast' as TabType, label: '🎁 AI Redeem Code Broadcast', icon: Sparkles, badge: 'AI' },
+    { id: 'enterprise_ops' as TabType, label: '🏢 Enterprise Operations', icon: Server, badge: 'Phase 13' },
+    { id: 'ai_revenue_automation' as TabType, label: '⚡ AI Revenue & Automation', icon: TrendingUp, badge: 'Phase 14' },
     { id: 'support' as TabType, label: 'Support Settings', icon: Headphones },
     { id: 'security' as TabType, label: 'System Settings', icon: ShieldAlert },
     { id: 'diagnostics' as TabType, label: 'Diagnostics', icon: Activity, badge: 'Live' },

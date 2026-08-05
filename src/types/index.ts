@@ -123,7 +123,187 @@ export type TabType =
   | 'feedback_reviews'
   | 'voting_contests'
   | 'giveaway_war'
-  | 'ai_broadcast';
+  | 'ai_broadcast'
+  | 'enterprise_ops'
+  | 'ai_revenue_automation';
+
+export interface FraudReport {
+  userId: string;
+  username: string;
+  riskScore: number; // 0-100
+  riskLevel: 'Safe' | 'Review' | 'Ban Recommended';
+  reason: string;
+  fingerprint: string;
+  vpnDetected: boolean;
+  duplicateAccountsCount: number;
+  avgTypingWpm: number;
+  totalClaims: number;
+  referralsCount: number;
+  voteCount: number;
+  createdAt: string;
+}
+
+export interface AutoRewardRule {
+  id: string;
+  name: string;
+  triggerEvent: 'First Claim' | 'Golden Claim' | 'Top Typist' | 'Milestone Streak' | 'Referral Multiplier' | string;
+  rewardAmount: number;
+  conditions: string;
+  isActive: boolean;
+  totalPaidOut: number;
+  createdAt: string;
+}
+
+export interface RevenueAnalytics {
+  period: 'Daily' | 'Weekly' | 'Monthly' | 'Yearly';
+  platformRevenue: number;
+  withdrawalFees: number;
+  referralCost: number;
+  prizeCost: number;
+  netProfit: number;
+  history: Array<{
+    label: string;
+    revenue: number;
+    fees: number;
+    prizes: number;
+    referrals: number;
+    profit: number;
+  }>;
+}
+
+export interface EventSummary {
+  eventId: string;
+  eventName: string;
+  telegramResultPost: string;
+  winnerAnnouncement: string;
+  statistics: {
+    totalClaims: number;
+    totalAmountAwarded: number;
+    fastestClaimSeconds: number;
+    fastestUser: string;
+    durationMinutes: number;
+  };
+  highlights: string[];
+  createdAt: string;
+}
+
+export interface AdminInsights {
+  date: string;
+  todaysSuggestions: string[];
+  inactiveUsersCount: number;
+  mostActiveHours: string;
+  fraudTrends: string;
+  bestEventTime: string;
+  revenueTrends: string;
+  growthSuggestions: string[];
+}
+
+export interface BudgetPlan {
+  totalBudget: number;
+  prizePool: number;
+  goldenCodes: number;
+  winnerCount: number;
+  rewardDistribution: string[];
+  expectedCost: number;
+  estimatedRoi: string;
+}
+
+export interface RetentionCampaign {
+  id: string;
+  type: 'Comeback Bonus' | 'Reminder' | 'Special Event Invite';
+  targetUsersCount: number;
+  bonusAmount?: number;
+  message: string;
+  sentAt?: string;
+  status: 'PENDING' | 'EXECUTED';
+}
+
+export interface IncidentAlert {
+  id: string;
+  type: 'High Fraud' | 'Telegram API Failure' | 'Firestore Failure' | 'Queue Overflow' | 'Payment Failure' | 'High Error Rate';
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  message: string;
+  timestamp: string;
+  isResolved: boolean;
+  affectedCount?: number;
+}
+
+export interface ScheduledEvent {
+  id: string;
+  name: string;
+  startDate: string;
+  codeReleaseDate: string;
+  endDate: string;
+  rewardAmount: number;
+  maxClaims: number;
+  code: string;
+  templateId?: string;
+  status: 'SCHEDULED' | 'ACTIVE' | 'ENDED' | 'CANCELLED';
+  createdAt: string;
+}
+
+export interface EventTemplate {
+  id: string;
+  name: string;
+  category: 'Flash Event' | 'Golden Event' | 'Giveaway Event' | 'VIP Event' | string;
+  rewardAmount: number;
+  maxClaims: number;
+  codePrefix: string;
+  durationMinutes: number;
+  description: string;
+  updatedAt?: string;
+}
+
+export interface AdminRole {
+  id: string;
+  name: string;
+  description: string;
+  permissions: string[];
+}
+
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  category: 'EVENT' | 'SECURITY' | 'USER' | 'SYSTEM' | 'BACKUP' | 'ROLE' | string;
+  details: string;
+  adminId: string;
+  ip: string;
+  createdAt: string;
+  timestamp: number;
+}
+
+export interface SystemAnnouncement {
+  id: string;
+  title: string;
+  message: string;
+  priority: 'Info' | 'Warning' | 'Maintenance';
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface FeatureFlags {
+  redeem: boolean;
+  giveaway: boolean;
+  vote: boolean;
+  flashMode: boolean;
+  aiAssistant: boolean;
+  referrals: boolean;
+  withdrawals: boolean;
+  spectatorMode: boolean;
+  [key: string]: boolean;
+}
+
+export interface HealthServiceCheck {
+  name: string;
+  status: 'HEALTHY' | 'DEGRADED' | 'CRITICAL' | 'NOT_CONFIGURED' | string;
+  lastChecked: string;
+}
+
+export interface HealthCheckResult {
+  overallStatus: 'HEALTHY' | 'DEGRADED' | 'CRITICAL' | string;
+  latencyMs: number;
+  services: HealthServiceCheck[];
+}
 
 export interface AIBroadcastConfig {
   geminiApiKey: string;
@@ -760,5 +940,92 @@ export interface WarActivityLog {
   isValid: boolean;
   rejectReason?: string;
   createdAt: string;
+}
+
+export type RedeemClaimMode = 'FCFS' | 'RANDOM_DRAW' | 'HYBRID';
+
+export interface GoldenCodeItem {
+  id: string;
+  code: string;
+  reward: number;
+  maxClaims: number;
+  claimedCount: number;
+  remainingClaims: number;
+  expiry?: number;
+}
+
+export interface FlashModeConfig {
+  active: boolean;
+  durationSec: number;
+  activatedAt: number;
+  expiresAt: number;
+  bannerText?: string;
+}
+
+export interface CodeFragmentsConfig {
+  enabled: boolean;
+  count: number;
+  fragments: string[];
+}
+
+export interface FastestTypistItem {
+  telegramId: string;
+  userName: string;
+  typingSpeedSec: number;
+  claimedAt: number;
+  code: string;
+  reward: number;
+}
+
+export interface HallOfFameUserStats {
+  telegramId: string;
+  userName: string;
+  totalWins: number;
+  fastestClaimSec: number;
+  totalRewards: number;
+  eventsJoined: number;
+  rank: number;
+}
+
+export interface LiveRedeemPlatformEvent {
+  id: string;
+  eventId: string;
+  active: boolean;
+  status: 'active' | 'ended';
+  eventStatus: 'IDLE' | 'WAITING_FOR_READY' | 'LIVE_COUNTDOWN' | 'UNLOCKED' | 'ENDED';
+  claimMode: RedeemClaimMode;
+  goldenCodes: GoldenCodeItem[];
+  flashMode?: FlashModeConfig;
+  codeFragments?: CodeFragmentsConfig;
+  code?: string;
+  maskedCode?: string;
+  unlockAt: number;
+  unlockTime: number;
+  expiresAt: number;
+  maxUses: number;
+  claimedCount: number;
+  remainingCodesCount: number;
+  totalCodesCount: number;
+  countdownSeconds: number;
+  minReadyUsers: number;
+  readyCount: number;
+  isUserReady?: boolean;
+  onlineUsersCount: number;
+  waitingUsersCount: number;
+  typingUsersCount: number;
+  requestsPerSecond: number;
+  failedClaimsCount: number;
+  avgClaimTimeSec: number;
+  fastestTypingSec: number;
+  duplicateDeviceCount: number;
+  highVpnRiskCount: number;
+  blacklistedCount: number;
+  fastestTypistsLeaderboard?: FastestTypistItem[];
+  userAlreadyClaimedCode?: string;
+  summaryStats?: {
+    totalParticipants: number;
+    successfulClaims: number;
+    remainingCodes: number;
+  };
 }
 

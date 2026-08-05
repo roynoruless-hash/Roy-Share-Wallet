@@ -200,6 +200,96 @@
         "timestamp": { "type": "string" }
       },
       "required": ["id", "type", "message", "status", "timestamp"]
+    },
+    "auditLogs": {
+      "title": "Enterprise Audit Logs",
+      "description": "Comprehensive security and operational logs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "action": { "type": "string" },
+        "category": { "type": "string" },
+        "details": { "type": "string" },
+        "adminId": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "action", "category", "adminId", "timestamp"]
+    },
+    "scheduledEvents": {
+      "title": "Scheduled Events",
+      "description": "Pre-scheduled redeem drops and promotional events",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "startDate": { "type": "string" },
+        "codeReleaseDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "rewardAmount": { "type": "number" },
+        "maxClaims": { "type": "number" },
+        "code": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "name", "startDate", "codeReleaseDate", "endDate", "rewardAmount", "maxClaims", "code"]
+    },
+    "eventTemplates": {
+      "title": "Event Templates",
+      "description": "Reusable event presets (Flash, Golden, Giveaway, VIP)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "rewardAmount": { "type": "number" },
+        "maxClaims": { "type": "number" },
+        "codePrefix": { "type": "string" },
+        "durationMinutes": { "type": "number" }
+      },
+      "required": ["id", "name", "category", "rewardAmount", "maxClaims", "codePrefix"]
+    },
+    "announcements": {
+      "title": "System Announcements",
+      "description": "Global user notices and maintenance alerts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "priority": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "message", "priority"]
+    },
+    "autoRewardRules": {
+      "title": "Auto Reward Rules",
+      "description": "Automated reward payout rules for events and triggers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "triggerEvent": { "type": "string" },
+        "rewardAmount": { "type": "number" },
+        "conditions": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "totalPaidOut": { "type": "number" }
+      },
+      "required": ["id", "name", "triggerEvent", "rewardAmount"]
+    },
+    "hallOfFame": {
+      "title": "Hall of Fame",
+      "description": "Top typists, winners, and leaderboard champions",
+      "type": "object",
+      "properties": {
+        "telegramId": { "type": "string" },
+        "userName": { "type": "string" },
+        "totalWins": { "type": "number" },
+        "fastestClaimSec": { "type": "number" },
+        "totalRewards": { "type": "number" },
+        "eventsJoined": { "type": "number" }
+      },
+      "required": ["telegramId", "totalWins"]
     }
   },
   "firestore": {
@@ -230,6 +320,30 @@
     "/adminLogs/{logId}": {
       "schema": "adminLogs",
       "description": "Admin activity and audit log"
+    },
+    "/auditLogs/{logId}": {
+      "schema": "auditLogs",
+      "description": "Enterprise security and operational audit log"
+    },
+    "/scheduledEvents/{eventId}": {
+      "schema": "scheduledEvents",
+      "description": "Scheduled events drop schedule"
+    },
+    "/eventTemplates/{tplId}": {
+      "schema": "eventTemplates",
+      "description": "Saved event templates"
+    },
+    "/announcements/{annId}": {
+      "schema": "announcements",
+      "description": "System wide broadcast announcements"
+    },
+    "/autoRewardRules/{ruleId}": {
+      "schema": "autoRewardRules",
+      "description": "Automated wallet credit reward rules"
+    },
+    "/hallOfFame/{userId}": {
+      "schema": "hallOfFame",
+      "description": "Global speed drop leaderboards"
     },
     "/referralTokens/{tokenId}": {
       "schema": "referralTokens",

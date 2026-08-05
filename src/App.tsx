@@ -26,6 +26,8 @@ import { AdminLoginView } from './components/AdminLoginView';
 import { VotingContestsView } from './components/VotingContestsView';
 import { GiveawayWarView } from './components/GiveawayWarView';
 import { AIBroadcastView } from './components/AIBroadcastView';
+import { EnterpriseOperationsView } from './components/admin/EnterpriseOperationsView';
+import { AIRevenueAutomationView } from './components/admin/AIRevenueAutomationView';
 import { GiveawayWarPublicView } from './components/GiveawayWarPublicView';
 import { ContestRegistrationView } from './components/ContestRegistrationView';
 import { LiveRedeemView } from './components/LiveRedeemView';
@@ -40,6 +42,8 @@ function resolveTabFromPath(pathname: string): { tab: TabType; isUnknown: boolea
   if (p === '' || p === '/' || p === '/dashboard') return { tab: 'dashboard', isUnknown: false };
   if (p.startsWith('/giveaway-war') || p.startsWith('/giveaway_war') || p.startsWith('/war') || p.startsWith('/lucky-spin') || p.startsWith('/claim-rewards') || p.startsWith('/event-replay') || p.startsWith('/new-war')) return { tab: 'giveaway_war', isUnknown: false };
   if (p.startsWith('/ai-broadcast') || p.startsWith('/ai_broadcast') || p.startsWith('/broadcast')) return { tab: 'ai_broadcast', isUnknown: false };
+  if (p.startsWith('/enterprise') || p.startsWith('/enterprise_ops') || p.startsWith('/enterprise-ops')) return { tab: 'enterprise_ops', isUnknown: false };
+  if (p.startsWith('/ai-revenue') || p.startsWith('/ai_revenue') || p.startsWith('/automation') || p.startsWith('/revenue')) return { tab: 'ai_revenue_automation', isUnknown: false };
   if (p.startsWith('/users') || p.startsWith('/user-management')) return { tab: 'users', isUnknown: false };
   if (p.startsWith('/transactions')) return { tab: 'transactions', isUnknown: false };
   if (p.startsWith('/telegram')) return { tab: 'telegram', isUnknown: false };
@@ -677,6 +681,14 @@ export default function App() {
                   config={config}
                   showToast={showToast}
                 />
+              )}
+
+              {activeTab === 'enterprise_ops' && (
+                <EnterpriseOperationsView />
+              )}
+
+              {activeTab === 'ai_revenue_automation' && (
+                <AIRevenueAutomationView />
               )}
 
               {activeTab === 'support' && (
