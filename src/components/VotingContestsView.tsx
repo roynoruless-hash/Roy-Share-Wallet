@@ -512,7 +512,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
 
       // 2. Generate & dispatch unique voting link for every approved contestant
       for (const cn of approvedContestants) {
-        const uniqueLink = `https://t.me/${botUsername}?start=vote_${contest.id}_${cn.id}`;
+        const uniqueLink = `https://t.me/${botUsername}/roy_share_wallet?startapp=vote_${contest.id}_${cn.id}`;
         const linkId = `vote_${contest.id}_${cn.id}`;
 
         await saveVoteLink({
@@ -1831,7 +1831,7 @@ export const VotingContestsView: React.FC<VotingContestsViewProps> = ({ config, 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {filteredContestants.map(cn => {
                 const cParent = contests.find(c => c.id === cn.contestId);
-                const uniqueVotingLink = `https://t.me/${config.botUsername || 'RoyShareWalletBot'}?start=vote_${
+                const uniqueVotingLink = `https://t.me/${(config.botUsername || 'Roy_wallett_bot').replace(/^@/, '')}/roy_share_wallet?startapp=vote_${
                   cn.contestId
                 }_${cn.id}`;
 

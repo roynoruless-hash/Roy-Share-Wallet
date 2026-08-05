@@ -98,7 +98,7 @@ export const GiveawayWarPublicView: React.FC<GiveawayWarPublicViewProps> = ({
 
   const cleanBotUser = (botUsername || 'Roy_wallett_bot').replace(/^@/, '');
   const activeWarId = war?.id || 'live';
-  const tgDeepLink = `https://t.me/${cleanBotUser}?start=${teamTag}_${activeWarId}`;
+  const tgDeepLink = `https://t.me/${cleanBotUser}/roy_share_wallet?startapp=${teamTag}_${activeWarId}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(tgDeepLink);

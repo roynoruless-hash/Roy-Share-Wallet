@@ -572,7 +572,7 @@ export async function joinWarTeam(
     const botUsername = 'Roy_wallett_bot';
     const isTeamB = team.id.toLowerCase().includes('b') || team.name.toLowerCase().includes('b') || war.teams.indexOf(team) === 1;
     const teamLeaderPrefix = isTeamB ? 'TEAMB_LEADER' : 'TEAMA_LEADER';
-    const leaderLink = `https://t.me/${botUsername}?start=${teamLeaderPrefix}_${warId}_${user.telegramId}`;
+    const leaderLink = `https://t.me/${botUsername}/roy_share_wallet?startapp=${teamLeaderPrefix}_${warId}_${user.telegramId}`;
 
     const nowIso = new Date().toISOString();
     const newMember: WarMember = {
@@ -2352,7 +2352,7 @@ export async function assignTeamLeader(
     if (!team) return { success: false, message: 'Team not found' };
 
     const botUser = leader.botUsername || 'Roy_wallett_bot';
-    const leaderInviteLink = `https://t.me/${botUser.replace(/^@/, '')}?start=war_${warId}_team_${teamId}_lead_${leader.telegramId}`;
+    const leaderInviteLink = `https://t.me/${botUser.replace(/^@/, '')}/roy_share_wallet?startapp=war_${warId}_team_${teamId}_lead_${leader.telegramId}`;
 
     const updatedTeams = war.teams.map((t) => {
       if (t.id === teamId) {

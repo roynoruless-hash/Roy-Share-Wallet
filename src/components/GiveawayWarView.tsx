@@ -624,7 +624,7 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
   const handleCopyInviteLink = (teamId: string) => {
     if (!activeWar) return;
     const botUser = config.botUsername || 'RoyShareWalletBot';
-    const link = `https://t.me/${botUser}?start=war_${activeWar.id}_team_${teamId}_ref_${currentUserTgId}`;
+    const link = `https://t.me/${botUser}/roy_share_wallet?startapp=war_${activeWar.id}_team_${teamId}_ref_${currentUserTgId}`;
     navigator.clipboard.writeText(link);
     setCopiedInvite(true);
     showToast('📋 Team Referral Link copied to clipboard!', 'success');
@@ -1191,7 +1191,7 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                   {activeWar.teams.slice(0, 2).map((team, idx) => {
                     const teamTag = idx === 0 ? 'teamA' : 'teamB';
                     const botUsername = config.botUsername || 'Roy_wallett_bot';
-                    const tgRegLink = `https://t.me/${botUsername}?start=${teamTag}_${activeWar.id}`;
+                    const tgRegLink = `https://t.me/${botUsername}/roy_share_wallet?startapp=${teamTag}_${activeWar.id}`;
                     const webRegLink = `https://roy-share-wallet.onrender.com/war/${teamTag}/${activeWar.id}`;
 
                     return (
@@ -1342,12 +1342,12 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                                 <span className="text-[10px] text-slate-400">Earns Leadership Bonus Points</span>
                               </div>
                               <code className="text-xs text-amber-200 font-mono break-all select-all block bg-slate-900 p-2 rounded-lg border border-slate-800">
-                                {team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=${teamLabel === 'Team A' ? 'TEAMA_LEADER' : 'TEAMB_LEADER'}_${activeWar.id}_${team.leaderTelegramId}`}
+                                {team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}/roy_share_wallet?startapp=${teamLabel === 'Team A' ? 'TEAMA_LEADER' : 'TEAMB_LEADER'}_${activeWar.id}_${team.leaderTelegramId}`}
                               </code>
                               <div className="flex gap-2 pt-1">
                                 <button
                                   onClick={() => {
-                                    const link = team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=${teamLabel === 'Team A' ? 'TEAMA_LEADER' : 'TEAMB_LEADER'}_${activeWar.id}_${team.leaderTelegramId}`;
+                                    const link = team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}/roy_share_wallet?startapp=${teamLabel === 'Team A' ? 'TEAMA_LEADER' : 'TEAMB_LEADER'}_${activeWar.id}_${team.leaderTelegramId}`;
                                     navigator.clipboard.writeText(link);
                                     showToast(`Copied ${teamLabel} Leader Invite Link!`, 'success');
                                   }}
@@ -1358,7 +1358,7 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                                 </button>
                                 <button
                                   onClick={() => {
-                                    const link = team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=${teamLabel === 'Team A' ? 'TEAMA_LEADER' : 'TEAMB_LEADER'}_${activeWar.id}_${team.leaderTelegramId}`;
+                                    const link = team.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}/roy_share_wallet?startapp=${teamLabel === 'Team A' ? 'TEAMA_LEADER' : 'TEAMB_LEADER'}_${activeWar.id}_${team.leaderTelegramId}`;
                                     const shareText = `👑 Join ${team.name} led by ${team.leaderName}! Click link to join team and earn points!`;
                                     window.open(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText)}`, '_blank');
                                   }}
@@ -1495,7 +1495,7 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                       </div>
                       <button
                         onClick={() => {
-                          const link = leaderDashboardStats.leaderTeam?.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=war_${activeWar.id}_team_${leaderDashboardStats.leaderTeam?.id}_lead_${currentUserTgId}`;
+                          const link = leaderDashboardStats.leaderTeam?.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}/roy_share_wallet?startapp=war_${activeWar.id}_team_${leaderDashboardStats.leaderTeam?.id}_lead_${currentUserTgId}`;
                           navigator.clipboard.writeText(link);
                           showToast('👑 Team Leader Invite Link copied to clipboard!', 'success');
                         }}
@@ -1506,7 +1506,7 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                       </button>
                     </div>
                     <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 font-mono text-xs text-amber-300 break-all select-all">
-                      {leaderDashboardStats.leaderTeam?.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}?start=war_${activeWar.id}_team_${leaderDashboardStats.leaderTeam?.id}_lead_${currentUserTgId}`}
+                      {leaderDashboardStats.leaderTeam?.leaderInviteLink || `https://t.me/${config.botUsername || 'Roy_wallett_bot'}/roy_share_wallet?startapp=war_${activeWar.id}_team_${leaderDashboardStats.leaderTeam?.id}_lead_${currentUserTgId}`}
                     </div>
                   </div>
 
@@ -2741,7 +2741,7 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                     {activeWar?.teams.map((team, index) => {
                       const teamTag = index === 0 ? 'teamA' : index === 1 ? 'teamB' : team.id;
                       const botUsername = config.botUsername || 'Roy_wallett_bot';
-                      const regLinkTg = `https://t.me/${botUsername}?start=${teamTag}_${activeWar.id}`;
+                      const regLinkTg = `https://t.me/${botUsername}/roy_share_wallet?startapp=${teamTag}_${activeWar.id}`;
                       const regLinkWeb = `https://roy-share-wallet.onrender.com/war/${teamTag}/${activeWar.id}`;
 
                       const activeMembersCount = members.filter((m) => m.teamId === team.id && m.status === 'ACTIVE').length;
@@ -2805,12 +2805,12 @@ export const GiveawayWarView: React.FC<GiveawayWarViewProps> = ({ config, showTo
                                 <span className="text-[10px] text-slate-400 font-mono">ID: {team.leaderTelegramId}</span>
                               </div>
                               <div className="text-[11px] text-slate-400 font-mono break-all bg-slate-950 p-2 rounded-lg select-all">
-                                Leader Invite Link: {team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${activeWar.id}_${team.leaderTelegramId}`}
+                                Leader Invite Link: {team.leaderInviteLink || `https://t.me/${botUsername}/roy_share_wallet?startapp=TEAMA_LEADER_${activeWar.id}_${team.leaderTelegramId}`}
                               </div>
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const link = team.leaderInviteLink || `https://t.me/${botUsername}?start=TEAMA_LEADER_${activeWar.id}_${team.leaderTelegramId}`;
+                                  const link = team.leaderInviteLink || `https://t.me/${botUsername}/roy_share_wallet?startapp=TEAMA_LEADER_${activeWar.id}_${team.leaderTelegramId}`;
                                   navigator.clipboard.writeText(link);
                                   showToast('👑 Leader Link copied!', 'success');
                                 }}

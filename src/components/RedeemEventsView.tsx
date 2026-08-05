@@ -652,7 +652,7 @@ export const RedeemEventsView: React.FC<RedeemEventsViewProps> = ({ config, show
                     🚀 Open Roy Wallet Bot (Waiting Lobby)
                   </div>
                   <p className="text-[10px] text-slate-500 font-mono text-center mt-1">
-                    URL: https://t.me/{config.botUsername || 'Roy_wallett_bot'}?start=live_event
+                    URL: https://t.me/{(config.botUsername || 'Roy_wallett_bot').replace(/^@/, '')}/roy_share_wallet?startapp=live_event
                   </p>
                 </div>
               </div>

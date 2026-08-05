@@ -177,7 +177,7 @@ async function startServer() {
       webAppHttpsUrl = `${appBaseUrl}?liveEventId=${activeEventId}&startapp=${activeEventId}`;
     }
 
-    const shortAppLink = `https://t.me/${cleanBot}?startapp=${activeEventId}`;
+    const shortAppLink = `https://t.me/${cleanBot}/roy_share_wallet?startapp=${activeEventId}`;
 
     if (isChannel) {
       const finalUrl = (customUrl && customUrl.includes('startapp=')) ? customUrl : shortAppLink;
@@ -1261,7 +1261,7 @@ Claim now and don't forget to share your screenshot!`;
 
       // Ensure Inline Keyboard is ALWAYS included on the same request
       const botUsername = formatTelegramTarget(adminConfig?.botUsername || 'Roy_wallett_bot').replace(/^@/, '');
-      const defaultBotUrl = `https://t.me/${botUsername}?start=redeem_live_${Date.now()}`;
+      const defaultBotUrl = `https://t.me/${botUsername}/roy_share_wallet?startapp=redeem_live_${Date.now()}`;
 
       let options: any = undefined;
       if (reply_markup && reply_markup.inline_keyboard && reply_markup.inline_keyboard.length > 0) {
@@ -4993,7 +4993,7 @@ Claim now and don't forget to share your screenshot!`;
       }
 
       const botUsername = config.botUsername || 'RoyShareWalletBot';
-      const uniqueLink = `https://t.me/${botUsername}?start=vote_${contestId}_${contestantId}`;
+      const uniqueLink = `https://t.me/${botUsername}/roy_share_wallet?startapp=vote_${contestId}_${contestantId}`;
 
       // Save permanently in voteLinks collection and update contestant doc
       const linkId = `vote_${contestId}_${contestantId}`;

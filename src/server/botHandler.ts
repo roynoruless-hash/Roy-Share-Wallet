@@ -63,7 +63,7 @@ function buildMiniAppButton(label: string, customUrl?: string, eventId?: string,
     webAppHttpsUrl = `${appBaseUrl}?liveEventId=${activeEventId}&startapp=${activeEventId}`;
   }
 
-  const shortAppLink = `https://t.me/${cleanBot}?startapp=${activeEventId}`;
+  const shortAppLink = `https://t.me/${cleanBot}/roy_share_wallet?startapp=${activeEventId}`;
 
   if (isChannel) {
     const finalUrl = (customUrl && customUrl.includes('startapp=')) ? customUrl : shortAppLink;
@@ -643,8 +643,7 @@ export async function processTelegramUpdate(token: string, update: any) {
         const botUsername = adminConfig?.botUsername || 'Roy_wallett_bot';
         const cleanBotName = botUsername.replace(/^@/, '');
         const eventData = liveDocSnap.exists() ? liveDocSnap.data() as any : null;
-        let miniAppUrl = eventData?.miniAppUrl || eventData?.miniAppLink || `https://t.me/${cleanBotName}?start=live_event`;
-        miniAppUrl = miniAppUrl.replace(/startapp=/g, 'start=');
+        let miniAppUrl = eventData?.miniAppUrl || eventData?.miniAppLink || `https://t.me/${cleanBotName}/roy_share_wallet?startapp=live_event`;
 
         await sendTelegramApi(token, 'answerCallbackQuery', {
           callback_query_id: cbId,
@@ -1433,7 +1432,7 @@ Final Payout: ₹${payoutAmount}`);
         const adminConfig = await getAdminConfig();
         const botUsername = adminConfig?.botUsername || 'Roy_wallett_bot';
         const cleanBotName = botUsername.replace(/^@/, '');
-        const miniAppUrl = activeData?.miniAppUrl || activeData?.miniAppLink || `https://t.me/${cleanBotName}?start=live_event`;
+        const miniAppUrl = activeData?.miniAppUrl || activeData?.miniAppLink || `https://t.me/${cleanBotName}/roy_share_wallet?startapp=live_event`;
 
         console.log('Mini App URL:', miniAppUrl);
 
@@ -1760,7 +1759,7 @@ Final Payout: ₹${payoutAmount}`);
 
               if (isLeader) {
                 const isTeamB = result.team.id.toLowerCase().includes('b') || result.team.name.toLowerCase().includes('b');
-                const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=${isTeamB ? 'TEAMB_LEADER' : 'TEAMA_LEADER'}_${warId}_${chatId}`;
+                const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}/roy_share_wallet?startapp=${isTeamB ? 'TEAMB_LEADER' : 'TEAMA_LEADER'}_${warId}_${chatId}`;
                 await sendTelegramApi(token, 'sendMessage', {
                   chat_id: chatId,
                   text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
@@ -1771,7 +1770,7 @@ Final Payout: ₹${payoutAmount}`);
                   parse_mode: 'HTML',
                 });
               } else {
-                const myTeamRefLink = `https://t.me/${botUsername}?start=war_${warId}_team_${teamId}_ref_${chatId}`;
+                const myTeamRefLink = `https://t.me/${botUsername}/roy_share_wallet?startapp=war_${warId}_team_${teamId}_ref_${chatId}`;
                 await sendTelegramApi(token, 'sendMessage', {
                   chat_id: chatId,
                   text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
@@ -2297,7 +2296,7 @@ Final Payout: ₹${payoutAmount}`);
         text: `🎁 <b>Refer & Earn</b>\n\n` +
           `Earn <b>₹${rewardRate}</b> for every friend you invite!\n\n` +
           `🔗 <b>Your Referral Link:</b>\n` +
-          `<code>https://t.me/${botUser || 'RoyShareWalletBot'}?start=${existingUser.uid}</code>\n\n` +
+          `<code>https://t.me/${(botUser || 'Roy_wallett_bot').replace(/^@/, '')}/roy_share_wallet?startapp=refer_${existingUser.uid}</code>\n\n` +
           `📊 <b>Your Referral Stats:</b>\n` +
           `👥 <b>Referral Count:</b> ${totalRefs}\n` +
           `✅ <b>Successful Referrals:</b> ${successRefs}\n` +
@@ -2639,7 +2638,7 @@ Final Payout: ₹${payoutAmount}`);
 
         if (isLeader) {
           const isTeamB = result.team.id.toLowerCase().includes('b') || result.team.name.toLowerCase().includes('b');
-          const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}?start=${isTeamB ? 'TEAMB_LEADER' : 'TEAMA_LEADER'}_${pendingWarJoin.warId}_${chatId}`;
+          const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}/roy_share_wallet?startapp=${isTeamB ? 'TEAMB_LEADER' : 'TEAMA_LEADER'}_${pendingWarJoin.warId}_${chatId}`;
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
             text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
@@ -2650,7 +2649,7 @@ Final Payout: ₹${payoutAmount}`);
             parse_mode: 'HTML',
           });
         } else {
-          const myTeamRefLink = `https://t.me/${botUsername}?start=war_${pendingWarJoin.warId}_team_${pendingWarJoin.teamId}_ref_${chatId}`;
+          const myTeamRefLink = `https://t.me/${botUsername}/roy_share_wallet?startapp=war_${pendingWarJoin.warId}_team_${pendingWarJoin.teamId}_ref_${chatId}`;
           await sendTelegramApi(token, 'sendMessage', {
             chat_id: chatId,
             text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
