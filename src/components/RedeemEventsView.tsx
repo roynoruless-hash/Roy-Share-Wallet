@@ -53,43 +53,19 @@ export const RedeemEventsView: React.FC<RedeemEventsViewProps> = ({ config, show
   const [activeView, setActiveView] = useState<'manager' | 'wizard' | 'live' | 'winners'>('manager');
 
   // Redeem Codes State
-  const [codes, setCodes] = useState<RedeemCodeItem[]>([
-    {
-      id: 'rc-1',
-      code: 'ROY500',
-      prize: 500,
-      uses: 56,
-      maxUses: 100,
-      expiryMinutes: 15,
-      createdAt: '2026-08-05 14:30',
-      status: 'Running',
-      isGolden: true,
-      isFlash: true,
-    },
-    {
-      id: 'rc-2',
-      code: 'FREE100',
-      prize: 100,
-      uses: 50,
-      maxUses: 50,
-      expiryMinutes: 30,
-      createdAt: '2026-08-04 18:00',
-      status: 'Ended',
-    },
-    {
-      id: 'rc-3',
-      code: 'BONUS250',
-      prize: 250,
-      uses: 0,
-      maxUses: 200,
-      expiryMinutes: 60,
-      createdAt: '2026-08-05 16:00',
-      status: 'Waiting',
-    },
-  ]);
+  const [codes, setCodes] = useState<RedeemCodeItem[]>([]);
 
   // Selected Code for Live/Winners
-  const [activeCode, setActiveCode] = useState<RedeemCodeItem>(codes[0]);
+  const [activeCode, setActiveCode] = useState<RedeemCodeItem>({
+    id: '',
+    code: '',
+    prize: 0,
+    uses: 0,
+    maxUses: 0,
+    expiryMinutes: 0,
+    createdAt: '',
+    status: 'Waiting',
+  });
 
   // ----------------------------------------------------
   // WIZARD FORM STATE (5 STEPS)
@@ -117,25 +93,116 @@ export const RedeemEventsView: React.FC<RedeemEventsViewProps> = ({ config, show
   // LIVE EVENT STATE
   // ----------------------------------------------------
   const [liveStatus, setLiveStatus] = useState<'RUNNING' | 'PAUSED' | 'LOCKED' | 'ENDED'>('RUNNING');
-  const [liveReadyCount, setLiveReadyCount] = useState(48);
-  const [liveOnlineCount, setLiveOnlineCount] = useState(128);
-  const [liveWaitingCount, setLiveWaitingCount] = useState(80);
-  const [liveClaimedCount, setLiveClaimedCount] = useState(56);
-  const [liveRequestsPerSec, setLiveRequestsPerSec] = useState(84);
-  const [liveActivityLogs, setLiveActivityLogs] = useState<Array<{ id: string; time: string; text: string; type: 'claim' | 'join' | 'system' }>>([
-    { id: '1', time: '14:32:10', text: '@alex_roy claimed ₹500 in 12.4s', type: 'claim' },
-    { id: '2', time: '14:32:05', text: '@sam_crypto joined the lobby', type: 'join' },
-    { id: '3', time: '14:31:55', text: 'Waiting Lobby Ready Limit reached (50 Users)', type: 'system' },
-  ]);
+  const [liveReadyCount, setLiveReadyCount] = useState(0);
+  const [liveOnlineCount, setLiveOnlineCount] = useState(0);
+  const [liveWaitingCount, setLiveWaitingCount] = useState(0);
+  const [liveClaimedCount, setLiveClaimedCount] = useState(0);
+  const [liveRequestsPerSec, setLiveRequestsPerSec] = useState(0);
+  const [liveActivityLogs, setLiveActivityLogs] = useState<Array<{ id: string; time: string; text: string; type: 'claim' | 'join' | 'system' }>>([]);
 
   // ----------------------------------------------------
   // WINNERS STATE
   // ----------------------------------------------------
-  const [winners, setWinners] = useState([
-    { id: 'w-1', rank: 1, name: 'Alex Roy', username: '@alex_roy', uid: 'ROY89421', claimTime: '12.4s', typingSpeed: '84 WPM', prize: 500, avatar: '👑', status: 'VERIFIED_HUMAN' },
-    { id: 'w-2', rank: 2, name: 'Crypto Sam', username: '@sam_crypto', uid: 'ROY77102', claimTime: '14.1s', typingSpeed: '78 WPM', prize: 500, avatar: '🔥', status: 'VERIFIED_HUMAN' },
-    { id: 'w-3', rank: 3, name: 'Priya Sharma', username: '@priya_sharma', uid: 'ROY44901', claimTime: '15.8s', typingSpeed: '72 WPM', prize: 500, avatar: '⭐', status: 'VERIFIED_HUMAN' },
-  ]);
+  const [winners, setWinners] = useState<any[]>([]);
+
+  const fetchCodesHistory = async () => {
+    try {
+      const res = await fetch('/api/live-event/history');
+      const data = await res.json();
+      if (data.success && data.history) {
+        const mappedCodes = data.history.map((h: any) => ({
+          id: h.id || h.eventId || `rc-${Date.now()}-${Math.random()}`,
+          code: h.code || h.primaryCode || '',
+          prize: h.prize || h.rewardAmount || 0,
+          uses: h.claimedCount || 0,
+          maxUses: h.totalCodesCount || h.maxUses || 0,
+          expiryMinutes: h.durationMinutes || 15,
+          createdAt: h.createdAt ? new Date(h.createdAt).toISOString().replace('T', ' ').substring(0, 16) : '',
+          status: h.eventStatus === 'ENDED' ? 'Ended' : h.eventStatus === 'LOCKED' ? 'Expired' : 'Running',
+          isGolden: h.isGolden || false,
+          isFlash: h.isFlash || false,
+        }));
+        setCodes(mappedCodes);
+        if (mappedCodes.length > 0 && !activeCode.code) {
+          setActiveCode(mappedCodes[0]);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch codes history:', err);
+    }
+  };
+
+  const fetchLiveEventStats = async () => {
+    try {
+      const res = await fetch('/api/live-event/active?userId=admin');
+      const data = await res.json();
+      if (data.success && data.activeEvent) {
+        const ae = data.activeEvent;
+        setLiveReadyCount(ae.readyCount || 0);
+        setLiveOnlineCount(ae.onlineUsersCount || 0);
+        setLiveWaitingCount(Math.max(0, (ae.onlineUsersCount || 0) - (ae.claimedCount || 0)));
+        setLiveClaimedCount(ae.claimedCount || 0);
+        setLiveRequestsPerSec(ae.requestsPerSecond || 0);
+        setLiveStatus(ae.eventStatus || 'RUNNING');
+
+        // Update activeCode with live parameters if matched
+        setActiveCode((prev) => ({
+          ...prev,
+          code: ae.code || prev.code || '',
+          prize: ae.prize || ae.rewardAmount || prev.prize || 0,
+          uses: ae.claimedCount || 0,
+          maxUses: ae.totalCodesCount || ae.maxUses || prev.maxUses || 0,
+        }));
+
+        if (ae.activityFeed && ae.activityFeed.length > 0) {
+          const logs = ae.activityFeed.map((item: any) => ({
+            id: item.id || `log-${Math.random()}`,
+            time: item.time || new Date().toLocaleTimeString(),
+            text: item.text || '',
+            type: item.type || 'system'
+          }));
+          setLiveActivityLogs(logs);
+        } else {
+          setLiveActivityLogs([]);
+        }
+
+        if (ae.winnersTimeline && ae.winnersTimeline.length > 0) {
+          const mappedWinners = ae.winnersTimeline.map((winner: any, index: number) => ({
+            id: winner.uid || `winner-${index}`,
+            rank: index + 1,
+            name: winner.userName || winner.telegramId || 'User',
+            username: winner.username || (winner.userName ? `@${winner.userName}` : `@User`),
+            uid: winner.uid || '',
+            claimTime: `${winner.typingSpeedSec || 0}s`,
+            typingSpeed: `${winner.wpm || 0} WPM`,
+            prize: winner.prize || ae.prize || 0,
+            avatar: winner.avatar || '👑',
+            status: winner.status || 'VERIFIED_HUMAN'
+          }));
+          setWinners(mappedWinners);
+        } else {
+          setWinners([]);
+        }
+      } else {
+        setLiveReadyCount(0);
+        setLiveOnlineCount(0);
+        setLiveWaitingCount(0);
+        setLiveClaimedCount(0);
+        setLiveRequestsPerSec(0);
+        setLiveActivityLogs([]);
+        setWinners([]);
+      }
+    } catch (err) {
+      console.error('Failed to fetch active live event metrics:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchCodesHistory();
+    fetchLiveEventStats();
+    const interval = setInterval(fetchLiveEventStats, 2000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Handlers for Code Actions
   const handleCreateNewCode = () => {
@@ -162,28 +229,23 @@ export const RedeemEventsView: React.FC<RedeemEventsViewProps> = ({ config, show
   };
 
   const handleLaunchWizard = async () => {
-    showToast('🚀 Broadcasting live event to Telegram...', 'info');
+    showToast('🚀 Broadcasting live event to Telegram and initializing...', 'info');
 
     try {
-      // Execute live broadcast request to server
       const token = localStorage.getItem('adminSessionToken') || '';
-      const botUsername = config.botUsername || 'Roy_wallett_bot';
-      const miniAppUrl = window.location.origin;
-
       const payload = {
         code: wizardCode,
-        prize: wizardPrize,
-        limit: wizardLimit,
-        expiry: wizardExpiry,
-        miniAppUrl,
-        destinations: {
-          mainChannel: destMainChannel,
-          mainGroup: destMainGroup,
-          additional: destAdditional,
-        },
+        maxUses: wizardLimit,
+        minReadyUsers: lobbyReadyLimit,
+        countdownSeconds: lobbyCountdown,
+        durationMinutes: wizardExpiry,
+        claimMode: lobbyClaimMode,
+        sendToChannel: destMainChannel,
+        sendToGroups: destMainGroup,
+        miniAppUrl: window.location.origin,
       };
 
-      const res = await fetch('/api/broadcast/live-event', {
+      const res = await fetch('/api/live-event/start', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -195,37 +257,109 @@ export const RedeemEventsView: React.FC<RedeemEventsViewProps> = ({ config, show
       const data = await res.json().catch(() => ({ success: true }));
 
       if (data.success !== false) {
-        showToast('✅ Live event broadcast sent successfully!', 'success');
+        showToast('✅ Live event started successfully!', 'success');
+        fetchCodesHistory();
+        fetchLiveEventStats();
+        setActiveView('live');
+      } else {
+        showToast(`❌ Error starting event: ${data.error || 'Failed'}`, 'error');
       }
-    } catch (err) {
-      console.warn('Broadcast request sent with local confirmation:', err);
+    } catch (err: any) {
+      showToast(`❌ Error starting event: ${err.message || 'Failed'}`, 'error');
     }
-
-    // Add new event code to list
-    const newCode: RedeemCodeItem = {
-      id: `rc-${Date.now()}`,
-      code: wizardCode,
-      prize: wizardPrize,
-      uses: 0,
-      maxUses: wizardLimit,
-      expiryMinutes: wizardExpiry,
-      createdAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      status: 'Running',
-      isGolden: wizardIsGolden,
-      isFlash: wizardIsFlash,
-    };
-
-    setCodes([newCode, ...codes]);
-    setActiveCode(newCode);
-    setLiveStatus('RUNNING');
-    setActiveView('live');
   };
 
-  const handleEndLiveEvent = () => {
-    setLiveStatus('ENDED');
-    setActiveCode((prev) => ({ ...prev, status: 'Ended' }));
-    showToast('Live Event Ended. Generating Winner Dashboard...', 'success');
-    setActiveView('winners');
+  const handleReleaseCode = async () => {
+    showToast('🔓 Releasing code to lobby...', 'info');
+    try {
+      const token = localStorage.getItem('adminSessionToken') || '';
+      const res = await fetch('/api/live-event/release', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🔓 Code released to lobby!', 'success');
+        fetchLiveEventStats();
+      } else {
+        showToast(`❌ Error: ${data.error || 'Failed to release code'}`, 'error');
+      }
+    } catch (err: any) {
+      showToast(`❌ Error: ${err.message || 'Failed to release code'}`, 'error');
+    }
+  };
+
+  const handleTogglePause = async () => {
+    showToast('Updating event status...', 'info');
+    try {
+      const token = localStorage.getItem('adminSessionToken') || '';
+      const res = await fetch('/api/live-event/pause', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(data.message || 'Event status updated!', 'success');
+        fetchLiveEventStats();
+      } else {
+        showToast(`❌ Error: ${data.error || 'Failed to update event status'}`, 'error');
+      }
+    } catch (err: any) {
+      showToast(`❌ Error: ${err.message || 'Failed to update event status'}`, 'error');
+    }
+  };
+
+  const handleEmergencyLock = async () => {
+    showToast('🚨 Triggering Emergency Lock...', 'info');
+    try {
+      const token = localStorage.getItem('adminSessionToken') || '';
+      const res = await fetch('/api/live-event/emergency-lock', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🚨 Emergency Lock triggered!', 'error');
+        fetchLiveEventStats();
+      } else {
+        showToast(`❌ Error: ${data.error || 'Failed to lock event'}`, 'error');
+      }
+    } catch (err: any) {
+      showToast(`❌ Error: ${err.message || 'Failed to lock event'}`, 'error');
+    }
+  };
+
+  const handleEndLiveEvent = async () => {
+    showToast('Ending active live event...', 'info');
+    try {
+      const token = localStorage.getItem('adminSessionToken') || '';
+      const res = await fetch('/api/live-event/end', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': token,
+        },
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('✅ Live Event Ended.', 'success');
+        fetchLiveEventStats();
+        setActiveView('winners');
+      } else {
+        showToast(`❌ Error: ${data.error || 'Failed to end live event'}`, 'error');
+      }
+    } catch (err: any) {
+      showToast(`❌ Error: ${err.message || 'Failed to end live event'}`, 'error');
+    }
   };
 
   return (
@@ -732,8 +866,10 @@ export const RedeemEventsView: React.FC<RedeemEventsViewProps> = ({ config, show
                 <span className="text-2xl font-black text-sky-400">{liveOnlineCount}</span>
               </div>
               <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-center">
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Claimed / Max</span>
-                <span className="text-2xl font-black text-emerald-400">{liveClaimedCount}/{activeCode.maxUses}</span>
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Claimed</span>
+                <span className="text-2xl font-black text-emerald-400">
+                  {activeCode.code ? `${liveClaimedCount}/${activeCode.maxUses}` : '0'}
+                </span>
               </div>
               <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-center">
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Requests / sec</span>
@@ -744,32 +880,25 @@ export const RedeemEventsView: React.FC<RedeemEventsViewProps> = ({ config, show
             {/* Action Buttons Toolbar */}
             <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-slate-800">
               <button
-                onClick={() => showToast('🔓 Code released to lobby!', 'success')}
+                onClick={handleReleaseCode}
                 className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg"
               >
                 <Unlock className="w-4 h-4" />
                 <span>Release Code</span>
               </button>
               <button
-                onClick={() => showToast('🚨 Emergency Lock triggered!', 'error')}
+                onClick={handleEmergencyLock}
                 className="py-3 px-4 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-bold text-xs flex items-center gap-2 border border-rose-500/30"
               >
                 <Lock className="w-4 h-4" />
                 <span>Emergency Lock</span>
               </button>
               <button
-                onClick={() => setLiveStatus('PAUSED')}
+                onClick={handleTogglePause}
                 className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-xs flex items-center gap-2 border border-slate-700"
               >
                 <Pause className="w-4 h-4" />
-                <span>Pause</span>
-              </button>
-              <button
-                onClick={() => setLiveStatus('RUNNING')}
-                className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-400 font-bold text-xs flex items-center gap-2 border border-slate-700"
-              >
-                <Play className="w-4 h-4" />
-                <span>Resume</span>
+                <span>Pause / Resume</span>
               </button>
               <button
                 onClick={handleEndLiveEvent}
@@ -784,12 +913,18 @@ export const RedeemEventsView: React.FC<RedeemEventsViewProps> = ({ config, show
             <div className="space-y-3 pt-4">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Live Activity Stream</h3>
               <div className="space-y-2 max-h-48 overflow-y-auto font-mono text-xs">
-                {liveActivityLogs.map((log) => (
-                  <div key={log.id} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
-                    <span className="text-slate-300">{log.text}</span>
-                    <span className="text-slate-500 text-[10px]">{log.time}</span>
+                {liveActivityLogs.length > 0 ? (
+                  liveActivityLogs.map((log) => (
+                    <div key={log.id} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
+                      <span className="text-slate-300">{log.text}</span>
+                      <span className="text-slate-500 text-[10px]">{log.time}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 text-center text-slate-500 font-bold">
+                    Activity Feed: No activity yet
                   </div>
-                ))}
+                )}
               </div>
             </div>
           </div>
