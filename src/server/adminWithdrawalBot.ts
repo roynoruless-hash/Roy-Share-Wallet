@@ -586,33 +586,42 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
         `⚠ <b>Risk Score:</b> ${userData.isBanned ? '100/100 (HIGH - BANNED)' : `${userData.riskScore || riskInfo.score}/100 (${riskInfo.level})`}\n` +
         `📊 <b>Account Status:</b> ${userData.isBanned ? '🚫 BANNED' : '🟢 ACTIVE'}`;
 
-      const adminAppUrl = 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app';
+      const adminAppUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL;
+      if (!adminAppUrl) {
+        console.error("[CRITICAL_PRODUCTION_FAIL] PUBLIC_APP_URL is not configured. Refusing to generate admin panel button.");
+      }
+
+      const inlineKeyboardButtons: any[][] = [
+        [
+          {
+            text: userData.isBanned ? '✅ Unban User' : '🚫 Ban User',
+            callback_data: `wdr_ban_${userData.uid}_${docId}`
+          },
+          {
+            text: '🗑 Delete User',
+            callback_data: `wdr_del_${userData.uid}_${docId}`
+          }
+        ]
+      ];
+
+      if (adminAppUrl) {
+        inlineKeyboardButtons.push([
+          {
+            text: '🌐 Open Admin Panel',
+            url: adminAppUrl
+          }
+        ]);
+      }
+
+      inlineKeyboardButtons.push([
+        {
+          text: '⬅ Back to Request',
+          callback_data: `wdr_back_${docId}`
+        }
+      ]);
 
       const keyboard = {
-        inline_keyboard: [
-          [
-            {
-              text: userData.isBanned ? '✅ Unban User' : '🚫 Ban User',
-              callback_data: `wdr_ban_${userData.uid}_${docId}`
-            },
-            {
-              text: '🗑 Delete User',
-              callback_data: `wdr_del_${userData.uid}_${docId}`
-            }
-          ],
-          [
-            {
-              text: '🌐 Open Admin Panel',
-              url: adminAppUrl
-            }
-          ],
-          [
-            {
-              text: '⬅ Back to Request',
-              callback_data: `wdr_back_${docId}`
-            }
-          ]
-        ]
+        inline_keyboard: inlineKeyboardButtons
       };
 
       await sendTelegramApi(token, 'editMessageText', {

@@ -48,8 +48,21 @@ function buildMiniAppButton(label: string, customUrl?: string, eventId?: string,
   const cleanBot = (botUsername || 'Roy_wallett_bot').replace(/^@/, '');
   const activeEventId = eventId || 'live_event';
 
-  let appBaseUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL || 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app';
+  const configuredAppUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL;
+  if (!configuredAppUrl) {
+    const errorMsg = "[CRITICAL_PRODUCTION_FAIL] PUBLIC_APP_URL is not configured. Refusing to generate the Telegram WebApp/URL button.";
+    console.error(errorMsg);
+    throw new Error(errorMsg);
+  }
+
+  let appBaseUrl = configuredAppUrl;
   if (customUrl && customUrl.startsWith('http') && !customUrl.includes('t.me/')) {
+    // Prevent malicious or leftover AI Studio fallback URLs in custom urls
+    if (customUrl.includes('ais-dev') || customUrl.includes('ais-pre') || customUrl.includes('asia-southeast1.run.app') || customUrl.includes('run.app')) {
+      const errorMsg = `[CRITICAL_SECURITY_FAIL] Refusing to use fallback custom URL containing AI Studio subdomain: ${customUrl}`;
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    }
     appBaseUrl = customUrl;
   }
 
@@ -67,10 +80,12 @@ function buildMiniAppButton(label: string, customUrl?: string, eventId?: string,
 
   if (isChannel) {
     const finalUrl = (customUrl && customUrl.includes('startapp=')) ? customUrl : shortAppLink;
+    console.log(`[TELEGRAM_SEND_URL] Sending to Telegram channel: ${finalUrl}`);
     console.log(`[BOT_BUTTON_GEN] Target: Channel | Type: URL | URL: ${finalUrl} | EventID: ${activeEventId} | DocID: liveRedeem/current`);
     return { text: label, url: finalUrl };
   }
 
+  console.log(`[TELEGRAM_SEND_URL] Sending to Telegram direct/group: ${webAppHttpsUrl}`);
   console.log(`[BOT_BUTTON_GEN] Target: Direct/Group | Type: WEB_APP | WebApp URL: ${webAppHttpsUrl} | EventID: ${activeEventId} | DocID: liveRedeem/current`);
   return { text: label, web_app: { url: webAppHttpsUrl } };
 }

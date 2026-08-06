@@ -40,6 +40,7 @@ import { GlobalSearchModal } from './components/admin/GlobalSearchModal';
 import { ComingSoonView } from './components/ComingSoonView';
 import { Toast, ToastMessage } from './components/Toast';
 import { Loader2 } from 'lucide-react';
+import { DebugView } from './components/DebugView';
 
 const SESSION_STORAGE_KEY = 'royshare_admin_session';
 
@@ -488,31 +489,78 @@ export default function App() {
     }
   };
 
+  // 1. Reactive state to ensure any async or delayed Telegram script load triggers a clean React re-render
+  const [isTelegramWebLoaded, setIsTelegramWebLoaded] = useState(() => {
+    const tg = (window as any).Telegram?.WebApp;
+    return Boolean(tg?.initData || tg?.initDataUnsafe?.user?.id);
+  });
+
+  useEffect(() => {
+    if (isTelegramWebLoaded) return;
+    const interval = setInterval(() => {
+      const tg = (window as any).Telegram?.WebApp;
+      if (tg?.initData || tg?.initDataUnsafe?.user?.id) {
+        console.log('[WEBAPP_DETECTED] Telegram WebApp loaded asynchronously!');
+        setIsTelegramWebLoaded(true);
+        clearInterval(interval);
+      }
+    }, 50);
+    const timeout = setTimeout(() => clearInterval(interval), 2500);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [isTelegramWebLoaded]);
+
   // Telegram WebApp Detection and Zero-Click Authentication
   const tgWebApp = (window as any).Telegram?.WebApp;
-  const isTelegramWebApp = Boolean(tgWebApp);
+  const isTelegramWebApp = Boolean(tgWebApp && (tgWebApp.initData || tgWebApp.initDataUnsafe?.user?.id));
   const urlParams = new URLSearchParams(window.location.search);
   const tgStartParam = tgWebApp?.initDataUnsafe?.start_param || '';
   const startAppParam = urlParams.get('startapp') || urlParams.get('tgWebAppStartParam') || urlParams.get('start') || tgStartParam || '';
+  const liveEventIdParam = urlParams.get('liveEventId') || '';
+
+  const hasTelegramParams =
+    window.location.search.includes('tgWebApp') ||
+    window.location.hash.includes('tgWebApp') ||
+    window.location.search.includes('startapp') ||
+    window.location.hash.includes('startapp') ||
+    window.location.search.includes('liveEventId');
+
+  const isTelegramInAppBrowser = /Telegram/i.test(navigator.userAgent);
+
+  const isTelegramContext = isTelegramWebApp || isTelegramWebLoaded || hasTelegramParams || isTelegramInAppBrowser || startAppParam !== '' || liveEventIdParam !== '';
 
   const isLiveEventPayload =
     startAppParam.includes('live_event') ||
     startAppParam === 'live_event' ||
     startAppParam.includes('live') ||
-    Boolean(urlParams.get('liveEventId'));
+    Boolean(liveEventIdParam);
 
   useEffect(() => {
-    if (isTelegramWebApp) {
-      console.log(`[WEBAPP_AUTH] Telegram WebApp detected via window.Telegram?.WebApp. initData present: ${Boolean(tgWebApp?.initData)}`);
+    // Print exact runtime URL and routing details for Telegram diagnostics
+    console.log('--- TELEGRAM MINI APP RUNTIME URL DIAGNOSTICS (App.tsx) ---');
+    console.log('1. Sent/Received TG Startapp URL Parameter:', startAppParam || 'None');
+    console.log('2. window.location.href:', window.location.href);
+    console.log('3. window.location.origin:', window.location.origin);
+    console.log('4. window.location.pathname:', window.location.pathname);
+    console.log('5. isTelegramWebApp:', isTelegramWebApp);
+    console.log('6. isTelegramWebLoaded:', isTelegramWebLoaded);
+    console.log('7. isTelegramContext:', isTelegramContext);
+    console.log('8. startAppParam:', startAppParam);
+    console.log('9. liveEventIdParam:', liveEventIdParam);
+    console.log('------------------------------------------------------------');
+
+    if (isTelegramContext) {
+      console.log(`[WEBAPP_AUTH] Telegram WebApp environment detected. initData present: ${Boolean(tgWebApp?.initData)}`);
       const tgUser = tgWebApp?.initDataUnsafe?.user;
       const tgId = tgUser?.id ? String(tgUser.id) : (localStorage.getItem('roy_user_id') || '');
       const tgUserName = tgUser?.first_name ? `${tgUser.first_name} ${tgUser.last_name || ''}`.trim() : (tgUser?.username ? `@${tgUser.username}` : `User #${tgId}`);
 
-      console.log(`[TELEGRAM_USER] User info extracted from WebApp initDataUnsafe:`, {
+      console.log(`[TELEGRAM_USER] User info for Firestore auto-registration:`, {
         telegramId: tgId,
         userName: tgUserName,
         startParam: startAppParam,
-        initDataUnsafe: tgWebApp?.initDataUnsafe,
       });
 
       if (tgId) {
@@ -540,7 +588,15 @@ export default function App() {
         console.log(`[ROUTE_WAITING_LOBBY] Immediately routing user to Waiting Lobby for startapp: ${startAppParam || 'live_event'}`);
       }
     }
-  }, [isTelegramWebApp, startAppParam, isLiveEventPayload]);
+  }, [isTelegramContext, startAppParam, isLiveEventPayload, isTelegramWebApp, isTelegramWebLoaded]);
+
+  // Check if URL is for the unauthenticated Runtime Debug Page
+  const isDebugRoute = window.location.pathname.startsWith('/debug');
+
+  if (isDebugRoute) {
+    console.log('[ROUTING_DECISION] Rendering DebugView. Path:', window.location.pathname);
+    return <DebugView />;
+  }
 
   // Check if URL is for Referral Verification
   const isClaimRewardRoute = window.location.pathname.startsWith('/claim-reward');
@@ -552,45 +608,51 @@ export default function App() {
   const isWarPublicRoute = window.location.pathname.startsWith('/war/') || window.location.pathname.startsWith('/war');
 
   const isLiveRedeemRoute =
-    isTelegramWebApp ||
+    isTelegramContext ||
     isLiveEventPayload ||
     window.location.pathname.startsWith('/live-redeem') ||
     window.location.pathname.startsWith('/live-event') ||
-    window.location.pathname.startsWith('/redeem') ||
-    Boolean(urlParams.get('liveEventId')) ||
-    Boolean(urlParams.get('start')) ||
-    Boolean(urlParams.get('startapp')) ||
-    Boolean(urlParams.get('tgWebAppStartParam')) ||
-    Boolean(tgStartParam);
+    window.location.pathname.startsWith('/redeem');
 
   if (isLiveRedeemRoute) {
-    if (isTelegramWebApp || isLiveEventPayload || startAppParam === 'live_event') {
-      console.log(`[ROUTE_WAITING_LOBBY] Zero-click routing directly to Waiting Lobby (LiveRedeemView) without any login screen.`);
-    }
+    console.log(`[ROUTING_DECISION] Rendering LiveRedeemView (Waiting Lobby / Client App) because Telegram context or live event parameter is active.`, {
+      pathname: window.location.pathname,
+      isTelegramContext,
+      isTelegramWebApp,
+      isTelegramWebLoaded,
+      isLiveEventPayload,
+      startAppParam,
+      liveEventIdParam
+    });
     return <LiveRedeemView botUsername={config.botUsername || 'Roy_wallett_bot'} />;
   }
 
   if (isClaimRewardRoute) {
+    console.log('[ROUTING_DECISION] Rendering ClaimRewardView.');
     return <ClaimRewardView botUsername={config.botUsername || 'RoyShareWalletBot'} />;
   }
 
   if (isReferralVerifyRoute) {
+    console.log('[ROUTING_DECISION] Rendering ReferralVerifyView.');
     return <ReferralVerifyView botUsername={config.botUsername || 'RoyShareWalletBot'} />;
   }
 
   if (isFeedbackRoute) {
     const pathParts = window.location.pathname.split('/');
     const campaignId = pathParts[2] || '';
+    console.log('[ROUTING_DECISION] Rendering FeedbackUserFlowView. CampaignId:', campaignId);
     return <FeedbackUserFlowView campaignId={campaignId} botUsername={config.botUsername || 'RoyShareWalletBot'} />;
   }
 
   if (isContestRegistrationRoute) {
     const pathParts = window.location.pathname.split('/');
     const rContestId = pathParts[2] || '';
+    console.log('[ROUTING_DECISION] Rendering ContestRegistrationView. ContestId:', rContestId);
     return <ContestRegistrationView contestId={rContestId} botUsername={config.botUsername || 'RoyShareWalletBot'} />;
   }
 
   if (isWarPublicRoute) {
+    console.log('[ROUTING_DECISION] Rendering GiveawayWarPublicView.');
     return <GiveawayWarPublicView botUsername={config.botUsername || 'Roy_wallett_bot'} />;
   }
 
@@ -608,6 +670,15 @@ export default function App() {
   }
 
   if (!isLoggedIn) {
+    console.log('[ROUTING_DECISION] AdminLoginView is selected.', {
+      reason: 'User is NOT logged in as Admin, and we are NOT on a Telegram, public, or debug route.',
+      pathname: window.location.pathname,
+      isTelegramContext,
+      isLiveEventPayload,
+      startAppParam,
+      liveEventIdParam,
+      isLoggedIn
+    });
     return (
       <>
         <AdminLoginView

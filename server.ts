@@ -162,8 +162,21 @@ async function startServer() {
     const cleanBot = (botUsername || 'Roy_wallett_bot').replace(/^@/, '');
     const activeEventId = eventId || 'live_event';
 
-    let appBaseUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL || 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app';
+    const configuredAppUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL;
+    if (!configuredAppUrl) {
+      const errorMsg = "[CRITICAL_PRODUCTION_FAIL] PUBLIC_APP_URL is not configured. Refusing to generate the Telegram WebApp/URL button.";
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    let appBaseUrl = configuredAppUrl;
     if (customUrl && customUrl.startsWith('http') && !customUrl.includes('t.me/')) {
+      // Prevent malicious or leftover AI Studio fallback URLs in custom urls
+      if (customUrl.includes('ais-dev') || customUrl.includes('ais-pre') || customUrl.includes('asia-southeast1.run.app') || customUrl.includes('run.app')) {
+        const errorMsg = `[CRITICAL_SECURITY_FAIL] Refusing to use fallback custom URL containing AI Studio subdomain: ${customUrl}`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+      }
       appBaseUrl = customUrl;
     }
 
@@ -181,10 +194,12 @@ async function startServer() {
 
     if (isChannel) {
       const finalUrl = (customUrl && customUrl.includes('startapp=')) ? customUrl : shortAppLink;
+      console.log(`[TELEGRAM_SEND_URL] Sending to Telegram channel: ${finalUrl}`);
       console.log(`[LIVE_REDEEM_BUTTON_GEN] Target: Channel | Type: URL | URL: ${finalUrl} | EventID: ${activeEventId} | DocID: liveRedeem/current`);
       return { text: label, url: finalUrl };
     }
 
+    console.log(`[TELEGRAM_SEND_URL] Sending to Telegram direct/group: ${webAppHttpsUrl}`);
     console.log(`[LIVE_REDEEM_BUTTON_GEN] Target: Direct/Group | Type: WEB_APP | WebApp URL: ${webAppHttpsUrl} | EventID: ${activeEventId} | DocID: liveRedeem/current`);
     return { text: label, web_app: { url: webAppHttpsUrl } };
   }
@@ -3960,6 +3975,17 @@ Claim now and don't forget to share your screenshot!`;
   // ==========================================
   // HEALTH & DEBUG ENDPOINTS
   // ==========================================
+
+  // GET /api/debug-info - Returns server-side env configuration for the runtime debug page
+  app.get('/api/debug-info', (req, res) => {
+    return res.json({
+      PUBLIC_APP_URL: process.env.PUBLIC_APP_URL || '',
+      APP_URL: process.env.APP_URL || '',
+      serverHostname: req.hostname || '',
+      hostHeader: req.headers?.host || '',
+      environment: process.env.NODE_ENV || 'development'
+    });
+  });
 
   // GET /api/health - Returns system status, version, build info, environment, and connectivity checks
   app.get('/api/health', async (req, res) => {

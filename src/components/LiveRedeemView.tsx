@@ -184,7 +184,22 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
   useEffect(() => {
     try {
       const tg = (window as any).Telegram?.WebApp;
-      const isTelegramWebApp = Boolean(tg);
+      const isTelegramWebApp = Boolean(tg && (tg.initData || tg.initDataUnsafe?.user?.id));
+
+      const urlParams = new URLSearchParams(window.location.search);
+      const startParam = urlParams.get('startapp') || urlParams.get('tgWebAppStartParam') || tg?.initDataUnsafe?.start_param || '';
+
+      // Print exact runtime URL and routing details for Telegram diagnostics
+      console.log('--- TELEGRAM MINI APP RUNTIME URL DIAGNOSTICS (LiveRedeemView.tsx) ---');
+      console.log('1. Sent/Received TG Startapp URL Parameter (or start_param):', startParam || 'None');
+      console.log('2. window.location.href:', window.location.href);
+      console.log('3. window.location.origin:', window.location.origin);
+      console.log('4. window.location.pathname:', window.location.pathname);
+      const isOnRender = window.location.hostname.includes('onrender.com');
+      const isAisDev = window.location.hostname.includes('ais-dev-');
+      const isAisPre = window.location.hostname.includes('ais-pre-');
+      console.log('5. Hostname Environment Classification:', isOnRender ? 'Render (https://roy-share-wallet.onrender.com)' : isAisDev ? 'AI Studio Dev (https://ais-dev-...)' : isAisPre ? 'AI Studio Pre (https://ais-pre-...)' : `Other Hostname: ${window.location.hostname}`);
+      console.log('-----------------------------------------------------------------------');
 
       if (tg) {
         tg.ready();
@@ -228,9 +243,6 @@ export const LiveRedeemView: React.FC<LiveRedeemViewProps> = ({
             }
           })
           .catch((err) => console.error('[WEBAPP_AUTH] Zero-click auth error:', err));
-
-        const urlParams = new URLSearchParams(window.location.search);
-        const startParam = urlParams.get('startapp') || urlParams.get('tgWebAppStartParam') || tg?.initDataUnsafe?.start_param || '';
 
         if (startParam.includes('live_event') || startParam === 'live_event' || !startParam) {
           console.log(`[ROUTE_WAITING_LOBBY] Immediately routing user to Waiting Lobby for startapp: ${startParam || 'live_event'}`);
