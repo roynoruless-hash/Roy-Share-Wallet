@@ -49,12 +49,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: undefined,
     },
     {
-      id: 'redeem_events' as TabType,
-      label: 'Redeem Events',
-      icon: Gift,
-      badge: 'LIVE',
-    },
-    {
       id: 'voting_contests' as TabType,
       label: 'Voting',
       icon: Trophy,

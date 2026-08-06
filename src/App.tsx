@@ -30,8 +30,7 @@ import { EnterpriseOperationsView } from './components/admin/EnterpriseOperation
 import { AIRevenueAutomationView } from './components/admin/AIRevenueAutomationView';
 import { GiveawayWarPublicView } from './components/GiveawayWarPublicView';
 import { ContestRegistrationView } from './components/ContestRegistrationView';
-import { LiveRedeemView } from './components/LiveRedeemView';
-import { RedeemEventsView } from './components/RedeemEventsView';
+import { UserAppView } from './components/UserAppView';
 import { BroadcastHistoryView } from './components/BroadcastHistoryView';
 import { AnalyticsView } from './components/AnalyticsView';
 import { AdvancedView } from './components/AdvancedView';
@@ -47,7 +46,6 @@ const SESSION_STORAGE_KEY = 'royshare_admin_session';
 function resolveTabFromPath(pathname: string): { tab: TabType; isUnknown: boolean } {
   const p = pathname.toLowerCase().replace(/\/$/, '');
   if (p === '' || p === '/' || p === '/dashboard') return { tab: 'dashboard', isUnknown: false };
-  if (p.startsWith('/redeem-events') || p.startsWith('/redeem_events') || p.startsWith('/events')) return { tab: 'redeem_events', isUnknown: false };
   if (p.startsWith('/analytics')) return { tab: 'analytics', isUnknown: false };
   if (p.startsWith('/history') || p.startsWith('/broadcast-history')) return { tab: 'history', isUnknown: false };
   if (p.startsWith('/advanced') || p.startsWith('/pro')) return { tab: 'advanced', isUnknown: false };
@@ -607,24 +605,23 @@ export default function App() {
   const isContestRegistrationRoute = window.location.pathname.startsWith('/register-contest');
   const isWarPublicRoute = window.location.pathname.startsWith('/war/') || window.location.pathname.startsWith('/war');
 
-  const isLiveRedeemRoute =
+  const isUserAppRoute =
     isTelegramContext ||
-    isLiveEventPayload ||
-    window.location.pathname.startsWith('/live-redeem') ||
-    window.location.pathname.startsWith('/live-event') ||
-    window.location.pathname.startsWith('/redeem');
+    window.location.pathname.startsWith('/wallet') ||
+    window.location.pathname.startsWith('/profile') ||
+    window.location.pathname.startsWith('/tasks') ||
+    window.location.pathname.startsWith('/withdraw') ||
+    window.location.pathname.startsWith('/referral') ||
+    window.location.pathname.startsWith('/giveaways');
 
-  if (isLiveRedeemRoute) {
-    console.log(`[ROUTING_DECISION] Rendering LiveRedeemView (Waiting Lobby / Client App) because Telegram context or live event parameter is active.`, {
+  if (isUserAppRoute) {
+    console.log(`[ROUTING_DECISION] Rendering UserAppView (Telegram Client Mini App) because Telegram context or a user-app path is active.`, {
       pathname: window.location.pathname,
       isTelegramContext,
       isTelegramWebApp,
       isTelegramWebLoaded,
-      isLiveEventPayload,
-      startAppParam,
-      liveEventIdParam
     });
-    return <LiveRedeemView botUsername={config.botUsername || 'Roy_wallett_bot'} />;
+    return <UserAppView botUsername={config.botUsername || 'Roy_wallett_bot'} />;
   }
 
   if (isClaimRewardRoute) {
@@ -735,10 +732,6 @@ export default function App() {
             <>
               {activeTab === 'dashboard' && (
                 <DashboardView config={config} setActiveTab={setActiveTab} />
-              )}
-
-              {activeTab === 'redeem_events' && (
-                <RedeemEventsView config={config} showToast={showToast} />
               )}
 
               {activeTab === 'analytics' && (

@@ -60,20 +60,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
 
   const cards = [
     {
-      id: 'redeem_events' as TabType,
-      title: 'Redeem Events',
-      icon: Gift,
-      accentColor: 'from-amber-500/20 to-amber-600/5',
-      borderColor: 'border-amber-500/30 hover:border-amber-400',
-      textColor: 'text-amber-400',
-      iconBg: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-      badge: `${stats.activeRedeemEvents} Active`,
-      badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
-      primaryStat: `${stats.totalClaims} Claims`,
-      secondaryStat: 'Live Code: ROY500',
-      description: 'Create 5-step event wizards, launch Telegram broadcasts & monitor live claim lobby.',
-    },
-    {
       id: 'voting_contests' as TabType,
       title: 'Voting Contest',
       icon: Trophy,
@@ -187,13 +173,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setActiveTab('redeem_events')}
-              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs flex items-center gap-2 transition shadow-lg shadow-amber-500/20"
-            >
-              <Gift className="w-4 h-4" />
-              <span>Redeem Events</span>
-            </button>
             <button
               onClick={() => setActiveTab('advanced')}
               className="px-4 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 flex items-center gap-2 transition"

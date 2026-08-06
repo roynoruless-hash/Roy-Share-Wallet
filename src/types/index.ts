@@ -107,7 +107,6 @@ export interface DiagnosticItem {
 
 export type TabType =
   | 'dashboard'
-  | 'redeem_events'
   | 'voting_contests'
   | 'wallet'
   | 'users'

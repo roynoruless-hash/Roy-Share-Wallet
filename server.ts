@@ -1707,101 +1707,16 @@ Claim now and don't forget to share your screenshot!`;
   });
 
   // ==========================================
-  // LIVE REDEEM EVENT SYSTEM ENDPOINTS
+  // LIVE REDEEM EVENT SYSTEM ENDPOINTS (DELETED)
   // ==========================================
-
-  // Helper 1: Compute VPN & Proxy Risk Score
-  function computeVpnRiskScore(req: express.Request, clientIp: string) {
-    const reasons: string[] = [];
-    let score = 0;
-    const headers = req.headers || {};
-    const xff = String(headers['x-forwarded-for'] || '');
-    const via = String(headers['via'] || '');
-    const ua = String(headers['user-agent'] || '').toLowerCase();
-
-    if (xff.includes(',')) {
-      score += 35;
-      reasons.push('Multiple proxy hops in X-Forwarded-For');
-    }
-    if (via || headers['forwarded'] || headers['x-proxy-id']) {
-      score += 30;
-      reasons.push('Proxy/Gateway header present');
-    }
-    if (!ua || /curl|wget|python|node-fetch|axios|phantomjs|puppeteer|selenium|headless|bot|spider/i.test(ua)) {
-      score += 45;
-      reasons.push('Automated or bot User-Agent detected');
-    }
-    if (/^35\.|^34\.|^104\.|^172\.|^13\.|^52\.|^54\.|^162\.|^185\./.test(clientIp)) {
-      score += 20;
-      reasons.push('Datacenter/Cloud IP range detected');
-    }
-
-    let level: 'Low' | 'Medium' | 'High' = 'Low';
-    if (score >= 50) level = 'High';
-    else if (score >= 25) level = 'Medium';
-
-    return { score, level, reasons };
-  }
-
-  // Helper 2: Code Fragments Splitter
-  function splitCodeFragments(code: string, numFragments: number = 3) {
-    const clean = String(code || '').trim().toUpperCase();
-    if (!clean || clean.length <= 3 || numFragments <= 1) {
-      return { enabled: true, count: 1, fragments: [clean] };
-    }
-    const len = clean.length;
-    const chunkSize = Math.ceil(len / numFragments);
-    const fragments: string[] = [];
-    for (let i = 0; i < len; i += chunkSize) {
-      fragments.push(clean.slice(i, i + chunkSize));
-    }
-    return { enabled: true, count: fragments.length, fragments };
-  }
-
-  // Helper 3: Golden Codes Builder
-  function buildGoldenCodesList(codesInput: any, defaultCode: string = 'ROY500', defaultMax: number = 100) {
-    let rawList: any[] = [];
-    if (Array.isArray(codesInput) && codesInput.length > 0) {
-      rawList = codesInput;
-    } else if (typeof codesInput === 'string' && codesInput.trim()) {
-      rawList = codesInput.split(/[\n;]+/).map((l) => l.trim()).filter(Boolean);
-    }
-
-    if (rawList.length === 0) {
-      rawList = [defaultCode];
-    }
-
-    return rawList.map((item, idx) => {
-      let codeStr = '';
-      let rewardNum = 10;
-      let maxNum = defaultMax;
-
-      if (typeof item === 'object' && item !== null) {
-        codeStr = String(item.code || '').trim().toUpperCase();
-        rewardNum = Number(item.reward) || (codeStr.includes('1000') ? 100 : codeStr.includes('500') ? 50 : 10);
-        maxNum = Number(item.maxClaims || item.maxUses || defaultMax);
-      } else {
-        const parts = String(item).split(/[,:]+/).map((p) => p.trim());
-        codeStr = (parts[0] || '').toUpperCase();
-        rewardNum = Number(parts[1]) || (codeStr.includes('1000') ? 100 : codeStr.includes('500') ? 50 : 10);
-        maxNum = Number(parts[2]) || defaultMax;
-      }
-
-      if (!codeStr) codeStr = `ROY${(idx + 1) * 100}`;
-
-      return {
-        id: `gc_${idx}_${codeStr}`,
-        code: codeStr,
-        reward: rewardNum,
-        maxClaims: Math.max(1, maxNum),
-        claimedCount: 0,
-        remainingClaims: Math.max(1, maxNum),
-      };
-    });
-  }
 
   // 1. Start Live Redeem Event
   app.post('/api/live-event/start', async (req, res) => {
+    return res.status(400).json({ success: false, error: 'Disabled' });
+  });
+
+  /*
+  app.post('/api/live-event/start_disabled', async (req, res) => {
     try {
       const {
         code,
@@ -2060,9 +1975,15 @@ Claim now and don't forget to share your screenshot!`;
       return res.status(500).json({ success: false, error: err.message || 'Server error starting live event' });
     }
   });
+  */
 
   // 1.2 Release Redeem Code Manually (Step 2)
   app.post('/api/live-event/release', async (req, res) => {
+    return res.status(400).json({ success: false, error: 'Disabled' });
+  });
+
+  /*
+  app.post('/api/live-event/release_disabled', async (req, res) => {
     try {
       let docRef = doc(db, 'liveRedeem', 'current');
       let snap = await getDoc(docRef);
@@ -2117,9 +2038,15 @@ Claim now and don't forget to share your screenshot!`;
       return res.status(500).json({ success: false, error: err.message || 'Failed to release redeem code.' });
     }
   });
+  */
 
   // 1.3 Pause / Resume Live Redeem Event
   app.post('/api/live-event/pause', async (req, res) => {
+    return res.status(400).json({ success: false, error: 'Disabled' });
+  });
+
+  /*
+  app.post('/api/live-event/pause_disabled', async (req, res) => {
     try {
       let docRef = doc(db, 'liveRedeem', 'current');
       let snap = await getDoc(docRef);
@@ -2161,9 +2088,15 @@ Claim now and don't forget to share your screenshot!`;
       return res.status(500).json({ success: false, error: err.message });
     }
   });
+  */
 
   // 1.35 Emergency Lock Live Redeem Event
   app.post('/api/live-event/emergency-lock', async (req, res) => {
+    return res.status(400).json({ success: false, error: 'Disabled' });
+  });
+
+  /*
+  app.post('/api/live-event/emergency-lock_disabled', async (req, res) => {
     try {
       let docRef = doc(db, 'liveRedeem', 'current');
       let snap = await getDoc(docRef);
@@ -2201,6 +2134,7 @@ Claim now and don't forget to share your screenshot!`;
       return res.status(500).json({ success: false, error: err.message });
     }
   });
+  */
 
   // ----------------------------------------------------
   // PHASE X ULTIMATE ENGINE: SMART QUEUE, SECURITY SCORE, HEALTH & AUTO RECOVERY
@@ -2463,7 +2397,12 @@ Claim now and don't forget to share your screenshot!`;
     }
   }
 
-  // 1. PHASE XI: Live Event Replay Endpoint
+  // 1. PHASE XI: Live Event Replay Endpoint (DISABLED)
+  app.all('/api/live-event/*', (req, res) => {
+    return res.status(404).json({ success: false, error: 'Live event system has been completely removed.' });
+  });
+
+  /*
   app.get('/api/live-event/replay', async (req, res) => {
     try {
       const { eventId } = req.query;
@@ -2896,6 +2835,7 @@ Claim now and don't forget to share your screenshot!`;
       return res.status(500).json({ success: false, error: err.message });
     }
   });
+  */
 
   // TELEGRAM MINI APP ZERO-CLICK AUTHENTICATION
   app.post('/api/webapp-auth', async (req, res) => {
@@ -2953,6 +2893,7 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
+  /*
   // 3. Get Active Live Event Details & Real-time Metrics
   app.get('/api/live-event/active', async (req, res) => {
     try {
@@ -3790,6 +3731,7 @@ Claim now and don't forget to share your screenshot!`;
       return res.status(500).json({ success: false, error: err.message });
     }
   });
+  */
 
   // 6. ANTI SELF-REFERRAL VERIFICATION ENDPOINTS
   app.get('/api/referral/token-info', async (req, res) => {

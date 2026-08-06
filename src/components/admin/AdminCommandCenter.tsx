@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ShieldCheck, Activity, Users, Wallet, Zap, ArrowUpRight, Search, Bot, Server, AlertTriangle, RefreshCw, Layers } from 'lucide-react';
 import { AIAssistantModal } from './AIAssistantModal';
 import { GlobalSearchModal } from './GlobalSearchModal';
-import { UserProfileCardModal } from '../live-event/UserProfileCardModal';
+import { UserProfileCardModal } from './UserProfileCardModal';
 
 export const AdminCommandCenter: React.FC = () => {
   const [stats, setStats] = useState<any>(null);
