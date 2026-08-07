@@ -7126,7 +7126,61 @@ Claim now and don't forget to share your screenshot!`;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Roy Share Full-Stack Server running on port ${PORT}`);
     autoRecoverLiveEventState();
+    migrateMissingUserUids();
   });
+}
+
+/**
+ * Migration function to assign unique App UIDs to existing users who do not have one yet
+ */
+async function migrateMissingUserUids() {
+  console.log('[Migration] Starting App UID migration for existing users...');
+  try {
+    const configDoc = await getDoc(doc(db, 'settings', 'config'));
+    const configData = configDoc.exists() ? configDoc.data() : {};
+    let len = Number(configData?.uidLength) || 6;
+    len = Math.min(12, Math.max(4, len));
+
+    const usersSnap = await getDocs(collection(db, 'users'));
+    const users = usersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+
+    const existingUids = new Set<string>();
+    users.forEach(u => {
+      if (u.uid) {
+        existingUids.add(String(u.uid).trim());
+      }
+    });
+
+    let migratedCount = 0;
+    for (const user of users) {
+      if (!user.uid) {
+        // Generate a unique numeric UID
+        let uid = '';
+        let exists = true;
+        let attempts = 0;
+        while (exists && attempts < 20) {
+          const min = Math.pow(10, len - 1);
+          const max = Math.pow(10, len) - 1;
+          uid = Math.floor(min + Math.random() * (max - min + 1)).toString();
+          if (!existingUids.has(uid)) {
+            exists = false;
+          }
+          attempts++;
+        }
+        if (!uid) {
+          uid = String(Date.now()).slice(-len);
+        }
+
+        existingUids.add(uid);
+        await updateDoc(doc(db, 'users', user.id), { uid });
+        console.log(`[Migration] Migrated user ${user.id} (${user.firstName || 'User'}) with new UID: ${uid}`);
+        migratedCount++;
+      }
+    }
+    console.log(`[Migration] App UID migration completed. Migrated ${migratedCount} users.`);
+  } catch (err) {
+    console.error('[Migration] App UID migration failed:', err);
+  }
 }
 
 startServer();

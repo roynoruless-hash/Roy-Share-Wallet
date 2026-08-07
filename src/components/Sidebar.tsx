@@ -16,6 +16,7 @@ import {
   Save,
   CheckCircle2,
   CheckSquare,
+  Banknote,
 } from 'lucide-react';
 import { TabType } from '../types';
 
@@ -65,6 +66,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'wallet' as TabType,
       label: 'Wallet',
       icon: Wallet,
+      badge: undefined,
+    },
+    {
+      id: 'withdrawal' as TabType,
+      label: 'Withdraw Requests',
+      icon: Banknote,
       badge: undefined,
     },
     {

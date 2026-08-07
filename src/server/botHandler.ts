@@ -417,15 +417,21 @@ export async function getUserByUid(uid: string) {
 }
 
 /**
- * Generate a unique 6-digit numeric UID
+ * Generate a unique numeric UID based on the configured UID Length
  */
 async function generateUniqueUid(): Promise<string> {
+  const adminConfig = await getAdminConfig();
+  let len = Number(adminConfig?.uidLength) || 6;
+  len = Math.min(12, Math.max(4, len)); // safe bounds: 4 to 12 digits
+
   let uid = '';
   let exists = true;
   let attempts = 0;
 
   while (exists && attempts < 10) {
-    uid = Math.floor(100000 + Math.random() * 900000).toString();
+    const min = Math.pow(10, len - 1);
+    const max = Math.pow(10, len) - 1;
+    uid = Math.floor(min + Math.random() * (max - min + 1)).toString();
     attempts++;
     try {
       const q = query(collection(db, 'users'), where('uid', '==', uid));
@@ -437,7 +443,7 @@ async function generateUniqueUid(): Promise<string> {
       exists = false;
     }
   }
-  return uid || String(Date.now()).slice(-6);
+  return uid || String(Date.now()).slice(-len);
 }
 
 /**

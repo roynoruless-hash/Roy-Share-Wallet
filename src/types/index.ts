@@ -483,10 +483,12 @@ export interface DeviceFingerprintRecord {
 export interface WithdrawalRecord {
   id?: string;
   withdrawalId: string;
+  requestId?: string;
   userId?: string;
   uid: string;
   telegramId: string;
   userName?: string;
+  username?: string;
   amount: number;
   requestedAmount?: number;
   platformFee?: number;
@@ -496,10 +498,12 @@ export interface WithdrawalRecord {
   upiId?: string;
   qrImageUrl?: string;
   redeemCodeDetails?: string;
-  status: 'pending' | 'completed' | 'rejected';
+  currentWalletBalance?: number;
+  status: 'Pending' | 'Approved' | 'Rejected' | 'pending' | 'completed' | 'rejected';
   rejectReason?: string;
   createdAt: string;
   processedAt?: string;
+  processedBy?: string;
 }
 
 export interface ReferralMilestone {

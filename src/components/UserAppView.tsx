@@ -462,15 +462,18 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     const tgId = getTelegramUserId();
 
     // 1. Listen to active User Document in real-time
-    const userRef = doc(db, 'users', tgId);
-    const unsubscribeUser = onSnapshot(userRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
+    const qUser = query(collection(db, 'users'), where('telegramId', '==', tgId));
+    const unsubscribeUser = onSnapshot(qUser, (snapshot) => {
+      if (!snapshot.empty) {
+        const userDoc = snapshot.docs[0];
+        const data = userDoc.data();
         setUser((prev: any) => ({
           ...prev,
           ...data,
+          id: userDoc.id, // Store the real document ID
           telegramId: tgId,
-          userName: data.userName || data.name || `User #${tgId}`,
+          uid: data.uid || '',
+          userName: data.userName || data.name || data.firstName || `User #${tgId}`,
           avatar: data.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
           walletBalance: Number(data.walletBalance) || Number(data.balance) || 0,
           coinsBalance: Number(data.coinsBalance) || 0,
@@ -485,7 +488,9 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       } else {
         // Fallback user structure if doc does not exist yet (or standalone local testing)
         setUser({
+          id: tgId,
           telegramId: tgId,
+          uid: '866114',
           userName: 'Alex Roy',
           avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
           levelBadge: '🥈 Pro User',
@@ -612,7 +617,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     setIsSubmittingWithdrawal(true);
     try {
       const tgId = getTelegramUserId();
-      const userRef = doc(db, 'users', tgId);
+      const userRef = doc(db, 'users', user?.id || tgId);
 
       // Deduct balance and create withdrawal record atomically
       await runTransaction(db, async (transaction) => {
@@ -640,6 +645,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           randStr += characters.charAt(Math.floor(Math.random() * characters.length));
         }
         const withdrawalId = `WD${randStr}`;
+        const finalUid = userData.uid || user?.uid || tgId;
 
         // Create withdrawal record in withdraw_requests (as required)
         const withdrawRequestsRef = doc(collection(db, 'withdraw_requests'));
@@ -659,7 +665,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           // Add extra fields to keep compatibility with standard visual components
           withdrawalId: withdrawalId,
           userId: tgId,
-          uid: tgId,
+          uid: finalUid,
           method: withdrawMethod,
           qrImageUrl: withdrawMethod === 'qr' ? withdrawDetails : '',
           redeemCodeDetails: withdrawMethod === 'redeem_code' ? withdrawDetails : '',
@@ -673,7 +679,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         transaction.set(withdrawRef, {
           withdrawalId,
           userId: tgId,
-          uid: tgId,
+          uid: finalUid,
           telegramId: tgId,
           userName: userData.userName || userData.name || `User #${tgId}`,
           amount: amt,
@@ -693,7 +699,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         const txnRef = doc(collection(db, 'transactions'));
         transaction.set(txnRef, {
           transactionId: `TXN${Date.now()}`,
-          uid: tgId,
+          uid: finalUid,
           telegramId: tgId,
           userName: userData.userName || userData.name || `User #${tgId}`,
           amount: amt,
@@ -727,7 +733,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
     try {
       const tgId = getTelegramUserId();
-      const userRef = doc(db, 'users', tgId);
+      const userRef = doc(db, 'users', user?.id || tgId);
 
       // Perform a Firestore transaction to safely award task reward
       await runTransaction(db, async (transaction) => {
@@ -756,7 +762,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         const txnRef = doc(collection(db, 'transactions'));
         transaction.set(txnRef, {
           transactionId: `TXN${Date.now()}`,
-          uid: tgId,
+          uid: userData.uid || user?.uid || tgId,
           telegramId: tgId,
           userName: userData.userName || userData.name || `User #${tgId}`,
           amount: task.reward,
@@ -778,7 +784,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
     try {
       const tgId = getTelegramUserId();
-      const userRef = doc(db, 'users', tgId);
+      const userRef = doc(db, 'users', user?.id || tgId);
 
       await runTransaction(db, async (transaction) => {
         const userDoc = await transaction.get(userRef);
@@ -811,7 +817,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         const txnRef = doc(collection(db, 'transactions'));
         transaction.set(txnRef, {
           transactionId: `TXN${Date.now()}`,
-          uid: tgId,
+          uid: userData.uid || user?.uid || tgId,
           telegramId: tgId,
           userName: userData.userName || userData.name || `User #${tgId}`,
           amount: reward,
@@ -1704,7 +1710,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                 </div>
                 <div>
                   <h3 className="text-base font-black text-white">{user.userName}</h3>
-                  <p className="text-xs text-slate-400 font-mono">UID: {user.telegramId}</p>
+                  <p className="text-xs text-slate-400 font-mono">UID: {user.uid || '866114'}</p>
                 </div>
               </div>
 
