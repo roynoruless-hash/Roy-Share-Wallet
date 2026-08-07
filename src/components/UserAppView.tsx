@@ -556,14 +556,15 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     });
 
     // 4. Listen to withdrawals history in real-time
-    const withdrawalsRef = collection(db, 'withdrawals');
-    const qWithdraw = query(withdrawalsRef, where('uid', '==', tgId));
+    const withdrawalsRef = collection(db, 'withdraw_requests');
+    const qWithdraw = query(withdrawalsRef, where('telegramId', '==', tgId));
     const unsubscribeWithdrawals = onSnapshot(qWithdraw, (snap) => {
       const list: any[] = [];
       snap.forEach((docSnap) => {
         const d = docSnap.data();
         list.push({
           id: docSnap.id,
+          details: d.upiId || d.redeemCodeDetails || d.qrImageUrl || '',
           ...d,
         });
       });
@@ -640,7 +641,34 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         }
         const withdrawalId = `WD${randStr}`;
 
-        // Create withdrawal record
+        // Create withdrawal record in withdraw_requests (as required)
+        const withdrawRequestsRef = doc(collection(db, 'withdraw_requests'));
+        transaction.set(withdrawRequestsRef, {
+          requestId: withdrawalId,
+          telegramId: tgId,
+          username: userData.username || userData.userName || userData.firstName || '',
+          userName: userData.userName || userData.name || userData.firstName || `User #${tgId}`,
+          amount: amt,
+          upiId: withdrawMethod === 'upi' ? withdrawDetails : '',
+          currentWalletBalance: currentWallet,
+          status: 'Pending',
+          createdAt: new Date().toISOString(),
+          processedAt: '',
+          processedBy: '',
+          rejectReason: '',
+          // Add extra fields to keep compatibility with standard visual components
+          withdrawalId: withdrawalId,
+          userId: tgId,
+          uid: tgId,
+          method: withdrawMethod,
+          qrImageUrl: withdrawMethod === 'qr' ? withdrawDetails : '',
+          redeemCodeDetails: withdrawMethod === 'redeem_code' ? withdrawDetails : '',
+          payoutAmount: amt,
+          platformFee: 0,
+          feePercent: 0,
+        });
+
+        // Also create record in withdrawals for backward-compatibility with other system endpoints
         const withdrawRef = doc(collection(db, 'withdrawals'));
         transaction.set(withdrawRef, {
           withdrawalId,

@@ -41,7 +41,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
 }) => {
   const [withdrawals, setWithdrawals] = useState<WithdrawalRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed' | 'rejected'>('pending');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'Pending' | 'Approved' | 'Rejected'>('Pending');
   const [methodFilter, setMethodFilter] = useState<'all' | 'upi' | 'qr' | 'redeem_code'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -61,7 +61,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
   // Real-time Firestore Listener for Withdrawals
   useEffect(() => {
     setLoading(true);
-    const q = query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc'));
+    const q = query(collection(db, 'withdraw_requests'), orderBy('createdAt', 'desc'));
 
     const unsubscribe = onSnapshot(
       q,
@@ -87,7 +87,14 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
 
   // Filtered withdrawals
   const filteredWithdrawals = withdrawals.filter((w) => {
-    const matchesStatus = statusFilter === 'all' || w.status === statusFilter;
+    const statusLower = String(w.status).toLowerCase();
+    const filterLower = statusFilter.toLowerCase();
+    const matchesStatus =
+      statusFilter === 'all' ||
+      statusLower === filterLower ||
+      (statusLower === 'completed' && filterLower === 'approved') ||
+      (statusLower === 'approved' && filterLower === 'approved');
+
     const itemMethod = w.method || 'upi';
     const matchesMethod = methodFilter === 'all' || itemMethod === methodFilter;
 
@@ -95,18 +102,29 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
     const matchesSearch =
       !q ||
       w.withdrawalId?.toLowerCase().includes(q) ||
+      w.requestId?.toLowerCase().includes(q) ||
       w.uid?.toLowerCase().includes(q) ||
       w.telegramId?.toLowerCase().includes(q) ||
       w.upiId?.toLowerCase().includes(q) ||
       w.redeemCodeDetails?.toLowerCase().includes(q) ||
-      w.userName?.toLowerCase().includes(q);
+      w.userName?.toLowerCase().includes(q) ||
+      w.username?.toLowerCase().includes(q);
 
     return matchesStatus && matchesMethod && matchesSearch;
   });
 
-  const pendingCount = withdrawals.filter((w) => w.status === 'pending').length;
-  const completedCount = withdrawals.filter((w) => w.status === 'completed').length;
-  const rejectedCount = withdrawals.filter((w) => w.status === 'rejected').length;
+  const pendingCount = withdrawals.filter((w) => {
+    const s = String(w.status).toLowerCase();
+    return s === 'pending';
+  }).length;
+  const completedCount = withdrawals.filter((w) => {
+    const s = String(w.status).toLowerCase();
+    return s === 'completed' || s === 'approved';
+  }).length;
+  const rejectedCount = withdrawals.filter((w) => {
+    const s = String(w.status).toLowerCase();
+    return s === 'rejected';
+  }).length;
 
   // Approve Handler
   const handleApprove = async (docId: string, withdrawalId: string) => {
@@ -440,9 +458,9 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
             {/* Status Tabs */}
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
               <button
-                onClick={() => setStatusFilter('pending')}
+                onClick={() => setStatusFilter('Pending')}
                 className={`px-2.5 py-1 rounded-lg font-bold transition ${
-                  statusFilter === 'pending'
+                  statusFilter === 'Pending'
                     ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                     : 'text-slate-400 hover:text-white'
                 }`}
@@ -450,19 +468,19 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                 Pending ({pendingCount})
               </button>
               <button
-                onClick={() => setStatusFilter('completed')}
+                onClick={() => setStatusFilter('Approved')}
                 className={`px-2.5 py-1 rounded-lg font-bold transition ${
-                  statusFilter === 'completed'
+                  statusFilter === 'Approved'
                     ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Completed ({completedCount})
+                Approved ({completedCount})
               </button>
               <button
-                onClick={() => setStatusFilter('rejected')}
+                onClick={() => setStatusFilter('Rejected')}
                 className={`px-2.5 py-1 rounded-lg font-bold transition ${
-                  statusFilter === 'rejected'
+                  statusFilter === 'Rejected'
                     ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
                     : 'text-slate-400 hover:text-white'
                 }`}
@@ -676,19 +694,19 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
 
                       {/* Status */}
                       <td className="p-3.5">
-                        {w.status === 'pending' && (
+                        {['pending', 'pending'].includes(String(w.status).toLowerCase()) && (
                           <span className="px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold inline-flex items-center gap-1">
                             <Clock className="w-3 h-3" />
                             <span>Pending</span>
                           </span>
                         )}
-                        {w.status === 'completed' && (
+                        {['completed', 'approved'].includes(String(w.status).toLowerCase()) && (
                           <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold inline-flex items-center gap-1">
                             <CheckCircle2 className="w-3 h-3" />
-                            <span>Completed</span>
+                            <span>Approved</span>
                           </span>
                         )}
-                        {w.status === 'rejected' && (
+                        {['rejected', 'rejected'].includes(String(w.status).toLowerCase()) && (
                           <div>
                             <span className="px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] font-bold inline-flex items-center gap-1">
                               <XCircle className="w-3 h-3" />
@@ -720,11 +738,11 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                             <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
                           </button>
 
-                          {w.status === 'pending' ? (
+                          {String(w.status).toLowerCase() === 'pending' ? (
                             <>
                               <button
                                 disabled={isProcessing}
-                                onClick={() => handleApprove(w.id!, w.withdrawalId)}
+                                onClick={() => handleApprove(w.id!, w.withdrawalId || w.requestId || '')}
                                 className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center gap-1 shadow transition disabled:opacity-50"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5" />

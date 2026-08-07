@@ -34,41 +34,76 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
   let feePercent = 6;
 
   try {
+    // Look up in both collections to locate the withdrawal request
+    const wrRef = doc(db, 'withdraw_requests', withdrawalDocId);
     const wRef = doc(db, 'withdrawals', withdrawalDocId);
+
+    let activeSnap = await getDocs(query(collection(db, 'withdraw_requests')));
+    let targetDoc = activeSnap.docs.find(d => d.id === withdrawalDocId);
+    let isWithdrawRequest = true;
+
+    if (!targetDoc) {
+      const wSnap = await getDocs(query(collection(db, 'withdrawals')));
+      targetDoc = wSnap.docs.find(d => d.id === withdrawalDocId);
+      isWithdrawRequest = false;
+    }
+
+    if (!targetDoc) {
+      return { success: false, error: 'Withdrawal record not found.' };
+    }
+
+    const data = targetDoc.data();
+    const rawStatus = String(data.status).toLowerCase();
+    if (rawStatus !== 'pending') {
+      return { success: false, error: `Withdrawal is already ${data.status}.` };
+    }
+
+    telegramId = data.telegramId || '';
+    withdrawalIdStr = data.withdrawalId || data.requestId || '';
+    amount = Number(data.amount) || 0;
+    method = data.method || 'upi';
+    upiId = data.upiId || '';
+    redeemDetails = data.redeemCodeDetails || '';
+    userUid = data.uid || data.userId || data.telegramId || '';
+
+    feePercent = data.feePercent !== undefined ? Number(data.feePercent) : 6;
+    platformFee = data.platformFee !== undefined ? Number(data.platformFee) : Number(((amount * feePercent) / 100).toFixed(2));
+    payoutAmount = data.payoutAmount !== undefined ? Number(data.payoutAmount) : Number((amount - platformFee).toFixed(2));
+
+    const processedTime = new Date().toISOString();
+
+    // Look up any matching documents in BOTH collections to update them synchronously
+    const wrQuery = query(collection(db, 'withdraw_requests'), where('requestId', '==', withdrawalIdStr));
+    const wrSnapshots = await getDocs(wrQuery);
+
+    const wQuery = query(collection(db, 'withdrawals'), where('withdrawalId', '==', withdrawalIdStr));
+    const wSnapshots = await getDocs(wQuery);
+
     await runTransaction(db, async (transaction) => {
-      const wSnap = await transaction.get(wRef);
-      if (!wSnap.exists()) {
-        throw new Error('Withdrawal record not found.');
-      }
-      const data = wSnap.data();
-      if (data.status !== 'pending') {
-        throw new Error(`Withdrawal is already ${data.status}.`);
-      }
+      // Update target withdraw_requests documents
+      wrSnapshots.forEach((docSnap) => {
+        transaction.update(docSnap.ref, {
+          status: 'Approved',
+          processedAt: processedTime,
+          processedBy: 'Admin',
+        });
+      });
 
-      telegramId = data.telegramId;
-      withdrawalIdStr = data.withdrawalId;
-      amount = Number(data.amount) || 0;
-      method = data.method || 'upi';
-      upiId = data.upiId || '';
-      redeemDetails = data.redeemCodeDetails || '';
-      userUid = data.uid;
-
-      feePercent = data.feePercent !== undefined ? Number(data.feePercent) : 6;
-      platformFee = data.platformFee !== undefined ? Number(data.platformFee) : Number(((amount * feePercent) / 100).toFixed(2));
-      payoutAmount = data.payoutAmount !== undefined ? Number(data.payoutAmount) : Number((amount - platformFee).toFixed(2));
-
-      transaction.update(wRef, {
-        status: 'completed',
-        processedAt: new Date().toISOString(),
+      // Update target withdrawals documents
+      wSnapshots.forEach((docSnap) => {
+        transaction.update(docSnap.ref, {
+          status: 'completed',
+          processedAt: processedTime,
+        });
       });
     });
 
-    // Record Withdrawal Approved in transactions ledger
+    // Record Withdrawal Approved in transactions ledger (already deducted balance during request)
     try {
       await recordWalletTransaction({
         uid: userUid,
         type: 'Withdrawal Approved',
-        amount: 0, // balance was already deducted, this is a status log with 0 impact
+        amount: 0,
         status: 'completed',
         description: `Withdrawal request #${withdrawalIdStr} of ₹${amount} was approved by Admin.`,
       });
@@ -113,29 +148,31 @@ export async function rejectWithdrawal(botToken: string, withdrawalDocId: string
   let telegramId = '';
   let withdrawalIdStr = '';
   let amount = 0;
-  let userId = '';
   let userUid = '';
 
   try {
-    const wRef = doc(db, 'withdrawals', withdrawalDocId);
-    
-    // Step 1: Find user document first
-    const wSnapPre = await getDocs(query(collection(db, 'withdrawals')));
-    // Find target document
-    const targetDoc = wSnapPre.docs.find(d => d.id === withdrawalDocId);
+    let activeSnap = await getDocs(query(collection(db, 'withdraw_requests')));
+    let targetDoc = activeSnap.docs.find(d => d.id === withdrawalDocId);
+
+    if (!targetDoc) {
+      const wSnap = await getDocs(query(collection(db, 'withdrawals')));
+      targetDoc = wSnap.docs.find(d => d.id === withdrawalDocId);
+    }
+
     if (!targetDoc) {
       return { success: false, error: 'Withdrawal record not found.' };
     }
-    const wData = targetDoc.data();
-    if (wData.status !== 'pending') {
-      return { success: false, error: `Withdrawal is already ${wData.status}.` };
+
+    const data = targetDoc.data();
+    const rawStatus = String(data.status).toLowerCase();
+    if (rawStatus !== 'pending') {
+      return { success: false, error: `Withdrawal is already ${data.status}.` };
     }
 
-    telegramId = wData.telegramId;
-    withdrawalIdStr = wData.withdrawalId;
-    amount = Number(wData.amount) || 0;
-    userId = wData.userId;
-    userUid = wData.uid;
+    telegramId = data.telegramId || '';
+    withdrawalIdStr = data.withdrawalId || data.requestId || '';
+    amount = Number(data.amount) || 0;
+    userUid = data.uid || data.userId || data.telegramId || '';
 
     const usersQ = query(collection(db, 'users'), where('uid', '==', userUid));
     const uSnap = await getDocs(usersQ);
@@ -143,17 +180,37 @@ export async function rejectWithdrawal(botToken: string, withdrawalDocId: string
       return { success: false, error: 'Associated user account not found for refund.' };
     }
 
-    // Step 2: Run transaction to update status
+    const processedTime = new Date().toISOString();
+
+    // Look up any matching documents in BOTH collections to update them synchronously
+    const wrQuery = query(collection(db, 'withdraw_requests'), where('requestId', '==', withdrawalIdStr));
+    const wrSnapshots = await getDocs(wrQuery);
+
+    const wQuery = query(collection(db, 'withdrawals'), where('withdrawalId', '==', withdrawalIdStr));
+    const wSnapshots = await getDocs(wQuery);
+
     await runTransaction(db, async (transaction) => {
-      // Update withdrawal status
-      transaction.update(wRef, {
-        status: 'rejected',
-        rejectReason: cleanReason,
-        processedAt: new Date().toISOString(),
+      // Update target withdraw_requests documents
+      wrSnapshots.forEach((docSnap) => {
+        transaction.update(docSnap.ref, {
+          status: 'Rejected',
+          rejectReason: cleanReason,
+          processedAt: processedTime,
+          processedBy: 'Admin',
+        });
+      });
+
+      // Update target withdrawals documents
+      wSnapshots.forEach((docSnap) => {
+        transaction.update(docSnap.ref, {
+          status: 'rejected',
+          rejectReason: cleanReason,
+          processedAt: processedTime,
+        });
       });
     });
 
-    // Step 3: Record refund transaction atomically (this updates user's wallet balance too)
+    // Record refund transaction atomically (this updates user's wallet balance too)
     try {
       await recordWalletTransaction({
         uid: userUid,
