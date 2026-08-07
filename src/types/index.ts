@@ -122,6 +122,7 @@ export type TabType =
   | 'withdrawal'
   | 'referral'
   | 'milestones'
+  | 'tasks'
   | 'support'
   | 'security'
   | 'logs'
@@ -1032,5 +1033,27 @@ export interface LiveRedeemPlatformEvent {
     successfulClaims: number;
     remainingCodes: number;
   };
+}
+
+export interface TaskItem {
+  id: string;
+  title: string;
+  reward: number; // in Rupees
+  coins: number; // in Coins
+  verificationType: 'automatic' | 'manual' | 'none';
+  icon: string; // lucide icon name (e.g. "CheckSquare", "Users", "Tv", "Share2")
+  sortOrder: number;
+  url?: string; // external link if any
+  active: boolean;
+  createdAt: string;
+}
+
+export interface TaskCompletionRecord {
+  id?: string;
+  taskId: string;
+  telegramId: string;
+  status: 'pending' | 'completed' | 'rejected';
+  createdAt: string;
+  verifiedAt?: string;
 }
 

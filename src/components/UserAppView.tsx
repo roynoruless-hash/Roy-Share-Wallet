@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { doc, onSnapshot, collection, query, where } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, where, runTransaction, addDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import {
   Wallet,
@@ -422,31 +422,8 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     }
   };
 
-  useEffect(() => {
-    fetchUserData();
-  }, []);
-
-  // Daily Tasks State
-  const [tasks, setTasks] = useState([
-    { id: 'task-1', title: 'Join Official Telegram Channel', reward: 5, coins: 10, status: 'CLAIMABLE', link: 'https://t.me/Roy_wallett_bot' },
-    { id: 'task-2', title: 'Join Chat Group Support', reward: 5, coins: 10, status: 'CLAIMABLE', link: 'https://t.me/Roy_wallett_bot' },
-    { id: 'task-3', title: 'Daily App Check-In', reward: 2, coins: 5, status: 'CLAIMED', link: null },
-    { id: 'task-4', title: 'Follow on Twitter / X', reward: 3, coins: 8, status: 'NOT_STARTED', link: 'https://twitter.com' },
-  ]);
-
-  // Giveaways State
-  const [giveaways, setGiveaways] = useState([
-    { id: 'g-1', title: '🎉 ₹5,000 Grand Team War Giveaway', pool: '₹5,000', end: 'In 3 Days', team: 'Team Red', participants: 482 },
-    { id: 'g-2', title: '💎 Weekly Active User Raffle', pool: '₹1,500', end: 'Every Sunday', team: 'All Users', participants: 1290 },
-  ]);
-
-  // Referral Milestones State
-  const [milestones, setMilestones] = useState([
-    { id: 'm-1', req: 5, reward: 50, status: 'CLAIMABLE' },
-    { id: 'm-2', req: 10, reward: 120, status: 'LOCKED' },
-    { id: 'm-3', req: 25, reward: 350, status: 'LOCKED' },
-    { id: 'm-4', req: 50, reward: 800, status: 'LOCKED' },
-  ]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [milestones, setMilestones] = useState<any[]>([]);
 
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = `${Date.now()}-${Math.random()}`;
@@ -465,15 +442,48 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   };
 
   const fetchUserData = async () => {
+    // Left as compatibility hook, real loading handled via real-time onSnapshot
     try {
       const tgId = getTelegramUserId();
-      // Load user profile
       const res = await fetch(`/api/user-profile?telegramId=${tgId}`);
       const data = await res.json();
       if (data.success && data.profile) {
-        setUser(data.profile);
+        setUser((prev: any) => ({ ...prev, ...data.profile }));
+      }
+    } catch (err) {
+      console.error('Failed to pre-fetch profile:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Setup Real-time Firestore Sync
+  useEffect(() => {
+    const tgId = getTelegramUserId();
+
+    // 1. Listen to active User Document in real-time
+    const userRef = doc(db, 'users', tgId);
+    const unsubscribeUser = onSnapshot(userRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setUser((prev: any) => ({
+          ...prev,
+          ...data,
+          telegramId: tgId,
+          userName: data.userName || data.name || `User #${tgId}`,
+          avatar: data.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
+          walletBalance: Number(data.walletBalance) || Number(data.balance) || 0,
+          coinsBalance: Number(data.coinsBalance) || 0,
+          bonusBalance: Number(data.bonusBalance) || 0,
+          referralCount: Number(data.referralsCount) || 0,
+          joinedDate: data.createdAt || '2026-08-01',
+          securityBadge: 'TRUSTED',
+          securityScore: 98,
+          completedTasks: data.completedTasks || [],
+          milestoneProgress: data.milestoneProgress || {},
+        }));
       } else {
-        // Fallback user details for standalone local testing
+        // Fallback user structure if doc does not exist yet (or standalone local testing)
         setUser({
           telegramId: tgId,
           userName: 'Alex Roy',
@@ -487,22 +497,91 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           referralCount: 4,
           joinedDate: '2026-08-01',
           securityBadge: 'TRUSTED',
-          securityScore: 99
+          securityScore: 99,
+          completedTasks: [],
+          milestoneProgress: {},
         });
       }
-
-      // Fetch user's withdrawal history if endpoint supports it
-      const withdrawRes = await fetch(`/api/admin/global-search?query=${tgId}`);
-      const withdrawData = await withdrawRes.json();
-      if (withdrawData.success && withdrawData.results?.withdrawals) {
-        setWithdrawHistory(withdrawData.results.withdrawals.filter((w: any) => String(w.uid) === tgId || String(w.userId) === tgId));
-      }
-    } catch (err) {
-      console.error('Failed to load user app data:', err);
-    } finally {
       setLoading(false);
-    }
-  };
+    }, (err) => {
+      console.error('Error listening to user doc:', err);
+      setLoading(false);
+    });
+
+    // 2. Listen to dynamic Milestones
+    const milestonesRef = collection(db, 'referralMilestones');
+    const unsubscribeMilestones = onSnapshot(milestonesRef, (snap) => {
+      const list: any[] = [];
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        if (d.active !== false) {
+          list.push({
+            id: docSnap.id,
+            req: Number(d.requiredReferrals) || 0,
+            reward: Number(d.rewardAmount) || 0,
+            rewardType: d.rewardType || 'wallet',
+            position: Number(d.position) || 0,
+          });
+        }
+      });
+      list.sort((a, b) => a.position - b.position);
+      setMilestones(list);
+    }, (err) => {
+      console.error('Error listening to milestones:', err);
+    });
+
+    // 3. Listen to dynamic App Tasks
+    const tasksRef = collection(db, 'tasks');
+    const unsubscribeTasks = onSnapshot(tasksRef, (snap) => {
+      const list: any[] = [];
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        if (d.active !== false) {
+          list.push({
+            id: docSnap.id,
+            title: d.title || 'Untitled Task',
+            reward: Number(d.reward) || 0,
+            coins: Number(d.coins) || 0,
+            verificationType: d.verificationType || 'none',
+            icon: d.icon || 'CheckSquare',
+            sortOrder: Number(d.sortOrder) || 0,
+            url: d.url || '',
+          });
+        }
+      });
+      list.sort((a, b) => a.sortOrder - b.sortOrder);
+      setTasks(list);
+    }, (err) => {
+      console.error('Error listening to tasks:', err);
+    });
+
+    // 4. Listen to withdrawals history in real-time
+    const withdrawalsRef = collection(db, 'withdrawals');
+    const qWithdraw = query(withdrawalsRef, where('uid', '==', tgId));
+    const unsubscribeWithdrawals = onSnapshot(qWithdraw, (snap) => {
+      const list: any[] = [];
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        list.push({
+          id: docSnap.id,
+          ...d,
+        });
+      });
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setWithdrawHistory(list);
+    }, (err) => {
+      console.error('Error listening to withdrawals:', err);
+    });
+
+    fetchUserData();
+
+    return () => {
+      unsubscribeUser();
+      unsubscribeMilestones();
+      unsubscribeTasks();
+      unsubscribeWithdrawals();
+    };
+  }, []);
 
   const handleCopyLink = () => {
     const tgId = getTelegramUserId();
@@ -532,26 +611,70 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     setIsSubmittingWithdrawal(true);
     try {
       const tgId = getTelegramUserId();
-      // Call endpoint or submit directly to database simulator
-      const res = await fetch('/api/admin/command-center-stats'); // Use generic endpoint to check server liveness
-      
-      // Simulate submission of withdrawal request
-      const newWithdrawal = {
-        id: `wd-${Date.now()}`,
-        uid: tgId,
-        userId: tgId,
-        amount: amt,
-        method: withdrawMethod.toUpperCase(),
-        details: withdrawDetails,
-        status: 'PENDING',
-        createdAt: new Date().toISOString()
-      };
+      const userRef = doc(db, 'users', tgId);
 
-      setWithdrawHistory([newWithdrawal, ...withdrawHistory]);
-      setUser((prev: any) => ({
-        ...prev,
-        walletBalance: prev.walletBalance - amt
-      }));
+      // Deduct balance and create withdrawal record atomically
+      await runTransaction(db, async (transaction) => {
+        const userDoc = await transaction.get(userRef);
+        if (!userDoc.exists()) {
+          throw new Error("User profile not found.");
+        }
+
+        const userData = userDoc.data();
+        const currentWallet = Number(userData.walletBalance || userData.balance || 0);
+
+        if (amt > currentWallet) {
+          throw new Error("Insufficient balance!");
+        }
+
+        // Deduct balance from user
+        transaction.update(userRef, {
+          walletBalance: currentWallet - amt
+        });
+
+        // Generate Transaction/Withdrawal ID
+        const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let randStr = '';
+        for (let i = 0; i < 8; i++) {
+          randStr += characters.charAt(Math.floor(Math.random() * characters.length));
+        }
+        const withdrawalId = `WD${randStr}`;
+
+        // Create withdrawal record
+        const withdrawRef = doc(collection(db, 'withdrawals'));
+        transaction.set(withdrawRef, {
+          withdrawalId,
+          userId: tgId,
+          uid: tgId,
+          telegramId: tgId,
+          userName: userData.userName || userData.name || `User #${tgId}`,
+          amount: amt,
+          requestedAmount: amt,
+          platformFee: 0,
+          payoutAmount: amt,
+          feePercent: 0,
+          method: withdrawMethod,
+          upiId: withdrawMethod === 'upi' ? withdrawDetails : '',
+          qrImageUrl: withdrawMethod === 'qr' ? withdrawDetails : '',
+          redeemCodeDetails: withdrawMethod === 'redeem_code' ? withdrawDetails : '',
+          status: 'pending',
+          createdAt: new Date().toISOString()
+        });
+
+        // Create transaction entry
+        const txnRef = doc(collection(db, 'transactions'));
+        transaction.set(txnRef, {
+          transactionId: `TXN${Date.now()}`,
+          uid: tgId,
+          telegramId: tgId,
+          userName: userData.userName || userData.name || `User #${tgId}`,
+          amount: amt,
+          type: 'WITHDRAWAL_REQUEST',
+          status: 'pending',
+          description: `Withdrawal request of ₹${amt} via ${withdrawMethod.toUpperCase()}`,
+          createdAt: new Date().toISOString()
+        });
+      });
 
       setWithdrawAmount('');
       setWithdrawDetails('');
@@ -563,36 +686,118 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     }
   };
 
-  const handleVerifyTask = (taskId: string) => {
-    showToast('🔄 Verifying task requirements with Telegram API...', 'info');
-    setTimeout(() => {
-      setTasks((prev) =>
-        prev.map((t) => (t.id === taskId ? { ...t, status: 'CLAIMED' } : t))
-      );
-      const task = tasks.find((t) => t.id === taskId);
-      if (task) {
-        setUser((prev: any) => ({
-          ...prev,
-          walletBalance: (prev.walletBalance || 0) + task.reward,
-          coinsBalance: (prev.coinsBalance || 0) + (task.coins || 0)
-        }));
-        showToast(`✅ Task verified! Credited ₹${task.reward} & ${task.coins} coins!`, 'success');
-      }
-    }, 1500);
+  const handleVerifyTask = async (taskId: string) => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+
+    if (task.url) {
+      // Open the URL in a new window/tab safely
+      window.open(task.url, '_blank');
+    }
+
+    showToast('🔄 Verifying task completions...', 'info');
+
+    try {
+      const tgId = getTelegramUserId();
+      const userRef = doc(db, 'users', tgId);
+
+      // Perform a Firestore transaction to safely award task reward
+      await runTransaction(db, async (transaction) => {
+        const userDoc = await transaction.get(userRef);
+        if (!userDoc.exists()) {
+          throw new Error("User profile not found. Please register first.");
+        }
+
+        const userData = userDoc.data();
+        const completedTasks = userData.completedTasks || [];
+        if (completedTasks.includes(taskId)) {
+          throw new Error("This task has already been completed.");
+        }
+
+        // Calculate new balances
+        const currentWallet = Number(userData.walletBalance || userData.balance || 0);
+        const currentCoins = Number(userData.coinsBalance || 0);
+
+        transaction.update(userRef, {
+          walletBalance: currentWallet + task.reward,
+          coinsBalance: currentCoins + task.coins,
+          completedTasks: [...completedTasks, taskId]
+        });
+
+        // Record a transaction history entry
+        const txnRef = doc(collection(db, 'transactions'));
+        transaction.set(txnRef, {
+          transactionId: `TXN${Date.now()}`,
+          uid: tgId,
+          telegramId: tgId,
+          userName: userData.userName || userData.name || `User #${tgId}`,
+          amount: task.reward,
+          type: 'TASK_REWARD',
+          status: 'completed',
+          description: `Reward for task: ${task.title}`,
+          createdAt: new Date().toISOString()
+        });
+      });
+
+      showToast(`🎉 Task verified! Credited ₹${task.reward} & ${task.coins} coins!`, 'success');
+    } catch (err: any) {
+      showToast(`❌ Verification failed: ${err.message}`, 'error');
+    }
   };
 
-  const handleClaimMilestone = (id: string, reward: number) => {
-    showToast('🔄 Verifying and claiming milestone reward...', 'info');
-    setTimeout(() => {
-      setMilestones((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, status: 'CLAIMED' } : m))
-      );
-      setUser((prev: any) => ({
-        ...prev,
-        walletBalance: (prev.walletBalance || 0) + reward
-      }));
+  const handleClaimMilestone = async (id: string, reward: number, req: number) => {
+    showToast('🔄 Claiming milestone reward...', 'info');
+
+    try {
+      const tgId = getTelegramUserId();
+      const userRef = doc(db, 'users', tgId);
+
+      await runTransaction(db, async (transaction) => {
+        const userDoc = await transaction.get(userRef);
+        if (!userDoc.exists()) {
+          throw new Error("User profile not found.");
+        }
+
+        const userData = userDoc.data();
+        const currentReferrals = Number(userData.referralsCount || 0);
+
+        if (currentReferrals < req) {
+          throw new Error(`Requirements not met. You need ${req} invites (Current: ${currentReferrals})`);
+        }
+
+        const milestoneProgress = userData.milestoneProgress || {};
+        if (milestoneProgress[id] === 'claimed') {
+          throw new Error("Milestone reward has already been claimed.");
+        }
+
+        const currentWallet = Number(userData.walletBalance || userData.balance || 0);
+
+        // Claimed and update user
+        milestoneProgress[id] = 'claimed';
+        transaction.update(userRef, {
+          walletBalance: currentWallet + reward,
+          milestoneProgress
+        });
+
+        // Record a transaction history entry
+        const txnRef = doc(collection(db, 'transactions'));
+        transaction.set(txnRef, {
+          transactionId: `TXN${Date.now()}`,
+          uid: tgId,
+          telegramId: tgId,
+          userName: userData.userName || userData.name || `User #${tgId}`,
+          amount: reward,
+          type: 'REFERRAL_MILESTONE',
+          status: 'completed',
+          description: `Reward for reaching ${req} referrals milestone`,
+          createdAt: new Date().toISOString()
+        });
+      });
+
       showToast(`🎉 Milestone claimed successfully! Credited ₹${reward}!`, 'success');
-    }, 1200);
+    } catch (err: any) {
+      showToast(`❌ Claim failed: ${err.message}`, 'error');
+    }
   };
 
   if (loading || !user) {
@@ -807,7 +1012,8 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                 {milestones.map((m) => {
                   const currentCount = user.referralCount || 0;
                   const isUnlocked = currentCount >= m.req;
-                  const status = m.status === 'CLAIMED' ? 'CLAIMED' : isUnlocked ? 'CLAIMABLE' : 'LOCKED';
+                  const hasClaimed = user.milestoneProgress?.[m.id] === 'claimed';
+                  const status = hasClaimed ? 'CLAIMED' : isUnlocked ? 'CLAIMABLE' : 'LOCKED';
 
                   return (
                     <div
@@ -846,7 +1052,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                         )}
                         {status === 'CLAIMABLE' && (
                           <button
-                            onClick={() => handleClaimMilestone(m.id, m.reward)}
+                            onClick={() => handleClaimMilestone(m.id, m.reward, m.req)}
                             className="py-1.5 px-3 rounded-lg bg-amber-500 text-slate-950 font-black text-[10px] hover:bg-amber-400 uppercase tracking-wider"
                           >
                             Claim ₹{m.reward}
@@ -876,59 +1082,62 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
             </div>
 
             <div className="space-y-2.5">
-              {tasks.map((task) => (
-                <div
-                  key={task.id}
-                  className={`p-4 rounded-2xl bg-slate-900/30 border border-slate-900 flex items-center justify-between ${
-                    task.status === 'CLAIMED' ? 'opacity-65' : ''
-                  }`}
-                >
-                  <div>
-                    <h3 className="text-xs font-black text-white">{task.title}</h3>
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <span className="text-[9px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/10 px-1.5 py-0.5 rounded font-bold">
-                        +₹{task.reward} Cash
-                      </span>
-                      <span className="text-[9px] bg-amber-500/15 text-amber-400 border border-amber-500/10 px-1.5 py-0.5 rounded font-bold">
-                        +{task.coins} Coins
-                      </span>
+              {tasks.map((task) => {
+                const isCompleted = user?.completedTasks?.includes(task.id);
+                return (
+                  <div
+                    key={task.id}
+                    className={`p-4 rounded-2xl bg-slate-900/30 border border-slate-900 flex items-center justify-between ${
+                      isCompleted ? 'opacity-65' : ''
+                    }`}
+                  >
+                    <div>
+                      <h3 className="text-xs font-black text-white">{task.title}</h3>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span className="text-[9px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/10 px-1.5 py-0.5 rounded font-bold">
+                          +₹{task.reward} Cash
+                        </span>
+                        <span className="text-[9px] bg-amber-500/15 text-amber-400 border border-amber-500/10 px-1.5 py-0.5 rounded font-bold">
+                          +{task.coins} Coins
+                        </span>
+                      </div>
                     </div>
-                  </div>
 
-                  <div>
-                    {task.status === 'CLAIMED' ? (
-                      <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
-                        <Check className="w-3 h-3" />
-                        <span>Completed</span>
-                      </span>
-                    ) : task.link ? (
-                      <div className="flex gap-2">
-                        <a
-                          href={task.link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
+                    <div>
+                      {isCompleted ? (
+                        <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                          <Check className="w-3 h-3" />
+                          <span>Completed</span>
+                        </span>
+                      ) : task.url ? (
+                        <div className="flex gap-2">
+                          <a
+                            href={task.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                          <button
+                            onClick={() => handleVerifyTask(task.id)}
+                            className="py-1.5 px-3 rounded-lg bg-amber-500 text-slate-950 font-black text-[10px] hover:bg-amber-400"
+                          >
+                            Verify
+                          </button>
+                        </div>
+                      ) : (
                         <button
                           onClick={() => handleVerifyTask(task.id)}
                           className="py-1.5 px-3 rounded-lg bg-amber-500 text-slate-950 font-black text-[10px] hover:bg-amber-400"
                         >
-                          Verify
+                          Claim
                         </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => handleVerifyTask(task.id)}
-                        className="py-1.5 px-3 rounded-lg bg-amber-500 text-slate-950 font-black text-[10px] hover:bg-amber-400"
-                      >
-                        Claim
-                      </button>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

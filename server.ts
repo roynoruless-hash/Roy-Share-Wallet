@@ -6018,6 +6018,9 @@ Claim now and don't forget to share your screenshot!`;
         securityBadge: 'TRUSTED',
         securityScore: 98,
         referralCount: userData.referralsCount || 0,
+        walletBalance: Number(userData.walletBalance) || Number(userData.balance) || 0,
+        coinsBalance: Number(userData.coinsBalance) || 0,
+        bonusBalance: Number(userData.bonusBalance) || 0,
         joinedDate: userData.createdAt || '2026-08-01',
         achievements: [
           { id: '1', title: '⚡ Speed Demon', desc: 'Sub 2.5s typing speed', unlocked: fastestSpeed < 2.5 },

@@ -36,6 +36,7 @@ import { BroadcastHistoryView } from './components/BroadcastHistoryView';
 import { AnalyticsView } from './components/AnalyticsView';
 import { AdvancedView } from './components/AdvancedView';
 import { SettingsView } from './components/SettingsView';
+import { TasksManagerView } from './components/admin/TasksManagerView';
 import { GlobalSearchModal } from './components/admin/GlobalSearchModal';
 import { ComingSoonView } from './components/ComingSoonView';
 import { Toast, ToastMessage } from './components/Toast';
@@ -63,6 +64,7 @@ function resolveTabFromPath(pathname: string): { tab: TabType; isUnknown: boolea
   if (p.startsWith('/withdrawal')) return { tab: 'withdrawal', isUnknown: false };
   if (p.startsWith('/referral')) return { tab: 'referral', isUnknown: false };
   if (p.startsWith('/milestones')) return { tab: 'milestones', isUnknown: false };
+  if (p.startsWith('/tasks')) return { tab: 'tasks', isUnknown: false };
   if (p.startsWith('/feedback-campaigns') || p.startsWith('/feedback_campaigns')) return { tab: 'feedback_campaigns', isUnknown: false };
   if (p.startsWith('/feedback-reviews') || p.startsWith('/feedback_reviews')) return { tab: 'feedback_reviews', isUnknown: false };
   if (p.startsWith('/voting-contests') || p.startsWith('/voting_contests') || p.startsWith('/contests')) return { tab: 'voting_contests', isUnknown: false };
@@ -470,6 +472,8 @@ export default function App() {
         return 'Referral Settings';
       case 'milestones':
         return 'Referral Milestones';
+      case 'tasks':
+        return '📑 App Tasks';
       case 'feedback_campaigns':
         return '⭐ Feedback Campaigns';
       case 'feedback_reviews':
@@ -817,6 +821,13 @@ export default function App() {
 
               {activeTab === 'milestones' && (
                 <ReferralMilestonesView
+                  config={config}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'tasks' && (
+                <TasksManagerView
                   config={config}
                   showToast={showToast}
                 />

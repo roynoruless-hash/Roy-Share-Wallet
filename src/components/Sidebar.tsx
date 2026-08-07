@@ -15,6 +15,7 @@ import {
   Bot,
   Save,
   CheckCircle2,
+  CheckSquare,
 } from 'lucide-react';
 import { TabType } from '../types';
 
@@ -95,6 +96,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Advanced',
       icon: Zap,
       badge: 'PRO',
+    },
+    {
+      id: 'tasks' as TabType,
+      label: 'Tasks',
+      icon: CheckSquare,
+      badge: undefined,
     },
     {
       id: 'settings' as TabType,
