@@ -41,9 +41,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
   useEffect(() => {
     async function loadQuickStats() {
       try {
-        const token = localStorage.getItem('adminSessionToken') || '';
+        let token = '';
+        try {
+          const raw = localStorage.getItem('royshare_admin_session') || sessionStorage.getItem('royshare_admin_session');
+          if (raw) {
+            token = JSON.parse(raw).sessionToken || '';
+          }
+        } catch (e) {}
+        if (!token) {
+          token = localStorage.getItem('adminSessionToken') || '';
+        }
+
         const res = await fetch('/api/admin/quick-stats', {
-          headers: { 'x-admin-token': token },
+          headers: { 
+            'x-admin-session-token': token,
+            'Authorization': token ? `Bearer ${token}` : ''
+          },
         });
         if (res.ok) {
           const data = await res.json();

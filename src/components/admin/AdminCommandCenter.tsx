@@ -18,9 +18,22 @@ export const AdminCommandCenter: React.FC = () => {
   const fetchCommandCenterStats = async () => {
     try {
       setLoading(true);
-      const sessionToken = localStorage.getItem('adminSessionToken') || '';
+      let sessionToken = '';
+      try {
+        const raw = localStorage.getItem('royshare_admin_session') || sessionStorage.getItem('royshare_admin_session');
+        if (raw) {
+          sessionToken = JSON.parse(raw).sessionToken || '';
+        }
+      } catch (e) {}
+      if (!sessionToken) {
+        sessionToken = localStorage.getItem('adminSessionToken') || '';
+      }
+
       const res = await fetch('/api/admin/command-center-stats', {
-        headers: { 'x-admin-token': sessionToken },
+        headers: { 
+          'x-admin-session-token': sessionToken,
+          'Authorization': sessionToken ? `Bearer ${sessionToken}` : ''
+        },
       });
       const data = await res.json();
       if (data.success) {

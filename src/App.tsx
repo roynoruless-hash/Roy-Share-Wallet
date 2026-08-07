@@ -303,6 +303,7 @@ export default function App() {
     } catch (e) {}
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
+      localStorage.removeItem('adminSessionToken');
     } catch (e) {
       console.warn('Could not remove login session:', e);
     }

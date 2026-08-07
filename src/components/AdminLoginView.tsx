@@ -153,6 +153,7 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
       if (data.success) {
         showToast('✅ Admin system setup complete and logged in!', 'success');
         // Store session token
+        localStorage.setItem('adminSessionToken', data.sessionToken);
         localStorage.setItem('royshare_admin_session', JSON.stringify({
           loggedIn: true,
           lastActive: Date.now(),
@@ -228,6 +229,7 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
       if (data.success) {
         showToast('✅ Admin authentication successful!', 'success');
         // Store session token
+        localStorage.setItem('adminSessionToken', data.sessionToken);
         localStorage.setItem('royshare_admin_session', JSON.stringify({
           loggedIn: true,
           lastActive: Date.now(),

@@ -30,6 +30,18 @@ interface LuckyGiveawaysViewProps {
 }
 
 export const LuckyGiveawaysView: React.FC<LuckyGiveawaysViewProps> = ({ config, showToast }) => {
+  // Get Admin session token from storage
+  const getSessionToken = (): string => {
+    try {
+      const raw = localStorage.getItem('royshare_admin_session') || sessionStorage.getItem('royshare_admin_session');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return parsed?.sessionToken || '';
+      }
+    } catch (e) {}
+    return localStorage.getItem('adminSessionToken') || '';
+  };
+
   // Stats
   const [totalCount, setTotalCount] = useState(0);
   const [activeGiveaway, setActiveGiveaway] = useState<any>(null);
@@ -139,9 +151,12 @@ export const LuckyGiveawaysView: React.FC<LuckyGiveawaysViewProps> = ({ config, 
   const fetchHistory = async () => {
     try {
       setLoading(true);
-      const sessionToken = localStorage.getItem('adminSessionToken') || '';
+      const sessionToken = getSessionToken();
       const res = await fetch('/api/giveaway/history', {
-        headers: { 'x-admin-token': sessionToken },
+        headers: { 
+          'x-admin-session-token': sessionToken,
+          'Authorization': sessionToken ? `Bearer ${sessionToken}` : ''
+        },
       });
       const data = await res.json();
       if (data.success) {
@@ -359,12 +374,13 @@ export const LuckyGiveawaysView: React.FC<LuckyGiveawaysViewProps> = ({ config, 
 
     try {
       setIsSubmitting(true);
-      const sessionToken = localStorage.getItem('adminSessionToken') || '';
+      const sessionToken = getSessionToken();
       const res = await fetch('/api/giveaway/create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-token': sessionToken
+          'x-admin-session-token': sessionToken,
+          'Authorization': sessionToken ? `Bearer ${sessionToken}` : ''
         },
         body: JSON.stringify({
           title,
@@ -397,12 +413,13 @@ export const LuckyGiveawaysView: React.FC<LuckyGiveawaysViewProps> = ({ config, 
   const handleControlAction = async (action: 'start' | 'pause' | 'resume' | 'draw' | 'cancel' | 'restart') => {
     if (!activeGiveaway) return;
     try {
-      const sessionToken = localStorage.getItem('adminSessionToken') || '';
+      const sessionToken = getSessionToken();
       const res = await fetch('/api/giveaway/control', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-token': sessionToken
+          'x-admin-session-token': sessionToken,
+          'Authorization': sessionToken ? `Bearer ${sessionToken}` : ''
         },
         body: JSON.stringify({
           giveawayId: activeGiveaway.id,
