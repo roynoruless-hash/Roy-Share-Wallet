@@ -26,6 +26,7 @@ import { AdminLoginView } from './components/AdminLoginView';
 import { VotingContestsView } from './components/VotingContestsView';
 import { GiveawayWarView } from './components/GiveawayWarView';
 import { AIBroadcastView } from './components/AIBroadcastView';
+import { LuckyGiveawaysView } from './components/admin/LuckyGiveawaysView';
 import { EnterpriseOperationsView } from './components/admin/EnterpriseOperationsView';
 import { AIRevenueAutomationView } from './components/admin/AIRevenueAutomationView';
 import { GiveawayWarPublicView } from './components/GiveawayWarPublicView';
@@ -440,8 +441,8 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard':
         return 'Dashboard Overview';
-      case 'redeem_events':
-        return '🎁 Redeem Events & Live Lobby';
+      case 'giveaways':
+        return '🎁 Lucky Number Giveaways';
       case 'voting_contests':
         return '🏆 Voting Contest System';
       case 'wallet':
@@ -836,6 +837,13 @@ export default function App() {
 
               {activeTab === 'voting_contests' && (
                 <VotingContestsView
+                  config={config}
+                  showToast={showToast}
+                />
+              )}
+
+              {activeTab === 'giveaways' && (
+                <LuckyGiveawaysView
                   config={config}
                   showToast={showToast}
                 />

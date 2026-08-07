@@ -55,6 +55,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: undefined,
     },
     {
+      id: 'giveaways' as TabType,
+      label: 'Giveaways',
+      icon: Gift,
+      badge: 'NEW',
+    },
+    {
       id: 'wallet' as TabType,
       label: 'Wallet',
       icon: Wallet,
