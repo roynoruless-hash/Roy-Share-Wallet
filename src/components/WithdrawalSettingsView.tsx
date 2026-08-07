@@ -105,31 +105,86 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
     })
     .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
 
-  // Real-time Firestore Listener
+  // Real-time Firestore Listener for both withdrawals and withdraw_requests
   useEffect(() => {
     setLoading(true);
-    const q = query(collection(db, 'withdraw_requests'), orderBy('createdAt', 'desc'));
+    let list1: WithdrawalRecord[] = [];
+    let list2: WithdrawalRecord[] = [];
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const list: WithdrawalRecord[] = [];
-        snapshot.forEach((doc) => {
-          list.push({
-            id: doc.id,
-            ...(doc.data() as Omit<WithdrawalRecord, 'id'>),
+    const mergeAndSet = () => {
+      const map = new Map<string, WithdrawalRecord>();
+
+      const addRecord = (item: WithdrawalRecord) => {
+        const key = item.withdrawalId || item.requestId || item.id || '';
+        if (!key) return;
+        const existing = map.get(key);
+        if (!existing) {
+          map.set(key, item);
+        } else {
+          map.set(key, {
+            ...existing,
+            ...item,
+            id: existing.id || item.id,
+            withdrawalId: existing.withdrawalId || item.withdrawalId || item.requestId,
+            requestId: existing.requestId || item.requestId || item.withdrawalId,
+            status: item.status || existing.status,
           });
+        }
+      };
+
+      list1.forEach(addRecord);
+      list2.forEach(addRecord);
+
+      const merged = Array.from(map.values()).sort((a, b) => {
+        const timeA = new Date(a.createdAt || 0).getTime();
+        const timeB = new Date(b.createdAt || 0).getTime();
+        return timeB - timeA;
+      });
+
+      const pendingList = merged.filter(w => String(w.status).toLowerCase() === 'pending');
+      console.log(`[Firestore Query] Admin Panel loaded ${merged.length} total withdrawal records (${pendingList.length} PENDING) from collections 'withdrawals' (${list1.length}) and 'withdraw_requests' (${list2.length}).`);
+
+      setWithdrawals(merged);
+      setLoading(false);
+    };
+
+    const q1 = query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc'));
+    const q2 = query(collection(db, 'withdraw_requests'), orderBy('createdAt', 'desc'));
+
+    const unsub1 = onSnapshot(
+      q1,
+      (snapshot) => {
+        list1 = [];
+        snapshot.forEach((doc) => {
+          list1.push({ id: doc.id, ...(doc.data() as Omit<WithdrawalRecord, 'id'>) });
         });
-        setWithdrawals(list);
-        setLoading(false);
+        mergeAndSet();
       },
       (err) => {
-        console.error('Error fetching withdrawals from Firestore:', err);
-        setLoading(false);
+        console.error('Error fetching withdrawals collection:', err);
+        mergeAndSet();
       }
     );
 
-    return () => unsubscribe();
+    const unsub2 = onSnapshot(
+      q2,
+      (snapshot) => {
+        list2 = [];
+        snapshot.forEach((doc) => {
+          list2.push({ id: doc.id, ...(doc.data() as Omit<WithdrawalRecord, 'id'>) });
+        });
+        mergeAndSet();
+      },
+      (err) => {
+        console.error('Error fetching withdraw_requests collection:', err);
+        mergeAndSet();
+      }
+    );
+
+    return () => {
+      unsub1();
+      unsub2();
+    };
   }, []);
 
   // Filtered withdrawals

@@ -48,8 +48,15 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Withdrawals
+    // Withdrawals & Requests
     match /withdrawals/{withdrawalId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if false;
+    }
+
+    match /withdraw_requests/{requestId} {
       allow read: if true;
       allow create: if true;
       allow update: if true;

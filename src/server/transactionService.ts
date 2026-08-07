@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs, doc, runTransaction } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc, runTransaction } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
 export interface TransactionInput {
@@ -45,10 +45,23 @@ export async function recordWalletTransaction(input: TransactionInput) {
   console.log(`[transactionService] Processing ${type} of amount ${amount} for user UID: ${uid}`);
 
   try {
-    // 1. Find user document
-    const usersQ = query(collection(db, 'users'), where('uid', '==', String(uid).trim()));
-    const uSnap = await getDocs(usersQ);
+    // 1. Find user document using appUid, uid, telegramId, or doc ID
+    const searchUid = String(uid).trim();
+    let uSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', searchUid)));
     if (uSnap.empty) {
+      uSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', searchUid)));
+    }
+    if (uSnap.empty) {
+      uSnap = await getDocs(query(collection(db, 'users'), where('telegramId', '==', searchUid)));
+    }
+    if (uSnap.empty) {
+      const singleDocSnap = await getDoc(doc(db, 'users', searchUid));
+      if (singleDocSnap.exists()) {
+        uSnap = { empty: false, docs: [singleDocSnap] } as any;
+      }
+    }
+
+    if (!uSnap || uSnap.empty) {
       console.error(`[transactionService] User with UID ${uid} not found!`);
       return { success: false, error: `User not found: ${uid}` };
     }

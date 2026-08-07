@@ -6101,9 +6101,12 @@ Claim now and don't forget to share your screenshot!`;
 
       const totalUsers = usersSnap.size || 120;
       const withdrawals = withdrawalsSnap.docs.map(d => d.data());
-      const pendingWithdrawals = withdrawals.filter((w: any) => w.status === 'PENDING').length;
+      const pendingWithdrawals = withdrawals.filter((w: any) => String(w.status).toLowerCase() === 'pending').length;
       const totalWithdrawalAmount = withdrawals
-        .filter((w: any) => w.status === 'APPROVED')
+        .filter((w: any) => {
+          const s = String(w.status).toLowerCase();
+          return s === 'approved' || s === 'completed';
+        })
         .reduce((acc: number, curr: any) => acc + (Number(curr.amount) || 0), 0);
 
       const liveData = liveSnap.exists() ? liveSnap.data() : {};

@@ -73,30 +73,32 @@ export async function approveWithdrawal(botToken: string, withdrawalDocId: strin
     const processedTime = new Date().toISOString();
 
     // Look up any matching documents in BOTH collections to update them synchronously
-    const wrQuery = query(collection(db, 'withdraw_requests'), where('requestId', '==', withdrawalIdStr));
-    const wrSnapshots = await getDocs(wrQuery);
+    const docsToUpdateMap = new Map<string, any>();
+    docsToUpdateMap.set(targetDoc.id, targetDoc.ref);
 
-    const wQuery = query(collection(db, 'withdrawals'), where('withdrawalId', '==', withdrawalIdStr));
-    const wSnapshots = await getDocs(wQuery);
+    if (withdrawalIdStr) {
+      const wr1 = await getDocs(query(collection(db, 'withdraw_requests'), where('requestId', '==', withdrawalIdStr)));
+      wr1.forEach(d => docsToUpdateMap.set(d.id, d.ref));
+      const wr2 = await getDocs(query(collection(db, 'withdraw_requests'), where('withdrawalId', '==', withdrawalIdStr)));
+      wr2.forEach(d => docsToUpdateMap.set(d.id, d.ref));
+
+      const w1 = await getDocs(query(collection(db, 'withdrawals'), where('withdrawalId', '==', withdrawalIdStr)));
+      w1.forEach(d => docsToUpdateMap.set(d.id, d.ref));
+      const w2 = await getDocs(query(collection(db, 'withdrawals'), where('requestId', '==', withdrawalIdStr)));
+      w2.forEach(d => docsToUpdateMap.set(d.id, d.ref));
+    }
 
     await runTransaction(db, async (transaction) => {
-      // Update target withdraw_requests documents
-      wrSnapshots.forEach((docSnap) => {
-        transaction.update(docSnap.ref, {
+      docsToUpdateMap.forEach((docRef) => {
+        transaction.update(docRef, {
           status: 'Approved',
           processedAt: processedTime,
           processedBy: 'Admin',
         });
       });
-
-      // Update target withdrawals documents
-      wSnapshots.forEach((docSnap) => {
-        transaction.update(docSnap.ref, {
-          status: 'completed',
-          processedAt: processedTime,
-        });
-      });
     });
+
+    console.log(`[Firestore Write] Approved withdrawal #${withdrawalIdStr} across ${docsToUpdateMap.size} documents in Firestore.`);
 
     // Record Withdrawal Approved in transactions ledger (already deducted balance during request)
     try {
@@ -174,41 +176,36 @@ export async function rejectWithdrawal(botToken: string, withdrawalDocId: string
     amount = Number(data.amount) || 0;
     userUid = data.uid || data.userId || data.telegramId || '';
 
-    const usersQ = query(collection(db, 'users'), where('uid', '==', userUid));
-    const uSnap = await getDocs(usersQ);
-    if (uSnap.empty) {
-      return { success: false, error: 'Associated user account not found for refund.' };
-    }
-
     const processedTime = new Date().toISOString();
 
     // Look up any matching documents in BOTH collections to update them synchronously
-    const wrQuery = query(collection(db, 'withdraw_requests'), where('requestId', '==', withdrawalIdStr));
-    const wrSnapshots = await getDocs(wrQuery);
+    const docsToUpdateMap = new Map<string, any>();
+    docsToUpdateMap.set(targetDoc.id, targetDoc.ref);
 
-    const wQuery = query(collection(db, 'withdrawals'), where('withdrawalId', '==', withdrawalIdStr));
-    const wSnapshots = await getDocs(wQuery);
+    if (withdrawalIdStr) {
+      const wr1 = await getDocs(query(collection(db, 'withdraw_requests'), where('requestId', '==', withdrawalIdStr)));
+      wr1.forEach(d => docsToUpdateMap.set(d.id, d.ref));
+      const wr2 = await getDocs(query(collection(db, 'withdraw_requests'), where('withdrawalId', '==', withdrawalIdStr)));
+      wr2.forEach(d => docsToUpdateMap.set(d.id, d.ref));
+
+      const w1 = await getDocs(query(collection(db, 'withdrawals'), where('withdrawalId', '==', withdrawalIdStr)));
+      w1.forEach(d => docsToUpdateMap.set(d.id, d.ref));
+      const w2 = await getDocs(query(collection(db, 'withdrawals'), where('requestId', '==', withdrawalIdStr)));
+      w2.forEach(d => docsToUpdateMap.set(d.id, d.ref));
+    }
 
     await runTransaction(db, async (transaction) => {
-      // Update target withdraw_requests documents
-      wrSnapshots.forEach((docSnap) => {
-        transaction.update(docSnap.ref, {
+      docsToUpdateMap.forEach((docRef) => {
+        transaction.update(docRef, {
           status: 'Rejected',
           rejectReason: cleanReason,
           processedAt: processedTime,
           processedBy: 'Admin',
         });
       });
-
-      // Update target withdrawals documents
-      wSnapshots.forEach((docSnap) => {
-        transaction.update(docSnap.ref, {
-          status: 'rejected',
-          rejectReason: cleanReason,
-          processedAt: processedTime,
-        });
-      });
     });
+
+    console.log(`[Firestore Write] Rejected withdrawal #${withdrawalIdStr} across ${docsToUpdateMap.size} documents in Firestore.`);
 
     // Record refund transaction atomically (this updates user's wallet balance too)
     try {

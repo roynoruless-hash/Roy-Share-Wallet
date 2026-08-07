@@ -1002,11 +1002,14 @@ Fee %: ${feePercent}%
 Platform Fee: ₹${platformFee}
 Final Payout: ₹${payoutAmount}`);
 
-        // Add document to withdrawals collection first (maintaining status: pending)
+        const userUid = freshUserData.appUid || freshUserData.uid || String(chatId);
+
+        // Add document to withdrawals and withdraw_requests collections simultaneously
         const withdrawalData = {
           withdrawalId,
+          requestId: withdrawalId,
           userId: userDocId,
-          uid: freshUserData.uid,
+          uid: userUid,
           telegramId: String(chatId),
           userName: freshUserData.firstName || 'User',
           amount: amount,
@@ -1020,9 +1023,18 @@ Final Payout: ₹${payoutAmount}`);
           redeemCodeDetails: redeemCodeDetails,
           status: 'pending',
           createdAt: new Date().toISOString(),
+          processedAt: '',
+          processedBy: '',
+          rejectReason: '',
         };
 
         const wDocRef = await addDoc(collection(db, 'withdrawals'), withdrawalData);
+        const wrDocRef = await addDoc(collection(db, 'withdraw_requests'), {
+          ...withdrawalData,
+          status: 'Pending', // also keep capitalized for legacy viewers
+        });
+
+        console.log(`[Firestore Write] Created withdrawal #${withdrawalId} | Collection: withdrawals (Doc ID: ${wDocRef.id}) & withdraw_requests (Doc ID: ${wrDocRef.id}) | Status: pending | UID: ${userUid}`);
 
         // Method label for transaction log
         let methodDetailLog = '';

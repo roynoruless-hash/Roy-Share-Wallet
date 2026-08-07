@@ -141,10 +141,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
         const amt = Number(data.amount) || Number(data.requestedAmount) || 0;
         const fee = Number(data.platformFee) || 0;
 
-        if (data.status === 'pending') {
+        const st = String(data.status || '').toLowerCase();
+        if (st === 'pending') {
           pendingVal += amt;
           pendingCount++;
-        } else if (data.status === 'completed' || data.status === 'approved') {
+        } else if (st === 'completed' || st === 'approved') {
           completedVal += amt;
           completedCount++;
           totalRevenueCollected += fee;
