@@ -17,6 +17,7 @@ export interface TransactionInput {
   status: 'completed' | 'pending' | 'rejected' | 'approved';
   description: string;
   botToken?: string;
+  transactionId?: string; // Deterministic ID, e.g. GIVEAWAY_<giveawayId>_<uid>
 }
 
 /**
@@ -38,10 +39,10 @@ async function sendTelegramMessage(token: string, chatId: string, text: string) 
 
 /**
  * Centrally records a wallet transaction, updates user balance atomically, and notifies the user on Telegram.
- * Implements strict immutability.
+ * Implements strict immutability and duplicate transaction rejection.
  */
 export async function recordWalletTransaction(input: TransactionInput) {
-  const { uid, type, amount, status, description, botToken } = input;
+  const { uid, type, amount, status, description, botToken, transactionId: customTxId } = input;
   console.log(`[transactionService] Processing ${type} of amount ${amount} for user UID: ${uid}`);
 
   try {
@@ -72,16 +73,32 @@ export async function recordWalletTransaction(input: TransactionInput) {
 
     let balanceBefore = 0;
     let balanceAfter = 0;
-    // Generate strict Transaction ID format: TXNXXXXXXXX
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let randStr = '';
-    for (let i = 0; i < 8; i++) {
-      randStr += characters.charAt(Math.floor(Math.random() * characters.length));
+
+    let transactionId = customTxId ? String(customTxId).trim() : '';
+    if (!transactionId) {
+      const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let randStr = '';
+      for (let i = 0; i < 8; i++) {
+        randStr += characters.charAt(Math.floor(Math.random() * characters.length));
+      }
+      transactionId = `TXN${randStr}`;
     }
-    const transactionId = `TXN${randStr}`;
+
+    const txRef = doc(db, 'transactions', transactionId);
+    let isAlreadyProcessed = false;
 
     // 2. Perform atomic Firestore Transaction
     await runTransaction(db, async (transaction) => {
+      const existingTxSnap = await transaction.get(txRef);
+      if (existingTxSnap.exists()) {
+        console.warn(`[transactionService] Duplicate transaction blocked! Transaction ID ${transactionId} already exists in Firestore.`);
+        isAlreadyProcessed = true;
+        const existingData = existingTxSnap.data();
+        balanceBefore = Number(existingData.balanceBefore) || 0;
+        balanceAfter = Number(existingData.balanceAfter) || 0;
+        return;
+      }
+
       const uFreshSnap = await transaction.get(userDocRef);
       if (!uFreshSnap.exists()) {
         throw new Error('User document missing during transaction execution.');
@@ -100,7 +117,6 @@ export async function recordWalletTransaction(input: TransactionInput) {
       });
 
       // Write Immutable Transaction Document
-      const txRef = doc(db, 'transactions', transactionId);
       transaction.set(txRef, {
         id: transactionId,
         transactionId: transactionId,
@@ -119,7 +135,21 @@ export async function recordWalletTransaction(input: TransactionInput) {
       });
     });
 
-    console.log(`[transactionService] Atomic balance update & immutable log succeeded for ${transactionId}. New Balance: ₹${balanceAfter}`);
+    if (isAlreadyProcessed) {
+      console.log(`[Ledger Entry] Duplicate detected. Skipped wallet credit for TXN: ${transactionId}`);
+      return {
+        success: true,
+        alreadyProcessed: true,
+        transactionId,
+        balanceBefore,
+        balanceAfter,
+      };
+    }
+
+    console.log(`[Wallet Credit] User UID: ${uid}, Previous Balance: ₹${balanceBefore}, New Balance: ₹${balanceAfter}, Amount: ₹${amount}`);
+    console.log(`[Ledger Entry] Created ledger entry for TXN: ${transactionId}`);
+    console.log(`[Transaction ID] ${transactionId}`);
+    console.log(`[Firestore Write] Transaction document set at transactions/${transactionId}`);
 
     // 3. Automatically send Telegram notification to user
     const finalTelegramId = String(userData.telegramId || '');

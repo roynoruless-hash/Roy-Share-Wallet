@@ -2779,19 +2779,40 @@ Claim now and don't forget to share your screenshot!`;
 
   // Central Draw Runner Function V2.1
   async function runGiveawayDrawing(giveawayId: string) {
-    console.log(`[runGiveawayDrawing] Initiating server draw for ${giveawayId}...`);
+    console.log(`[Draw Started] Initiating server draw for giveaway ID: ${giveawayId}...`);
     try {
       const giveRef = doc(db, 'giveaways', giveawayId);
       const activeRef = doc(db, 'giveaways', 'active');
-      const giveSnap = await getDoc(giveRef);
-      if (!giveSnap.exists()) return;
 
-      const giveaway = giveSnap.data();
-      if (giveaway.status === 'completed' || giveaway.status === 'cancelled' || giveaway.status === 'drawing') {
-        console.log('[runGiveawayDrawing] Giveaway already completed, cancelled or drawing.');
+      let canDraw = false;
+      let giveawayData: any = null;
+
+      // Atomically check status and lock state to 'drawing'
+      await runTransaction(db, async (transaction) => {
+        const giveSnap = await transaction.get(giveRef);
+        if (!giveSnap.exists()) return;
+
+        giveawayData = giveSnap.data();
+        if (giveawayData.status !== 'active') {
+          console.log(`[Draw Started] Aborted: Giveaway ${giveawayId} is in status '${giveawayData.status}' (expected 'active').`);
+          return;
+        }
+
+        if (giveawayData.winnerPaid === true || giveawayData.status === 'completed') {
+          console.log(`[Draw Started] Aborted: Giveaway ${giveawayId} is already completed or winnerPaid is true.`);
+          return;
+        }
+
+        transaction.update(giveRef, { status: 'drawing' });
+        transaction.update(activeRef, { status: 'drawing' });
+        canDraw = true;
+      });
+
+      if (!canDraw || !giveawayData) {
         return;
       }
 
+      const giveaway = giveawayData;
       const entriesCol = collection(db, 'entries');
       const eq = query(entriesCol, where('giveawayId', '==', giveawayId));
       const esnap = await getDocs(eq);
@@ -2827,16 +2848,17 @@ Claim now and don't forget to share your screenshot!`;
         }
       }
 
-      console.log(`[runGiveawayDrawing] Decided winning numbers:`, winningNumbers);
+      console.log(`[Draw Started] Decided winning numbers:`, winningNumbers);
 
       const winners: any[] = [];
       for (const ent of entries) {
         if (winningNumbers.includes(ent.selectedNumber)) {
           winners.push(ent);
+          console.log(`[Winner Selected] Winner Telegram ID: ${ent.telegramId}, Selected Number: ${ent.selectedNumber}, Name: ${ent.firstName || 'User'}`);
         }
       }
 
-      console.log(`[runGiveawayDrawing] Winners found: ${winners.length}`);
+      console.log(`[Draw Started] Total winners found: ${winners.length}`);
 
       // Cryptographically secure Draw Seed & winner validation hash
       const drawId = `draw_${giveawayId}`;
@@ -2860,6 +2882,8 @@ Claim now and don't forget to share your screenshot!`;
         setDoc(activeRef, drawingObj, { merge: true }),
       ]);
 
+      console.log(`[Firestore Write] Set giveaway ${giveawayId} status=drawing in Firestore.`);
+
       // Set timeout to complete the drawing in 15 seconds
       setTimeout(() => {
         completeGiveawayDrawing(giveawayId).catch(err => {
@@ -2878,15 +2902,49 @@ Claim now and don't forget to share your screenshot!`;
     try {
       const giveRef = doc(db, 'giveaways', giveawayId);
       const activeRef = doc(db, 'giveaways', 'active');
-      const giveSnap = await getDoc(giveRef);
-      if (!giveSnap.exists()) return;
 
-      const giveaway = giveSnap.data();
-      if (giveaway.status !== 'drawing') {
-        console.log(`[completeGiveawayDrawing] Giveaway ${giveawayId} is not in 'drawing' status.`);
+      let canFinalize = false;
+      let giveawayData: any = null;
+
+      // Atomic Firestore transaction to lock winner execution & set winnerPaid = true
+      await runTransaction(db, async (transaction) => {
+        const giveSnap = await transaction.get(giveRef);
+        if (!giveSnap.exists()) return;
+
+        const g = giveSnap.data();
+        if (g.status !== 'drawing') {
+          console.log(`[Draw Execution] Aborted: Giveaway ${giveawayId} status is '${g.status}' (expected 'drawing').`);
+          return;
+        }
+
+        if (g.winnerPaid === true || g.status === 'completed') {
+          console.log(`[Draw Execution] Aborted: Giveaway ${giveawayId} already completed or winnerPaid=true. DO NOT CREDIT AGAIN.`);
+          return;
+        }
+
+        transaction.update(giveRef, {
+          status: 'completed',
+          winnerPaid: true,
+          completedAt: new Date().toISOString(),
+          endedAt: Date.now(),
+        });
+        transaction.update(activeRef, {
+          status: 'completed',
+          winnerPaid: true,
+          completedAt: new Date().toISOString(),
+          endedAt: Date.now(),
+        });
+
+        giveawayData = g;
+        canFinalize = true;
+      });
+
+      if (!canFinalize || !giveawayData) {
+        console.log(`[Draw Execution] Execution cancelled or already completed for giveaway ${giveawayId}.`);
         return;
       }
 
+      const giveaway = giveawayData;
       const winners = giveaway.winners || [];
       const winningNumbers = giveaway.winningNumbers || [];
       const configData = await getDecryptedConfig() || {};
@@ -2901,39 +2959,42 @@ Claim now and don't forget to share your screenshot!`;
           if (!userSnap.empty) {
             const userDoc = userSnap.docs[0];
             const userData = userDoc.data();
-            const userUid = userData.uid;
+            const userUid = userData.appUid || userData.uid || userDoc.id || String(winner.telegramId);
 
-            if (userUid) {
-              const txResult = await recordWalletTransaction({
-                uid: String(userUid),
-                type: 'Admin Credit',
-                amount: Number(giveaway.prizeAmount),
-                status: 'completed',
-                description: `🎁 Lucky Number Giveaway Winner: ${giveaway.title} (Number: ${winner.selectedNumber})`,
-                botToken,
-              });
+            // Deterministic transaction ID guarantee
+            const deterministicTxId = `GIVEAWAY_${giveawayId}_${userUid}`;
 
-              const transactionId = txResult.success ? txResult.transactionId : `ERR_${Date.now()}`;
+            console.log(`[Winner Selected] Winner Telegram ID: ${winner.telegramId}, Selected Number: ${winner.selectedNumber}, User UID: ${userUid}`);
+            console.log(`[Transaction ID] ${deterministicTxId}`);
 
-              // Create notification
-              const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-              await setDoc(doc(db, 'notifications', notifId), {
-                id: notifId,
-                userId: userDoc.id,
-                telegramId: String(winner.telegramId),
-                title: '🎉 Giveaway Winner!',
-                message: `You won ₹${giveaway.prizeAmount} in the giveaway: ${giveaway.title} with number ${winner.selectedNumber}!`,
-                timestamp: new Date().toISOString(),
-                read: false,
-              });
+            const txResult = await recordWalletTransaction({
+              uid: String(userUid),
+              type: 'Admin Credit',
+              amount: Number(giveaway.prizeAmount),
+              status: 'completed',
+              description: `🎁 Lucky Number Giveaway Winner: ${giveaway.title} (Number: ${winner.selectedNumber})`,
+              botToken,
+              transactionId: deterministicTxId,
+            });
 
-              finalizedWinners.push({
-                ...winner,
-                transactionId,
-              });
-            } else {
-              finalizedWinners.push(winner);
-            }
+            const transactionId = txResult.transactionId || deterministicTxId;
+
+            // Create notification
+            const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+            await setDoc(doc(db, 'notifications', notifId), {
+              id: notifId,
+              userId: userDoc.id,
+              telegramId: String(winner.telegramId),
+              title: '🎉 Giveaway Winner!',
+              message: `You won ₹${giveaway.prizeAmount} in the giveaway: ${giveaway.title} with number ${winner.selectedNumber}!`,
+              timestamp: new Date().toISOString(),
+              read: false,
+            });
+
+            finalizedWinners.push({
+              ...winner,
+              transactionId,
+            });
           } else {
             finalizedWinners.push(winner);
           }
@@ -2961,6 +3022,8 @@ Claim now and don't forget to share your screenshot!`;
 
       const finalObj = {
         status: 'completed',
+        winnerPaid: true,
+        completedAt: new Date().toISOString(),
         winners: finalizedWinners,
         endedAt: Date.now(),
       };
@@ -2969,6 +3032,8 @@ Claim now and don't forget to share your screenshot!`;
         setDoc(giveRef, finalObj, { merge: true }),
         setDoc(activeRef, finalObj, { merge: true }),
       ]);
+
+      console.log(`[Firestore Write] Finalized giveaway ${giveawayId} with status=completed, winnerPaid=true, completedAt=${finalObj.completedAt}`);
 
       if (botToken) {
         const channel = configData.mainChannelUsername;
