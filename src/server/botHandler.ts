@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction, setDoc, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction, setDoc, limit, deleteDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
 import { getContests, getContestants, submitVote } from '../services/contestService';
@@ -1404,7 +1404,7 @@ Final Payout: ₹${payoutAmount}`);
   // Enforce Required Join check for all messages except when completing the onboarding registration steps
   const session = userSessions.get(chatId);
   const isOnboardingMessage = session && 
-    (session.step === 'WAITING_NAME' || session.step === 'WAITING_MOBILE' || session.step === 'WAITING_CONTACT') &&
+    (session.step === 'WAITING_NAME' || session.step === 'WAITING_MOBILE' || session.step === 'WAITING_CONTACT' || session.step === 'WAITING_OTP') &&
     !text.startsWith('/') &&
     !['👛 Wallet', '💸 Withdraw', '🎁 Refer & Earn', '☎ Contact Us', '🏆 Contests', '⚔️ Giveaway War', '👥 Open Waiting Lobby'].includes(text);
 
@@ -2249,8 +2249,8 @@ Final Payout: ₹${payoutAmount}`);
 
   // C. ONBOARDING SESSION FLOW
 
-  // If no session exists and user is not registered, start onboarding
-  if (!session && !existingUser) {
+  // If no session exists and user is not registered, start onboarding (unless entering numeric OTP)
+  if (!session && !existingUser && !/^\d{4,8}$/.test(text.trim())) {
     const activeItems = await getActiveChannelsAndGroups();
     userSessions.set(chatId, { step: 'FORCE_JOIN' });
 
@@ -2273,7 +2273,7 @@ Final Payout: ₹${payoutAmount}`);
     return;
   }
 
-  if (!session) return;
+  if (!session && !/^\d{4,8}$/.test(text.trim())) return;
 
   // STEP 1: FORCE JOIN CHECK
   if (session.step === 'FORCE_JOIN') {
@@ -2442,15 +2442,31 @@ Final Payout: ₹${payoutAmount}`);
       },
     });
     return;
+  }
 
   // STEP 5: STEP_WAITING_OTP -> Verify OTP entered in chat vs Firestore otps/{chatId}
-  if (session.step === 'WAITING_OTP') {
+  const isOtpNumericInput = /^\d{4,8}$/.test((text || '').trim());
+  const isWaitingOtpStep = session && session.step === 'WAITING_OTP';
+
+  if (isWaitingOtpStep || (!existingUser && isOtpNumericInput)) {
     const cleanOtp = (text || '').trim();
     const cleanTgId = String(chatId);
     const baseUrl = (process.env.APP_BASE_URL || process.env.APP_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
     const miniAppUrl = `${baseUrl}/?action=otp_verify&tgId=${chatId}`;
+    const nowStr = new Date().toISOString();
 
-    if (!/^\d{4,8}$/.test(cleanOtp)) {
+    // SERVER LOG: OTP Received
+    console.log(`[OTP_VERIFICATION] OTP Received: '${cleanOtp}' from Telegram ID: ${cleanTgId}`);
+    try {
+      await addDoc(collection(db, 'logs'), {
+        type: 'otp',
+        message: 'OTP Received',
+        timestamp: nowStr,
+        details: { telegramId: cleanTgId, otp: cleanOtp }
+      });
+    } catch (e) {}
+
+    if (!isOtpNumericInput) {
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
         text: `🔐 <b>OTP Code Required</b>\n\nPlease enter the 6-digit OTP code generated from the Verification Mini App:`,
@@ -2464,13 +2480,25 @@ Final Payout: ₹${payoutAmount}`);
       return;
     }
 
+    // SERVER LOG: OTP Lookup
+    console.log(`[OTP_VERIFICATION] OTP Lookup for Telegram ID: ${cleanTgId}`);
+    try {
+      await addDoc(collection(db, 'logs'), {
+        type: 'otp',
+        message: 'OTP Lookup',
+        timestamp: nowStr,
+        details: { telegramId: cleanTgId }
+      });
+    } catch (e) {}
+
     const otpDocRef = doc(db, 'otps', cleanTgId);
     const otpSnap = await getDoc(otpDocRef);
 
     if (!otpSnap.exists()) {
+      console.log(`[OTP_VERIFICATION] Invalid OTP - No active record found for Telegram ID: ${cleanTgId}`);
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: `❌ <b>No Active OTP Found</b>\n\nPlease tap the button below to open the Verification Mini App and generate a code:`,
+        text: `❌ <b>Invalid OTP</b>\n\nNo active OTP found. Please tap the button below to open the Verification Mini App and generate a new code:`,
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
@@ -2482,12 +2510,24 @@ Final Payout: ₹${payoutAmount}`);
     }
 
     const otpData = otpSnap.data();
-    const nowStr = new Date().toISOString();
 
+    // Verify Expiry Time
     if (nowStr > otpData.expiresAt) {
+      // SERVER LOG: OTP Expired
+      console.log(`[OTP_VERIFICATION] OTP Expired for Telegram ID: ${cleanTgId}`);
+      try {
+        await addDoc(collection(db, 'logs'), {
+          type: 'otp',
+          message: 'OTP Expired',
+          timestamp: nowStr,
+          details: { telegramId: cleanTgId, expiresAt: otpData.expiresAt }
+        });
+        await deleteDoc(otpDocRef);
+      } catch (e) {}
+
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: `⏳ <b>OTP Expired</b>\n\nYour OTP code has expired. Please open the Verification Mini App to generate a fresh OTP:`,
+        text: `❌ <b>OTP Expired</b>\n\nYour OTP code has expired. Please tap the button below to open the Verification Mini App to generate a new OTP:`,
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
@@ -2498,13 +2538,15 @@ Final Payout: ₹${payoutAmount}`);
       return;
     }
 
+    // Verify Hash Match
     const crypto = await import('crypto');
     const inputHash = crypto.createHash('sha256').update(cleanOtp).digest('hex');
 
     if (inputHash !== otpData.otpHash) {
+      console.log(`[OTP_VERIFICATION] Invalid OTP - Hash mismatch for Telegram ID: ${cleanTgId}`);
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: `❌ <b>Incorrect OTP Code</b>\n\nPlease check the code in the Verification Mini App and try again:`,
+        text: `❌ <b>Invalid OTP</b>\n\nThe OTP code you entered is incorrect. Please check the 6-digit code in the Verification Mini App and try again:`,
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
@@ -2515,10 +2557,36 @@ Final Payout: ₹${payoutAmount}`);
       return;
     }
 
-    // OTP IS VALID! Mark verified and delete record
-    await setDoc(otpDocRef, { verified: true, verifiedAt: nowStr }, { merge: true });
+    // SERVER LOG: OTP Match
+    console.log(`[OTP_VERIFICATION] OTP Match for Telegram ID: ${cleanTgId}`);
+    try {
+      await addDoc(collection(db, 'logs'), {
+        type: 'otp',
+        message: 'OTP Match',
+        timestamp: nowStr,
+        details: { telegramId: cleanTgId }
+      });
+    } catch (e) {}
 
-    // CREATE OR UPDATE USER ACCOUNT
+    // SERVER LOG: OTP Verified
+    console.log(`[OTP_VERIFICATION] OTP Verified for Telegram ID: ${cleanTgId}`);
+    try {
+      await addDoc(collection(db, 'logs'), {
+        type: 'otp',
+        message: 'OTP Verified',
+        timestamp: nowStr,
+        details: { telegramId: cleanTgId }
+      });
+    } catch (e) {}
+
+    // Mark OTP as used and delete document
+    try {
+      await deleteDoc(otpDocRef);
+    } catch (e) {
+      await setDoc(otpDocRef, { verified: true, verifiedAt: nowStr }, { merge: true });
+    }
+
+    // CREATE OR RETURN USER ACCOUNT
     const adminConfig = await getAdminConfig();
     const existingDoc = await getUserByTelegramId(cleanTgId);
 
@@ -2528,19 +2596,19 @@ Final Payout: ₹${payoutAmount}`);
     }
 
     const bonus = Number(adminConfig?.registrationBonus) || 0;
-    const enteredDigits = (session.mobile || '').replace(/\D/g, '').slice(-10);
+    const enteredDigits = (session?.mobile || otpData?.mobile || '').replace(/\D/g, '').slice(-10);
 
     const newUserData: Record<string, any> = {
       appUid: uid,
       uid: uid,
       telegramId: cleanTgId,
       username: message.from.username ? `@${message.from.username.replace('@', '')}` : (existingDoc?.username || ''),
-      firstName: session.fullName || message.from.first_name || existingDoc?.firstName || 'User',
+      firstName: session?.fullName || message.from.first_name || existingDoc?.firstName || 'User',
       lastName: message.from.last_name || existingDoc?.lastName || '',
       mobile: enteredDigits,
       mobileVerified: true,
       telegramVerified: true,
-      walletBalance: existingDoc?.walletBalance ?? 0,
+      walletBalance: existingDoc?.walletBalance ?? bonus,
       bonus: bonus,
       coins: existingDoc?.coins ?? 0,
       status: 'active',
@@ -2552,15 +2620,15 @@ Final Payout: ₹${payoutAmount}`);
       joinDate: existingDoc?.createdAt || nowStr,
       lastActive: nowStr,
       lastLogin: nowStr,
-      referrerUid: session.referrerUid || existingDoc?.referrerUid || null,
-      referredBy: session.referrerUid || existingDoc?.referredBy || null,
+      referrerUid: session?.referrerUid || existingDoc?.referrerUid || null,
+      referredBy: session?.referrerUid || existingDoc?.referredBy || null,
       referralRewardReceived: existingDoc?.referralRewardReceived || false,
       totalReferrals: existingDoc?.totalReferrals || 0,
       successfulReferrals: existingDoc?.successfulReferrals || 0,
       totalReferralEarnings: existingDoc?.totalReferralEarnings || 0,
-      verifiedChannels: session.verifiedChannels || [],
-      verifiedGroups: session.verifiedGroups || [],
-      verificationVersion: session.verificationVersion || (adminConfig?.verificationVersion || 1),
+      verifiedChannels: session?.verifiedChannels || [],
+      verifiedGroups: session?.verifiedGroups || [],
+      verificationVersion: session?.verificationVersion || (adminConfig?.verificationVersion || 1),
       lastVerificationTime: nowStr,
     };
 
@@ -2569,6 +2637,15 @@ Final Payout: ₹${payoutAmount}`);
     try {
       await setDoc(userDocRef, newUserData);
       userDocCreated = true;
+
+      // SERVER LOG: Account Created
+      console.log(`[OTP_VERIFICATION] Account Created for Telegram ID: ${cleanTgId}, UID: ${uid}`);
+      await addDoc(collection(db, 'logs'), {
+        type: 'registration',
+        message: 'Account Created',
+        timestamp: nowStr,
+        details: { telegramId: cleanTgId, uid, mobile: enteredDigits }
+      });
 
       // Credit welcome bonus if new user & bonus > 0
       if (!existingDoc && bonus > 0) {
@@ -2726,5 +2803,4 @@ Final Payout: ₹${payoutAmount}`);
       await sendLiveEventInfoMessage(token, chatId, eventCheck.liveEventState, eventCheck.activeData);
     }
   }
-}
 }
