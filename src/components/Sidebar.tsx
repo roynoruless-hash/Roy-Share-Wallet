@@ -1,22 +1,27 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   LayoutDashboard,
+  Users,
+  Wallet,
+  Banknote,
   Gift,
   Trophy,
-  Wallet,
-  Users,
+  CheckSquare,
   Radio,
   BarChart3,
   Clock,
-  Zap,
   Settings,
+  Zap,
   LogOut,
   X,
   Bot,
   Save,
-  CheckCircle2,
-  CheckSquare,
-  Banknote,
+  MessageSquare,
+  TrendingUp,
+  FileText,
+  ShieldCheck,
+  Activity,
+  History
 } from 'lucide-react';
 import { TabType } from '../types';
 
@@ -43,79 +48,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
   hasUnsavedChanges,
   sessionTimeLeft = 10800,
 }) => {
-  const menuItems = [
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+
+  const sections = [
     {
-      id: 'dashboard' as TabType,
-      label: 'Dashboard',
-      icon: LayoutDashboard,
-      badge: undefined,
+      title: 'Core Operations',
+      items: [
+        { id: 'dashboard' as TabType, label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'users' as TabType, label: 'Users', icon: Users },
+        { id: 'wallet' as TabType, label: 'Wallet', icon: Wallet },
+        { id: 'withdrawal' as TabType, label: 'Withdraw Requests', icon: Banknote },
+        { id: 'transactions' as TabType, label: 'History & Ledger', icon: History },
+      ]
     },
     {
-      id: 'voting_contests' as TabType,
-      label: 'Voting',
-      icon: Trophy,
-      badge: undefined,
+      title: 'Growth & Promo',
+      items: [
+        { id: 'giveaways' as TabType, label: 'Lucky Giveaway', icon: Gift, badge: 'REALTIME' },
+        { id: 'giveaway_war' as TabType, label: 'Giveaway War', icon: Trophy },
+        { id: 'voting_contests' as TabType, label: 'Voting Contests', icon: Trophy },
+        { id: 'referral' as TabType, label: 'Referrals', icon: Users },
+        { id: 'milestones' as TabType, label: 'Referral Milestones', icon: TrendingUp },
+        { id: 'tasks' as TabType, label: 'Dynamic Tasks', icon: CheckSquare },
+      ]
     },
     {
-      id: 'giveaways' as TabType,
-      label: 'Giveaways',
-      icon: Gift,
-      badge: 'NEW',
+      title: 'AI & Broadcast',
+      items: [
+        { id: 'ai_broadcast' as TabType, label: 'Broadcast', icon: Radio },
+        { id: 'feedback_reviews' as TabType, label: 'Feedback & Reviews', icon: MessageSquare },
+        { id: 'ai_revenue_automation' as TabType, label: 'Revenue AI', icon: Zap },
+      ]
     },
     {
-      id: 'wallet' as TabType,
-      label: 'Wallet',
-      icon: Wallet,
-      badge: undefined,
-    },
-    {
-      id: 'withdrawal' as TabType,
-      label: 'Withdraw Requests',
-      icon: Banknote,
-      badge: undefined,
-    },
-    {
-      id: 'users' as TabType,
-      label: 'Users',
-      icon: Users,
-      badge: undefined,
-    },
-    {
-      id: 'ai_broadcast' as TabType,
-      label: 'Broadcast',
-      icon: Radio,
-      badge: undefined,
-    },
-    {
-      id: 'analytics' as TabType,
-      label: 'Analytics',
-      icon: BarChart3,
-      badge: undefined,
-    },
-    {
-      id: 'history' as TabType,
-      label: 'History',
-      icon: Clock,
-      badge: undefined,
-    },
-    {
-      id: 'advanced' as TabType,
-      label: 'Advanced',
-      icon: Zap,
-      badge: 'PRO',
-    },
-    {
-      id: 'tasks' as TabType,
-      label: 'Tasks',
-      icon: CheckSquare,
-      badge: undefined,
-    },
-    {
-      id: 'settings' as TabType,
-      label: 'Settings',
-      icon: Settings,
-      badge: undefined,
-    },
+      title: 'Configuration',
+      items: [
+        { id: 'telegram' as TabType, label: 'Telegram Bot', icon: Bot },
+        { id: 'channel' as TabType, label: 'Channel & Group', icon: ShieldCheck },
+        { id: 'settings' as TabType, label: 'System Settings', icon: Settings },
+        { id: 'security' as TabType, label: 'Security Hub', icon: ShieldCheck },
+        { id: 'advanced' as TabType, label: 'Developer/API', icon: Zap, badge: 'PRO' },
+      ]
+    }
   ];
 
   const handleTabClick = (tabId: TabType) => {
@@ -128,92 +102,104 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Mobile Overlay */}
       {isMobileOpen && (
         <div
-          className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-40 lg:hidden transition-opacity"
+          className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-40 lg:hidden transition-all duration-300"
           onClick={() => setIsMobileOpen(false)}
         />
       )}
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-50 w-64 bg-slate-900/95 backdrop-blur-xl border-r border-slate-800/80 flex flex-col transition-transform duration-300 ease-in-out lg:static lg:translate-x-0 ${
+        className={`fixed top-0 bottom-0 left-0 z-50 w-68 bg-slate-950 border-r border-slate-900 flex flex-col transition-all duration-300 ease-out lg:static lg:translate-x-0 ${
           isMobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         {/* Brand / Logo Header */}
-        <div className="p-5 border-b border-slate-800/80 flex items-center justify-between">
+        <div className="p-6 border-b border-slate-900/65 bg-gradient-to-b from-slate-900/40 to-transparent flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 via-sky-500 to-blue-600 p-0.5 shadow-lg shadow-amber-500/10">
-              <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center text-amber-400">
-                <Bot className="w-5 h-5" />
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-orange-500 via-amber-500 to-blue-600 p-[1.5px] shadow-xl shadow-orange-500/10">
+              <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center text-orange-400">
+                <Bot className="w-5.5 h-5.5" />
               </div>
             </div>
             <div>
-              <h2 className="text-sm font-black text-white tracking-wide uppercase flex items-center gap-1.5">
-                ROY SHARE <span className="text-amber-400 font-bold text-xs bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">V2</span>
+              <h2 className="text-sm font-black text-white tracking-wider uppercase flex items-center gap-1.5">
+                ROY SHARE <span className="text-orange-500 font-extrabold text-[10px] bg-orange-500/10 px-1.5 py-0.5 rounded border border-orange-500/20">V3</span>
               </h2>
-              <p className="text-[11px] text-slate-400 font-medium">Enterprise Admin Panel</p>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Enterprise Ledger</p>
             </div>
           </div>
 
           <button
             onClick={() => setIsMobileOpen(false)}
-            className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+            className="lg:hidden p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Navigation Items */}
-        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-          <div className="px-3 mb-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-            Main Menu
-          </div>
+        {/* Navigation Items grouped by sections */}
+        <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6 scrollbar-thin scrollbar-thumb-slate-900">
+          {sections.map((section) => (
+            <div key={section.title} className="space-y-1.5">
+              <div className="px-3 mb-2 text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center justify-between">
+                <span>{section.title}</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500/40"></span>
+              </div>
 
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.label}
-                id={`sidebar-nav-${item.id}`}
-                onClick={() => handleTabClick(item.id)}
-                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 group ${
-                  isActive
-                    ? 'bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-transparent text-amber-400 border-l-4 border-amber-400 pl-2.5 shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-l-4 border-transparent'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <Icon
-                    className={`w-4 h-4 transition-colors ${
-                      isActive ? 'text-amber-400' : 'text-slate-400 group-hover:text-slate-200'
-                    }`}
-                  />
-                  <span>{item.label}</span>
-                </div>
-
-                {item.badge && (
-                  <span
-                    className={`px-2 py-0.5 rounded-md text-[9px] font-black tracking-wider ${
+              {section.items.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.label}
+                    id={`sidebar-nav-${item.id}`}
+                    onClick={() => handleTabClick(item.id)}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all duration-300 group relative ${
                       isActive
-                        ? 'bg-amber-400 text-slate-950 shadow-sm'
-                        : 'bg-slate-800 text-slate-400'
+                        ? 'bg-gradient-to-r from-orange-500/10 via-blue-500/5 to-transparent text-orange-400 pl-3 shadow-md border border-orange-500/20'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
                     }`}
                   >
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+                    <div className="flex items-center gap-3">
+                      <Icon
+                        className={`w-4 h-4 transition-transform duration-300 ${
+                          isActive 
+                            ? 'text-orange-400 scale-110' 
+                            : 'text-slate-500 group-hover:text-blue-400 group-hover:scale-105'
+                        }`}
+                      />
+                      <span className="text-xs tracking-wide">{item.label}</span>
+                    </div>
+
+                    {item.badge && (
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[8px] font-black tracking-widest ${
+                          isActive
+                            ? 'bg-orange-500 text-slate-950 shadow-md'
+                            : 'bg-blue-950/80 text-blue-400 border border-blue-900/50'
+                        }`}
+                      >
+                        {item.badge}
+                      </span>
+                    )}
+
+                    {/* Animated vertical border light for active item */}
+                    {isActive && (
+                      <div className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-gradient-to-b from-orange-500 to-amber-500"></div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </div>
 
         {/* Action Button: Save Configuration & Session */}
-        <div className="p-4 border-t border-slate-800/80 bg-slate-950/40 space-y-3">
+        <div className="p-4 border-t border-slate-900 bg-slate-950/80 space-y-3">
           {hasUnsavedChanges && (
-            <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-center gap-2">
-              <Zap className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>Unsaved changes</span>
+            <div className="p-3 rounded-xl bg-orange-500/10 border border-orange-500/20 text-xs text-orange-300 flex items-center gap-2.5 animate-pulse">
+              <Zap className="w-4 h-4 text-orange-400 shrink-0" />
+              <span className="font-semibold text-[11px] tracking-wide">Pending configurations unsaved</span>
             </div>
           )}
 
@@ -224,15 +210,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               setIsMobileOpen(false);
             }}
             disabled={isSaving}
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-lg shadow-amber-500/20 transition-all duration-200 disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-xs font-black tracking-wider uppercase bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-400 hover:to-amber-500 text-slate-950 shadow-lg shadow-orange-500/10 hover:shadow-orange-500/20 active:scale-[0.98] transition-all duration-300 disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
-            <span>{isSaving ? 'Saving...' : 'Save Configuration'}</span>
+            <span>{isSaving ? 'Processing...' : 'Sync Config'}</span>
           </button>
 
-          <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800/80 flex items-center justify-between">
-            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Session</span>
-            <span className="text-xs text-amber-400 font-mono font-black tracking-wider">
+          <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center justify-between">
+            <span className="text-[9px] text-slate-500 font-black uppercase tracking-wider">Active Session</span>
+            <span className="text-xs text-blue-400 font-mono font-black tracking-widest">
               {(() => {
                 const h = Math.floor(sessionTimeLeft / 3600);
                 const m = Math.floor((sessionTimeLeft % 3600) / 60);
@@ -249,20 +235,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onLogout();
                 setIsMobileOpen(false);
               }}
-              className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-xl text-xs font-bold bg-slate-800/60 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 border border-slate-700/60 transition"
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-wider bg-slate-900 hover:bg-rose-500/10 text-slate-400 hover:text-rose-400 border border-slate-800/80 hover:border-rose-500/20 active:scale-[0.98] transition-all duration-300"
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span>Logout</span>
+              <span>Sign Out</span>
             </button>
           )}
 
-          <div className="text-[10px] text-center text-slate-500 flex items-center justify-center gap-1">
-            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-            <span>Firestore Engine v2.0</span>
+          <div className="text-[9px] text-center text-slate-500 font-bold uppercase tracking-widest flex items-center justify-center gap-1.5 pt-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>Ledger Core v3.0</span>
           </div>
         </div>
       </aside>
     </>
   );
 };
-

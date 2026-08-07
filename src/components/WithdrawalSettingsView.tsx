@@ -21,6 +21,12 @@ import {
   Eye,
   Send,
   ExternalLink,
+  Download,
+  CheckSquare,
+  Square,
+  Trash2,
+  Lock,
+  Sparkles
 } from 'lucide-react';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../services/firebase';
@@ -48,14 +54,22 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
+  // Bulk action states
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isBulkProcessing, setIsBulkProcessing] = useState(false);
+
   // Modal states
   const [rejectingDocId, setRejectingDocId] = useState<string | null>(null);
+  const [isBulkRejecting, setIsBulkRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('Details verification failed');
 
   const [messagingUser, setMessagingUser] = useState<{ telegramId: string; userName?: string } | null>(null);
   const [selectedWithdrawal, setSelectedWithdrawal] = useState<WithdrawalRecord | null>(null);
+  const [directMessageText, setDirectMessageText] = useState('');
+  const [isSendingMsg, setIsSendingMsg] = useState(false);
+  const [previewQrUrl, setPreviewQrUrl] = useState<string | null>(null);
 
-  // Stats Calculations
+  // Stats
   const isToday = (dateStr?: string) => {
     if (!dateStr) return false;
     try {
@@ -72,8 +86,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
   };
 
   const pendingCountForStats = withdrawals.filter((w) => {
-    const s = String(w.status).toLowerCase();
-    return s === 'pending';
+    return String(w.status).toLowerCase() === 'pending';
   }).length;
 
   const approvedTodayCount = withdrawals.filter((w) => {
@@ -82,8 +95,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
   }).length;
 
   const rejectedTodayCount = withdrawals.filter((w) => {
-    const s = String(w.status).toLowerCase();
-    return s === 'rejected' && isToday(w.processedAt || w.createdAt);
+    return String(w.status).toLowerCase() === 'rejected' && isToday(w.processedAt || w.createdAt);
   }).length;
 
   const totalApprovedAmount = withdrawals
@@ -92,12 +104,8 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
       return s === 'completed' || s === 'approved';
     })
     .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
-  const [directMessageText, setDirectMessageText] = useState('');
-  const [isSendingMsg, setIsSendingMsg] = useState(false);
 
-  const [previewQrUrl, setPreviewQrUrl] = useState<string | null>(null);
-
-  // Real-time Firestore Listener for Withdrawals
+  // Real-time Firestore Listener
   useEffect(() => {
     setLoading(true);
     const q = query(collection(db, 'withdraw_requests'), orderBy('createdAt', 'desc'));
@@ -116,7 +124,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
         setLoading(false);
       },
       (err) => {
-        console.error('Error fetching withdrawals:', err);
+        console.error('Error fetching withdrawals from Firestore:', err);
         setLoading(false);
       }
     );
@@ -153,17 +161,110 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
   });
 
   const pendingCount = withdrawals.filter((w) => {
-    const s = String(w.status).toLowerCase();
-    return s === 'pending';
+    return String(w.status).toLowerCase() === 'pending';
   }).length;
   const completedCount = withdrawals.filter((w) => {
     const s = String(w.status).toLowerCase();
     return s === 'completed' || s === 'approved';
   }).length;
   const rejectedCount = withdrawals.filter((w) => {
-    const s = String(w.status).toLowerCase();
-    return s === 'rejected';
+    return String(w.status).toLowerCase() === 'rejected';
   }).length;
+
+  // Selection handlers
+  const handleSelectAll = () => {
+    const pendingFiltered = filteredWithdrawals.filter(w => String(w.status).toLowerCase() === 'pending');
+    if (selectedIds.length === pendingFiltered.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(pendingFiltered.map(w => w.id!));
+    }
+  };
+
+  const handleSelectId = (id: string) => {
+    if (selectedIds.includes(id)) {
+      setSelectedIds(prev => prev.filter(item => item !== id));
+    } else {
+      setSelectedIds(prev => [...prev, id]);
+    }
+  };
+
+  // Bulk Approve
+  const handleBulkApprove = async () => {
+    if (selectedIds.length === 0) return;
+    if (!confirm(`Are you sure you want to BULK APPROVE ${selectedIds.length} pending withdrawals?`)) return;
+
+    setIsBulkProcessing(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const docId of selectedIds) {
+      try {
+        const res = await fetch('/api/admin/withdrawals/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: config.botToken,
+            withdrawalId: docId,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (err) {
+        failCount++;
+      }
+    }
+
+    setActionSuccess(`Bulk approval complete. Successfully approved: ${successCount}. Failed: ${failCount}.`);
+    setSelectedIds([]);
+    setIsBulkProcessing(false);
+  };
+
+  // Bulk Reject
+  const handleBulkRejectSubmit = async () => {
+    if (selectedIds.length === 0) return;
+
+    setIsBulkProcessing(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const docId of selectedIds) {
+      try {
+        const res = await fetch('/api/admin/withdrawals/reject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: config.botToken,
+            withdrawalId: docId,
+            reason: rejectReason,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (err) {
+        failCount++;
+      }
+    }
+
+    setActionSuccess(`Bulk rejection complete. Successfully rejected and refunded: ${successCount}. Failed: ${failCount}.`);
+    setSelectedIds([]);
+    setIsBulkRejecting(false);
+    setIsBulkProcessing(false);
+  };
 
   // Approve Handler
   const handleApprove = async (docId: string, withdrawalId: string) => {
@@ -264,110 +365,144 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
     }
   };
 
+  // Export Filtered to CSV Handler
+  const handleExportCSV = () => {
+    if (filteredWithdrawals.length === 0) return;
+
+    // Build headers
+    const headers = ['Withdrawal ID', 'UID', 'Telegram ID', 'Username', 'Name', 'Amount', 'Fee', 'Final Payout', 'Method', 'Payout Destination', 'Status', 'Requested Time'];
+    
+    const rows = filteredWithdrawals.map(w => {
+      const payoutDest = w.method === 'upi' ? w.upiId : (w.method === 'redeem_code' ? w.redeemCodeDetails : 'QR Code Image Upload');
+      return [
+        w.withdrawalId || w.requestId || '',
+        w.uid || '',
+        w.telegramId || '',
+        w.username || '',
+        w.userName || 'User',
+        w.requestedAmount !== undefined ? w.requestedAmount : w.amount,
+        w.platformFee || 0,
+        w.payoutAmount !== undefined ? w.payoutAmount : w.amount,
+        w.method || 'upi',
+        `"${String(payoutDest).replace(/"/g, '""')}"`,
+        w.status || 'pending',
+        w.createdAt || ''
+      ];
+    });
+
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `withdrawals_export_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
-    <div className="space-y-6 max-w-6xl">
-      {/* Header */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800/80 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
-            <ArrowDownRight className="w-5 h-5" />
+    <div className="space-y-6">
+      {/* V3 Glass Header */}
+      <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-orange-500 to-amber-600 p-[1.5px] shadow-lg shadow-orange-500/10 shrink-0">
+            <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center text-orange-400">
+              <ArrowDownRight className="w-6 h-6" />
+            </div>
           </div>
           <div>
-            <h2 className="text-lg font-bold text-white">Withdrawal & Payout Management</h2>
-            <p className="text-xs text-slate-400">
-              Manage multi-method withdrawals (UPI, QR Code, Redeem Code), review requests, approve payouts & refund.
+            <h2 className="text-lg font-black text-white tracking-wider uppercase">Withdrawal & Payout Management</h2>
+            <p className="text-xs text-slate-400 font-semibold tracking-wide mt-0.5">
+              Secure multi-channel payouts with automated ledger deductions & real-time Telegram confirmations.
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-400 flex items-center gap-1.5">
-            <Clock className="w-3.5 h-3.5" />
+          <span className="px-3 py-1.5 rounded-xl bg-orange-500/10 border border-orange-500/20 text-xs font-black text-orange-400 flex items-center gap-1.5 tracking-wider uppercase">
+            <Clock className="w-4 h-4 animate-pulse" />
             <span>{pendingCount} Pending</span>
           </span>
-          <span className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs font-bold text-emerald-400 flex items-center gap-1.5">
-            <CheckCircle2 className="w-3.5 h-3.5" />
+          <span className="px-3 py-1.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs font-black text-blue-400 flex items-center gap-1.5 tracking-wider uppercase">
+            <CheckCircle2 className="w-4 h-4" />
             <span>{completedCount} Completed</span>
           </span>
         </div>
       </div>
 
-      {/* Real-time Dashboard Cards */}
+      {/* Real-time analytical stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Pending Requests */}
-        <div className="p-5 rounded-2xl bg-gradient-to-br from-amber-500/10 to-transparent border border-amber-500/20 shadow-lg shadow-amber-500/5 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">Pending Requests</span>
-            <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+        <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between shadow-lg relative overflow-hidden group">
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Pending Requests</span>
+            <div className="p-2 rounded-xl bg-slate-950 border border-slate-800 text-orange-400">
               <Clock className="w-4 h-4" />
             </div>
           </div>
-          <div>
-            <p className="text-2xl font-black text-white font-mono">{pendingCountForStats}</p>
-            <p className="text-[10px] text-slate-400 font-medium">Require admin review</p>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-white font-mono">{pendingCountForStats}</h3>
+            <p className="text-[10px] text-slate-400 font-semibold mt-1">Requires manual confirmation</p>
           </div>
         </div>
 
-        {/* Approved Today */}
-        <div className="p-5 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-transparent border border-emerald-500/20 shadow-lg shadow-emerald-500/5 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">Approved Today</span>
-            <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+        <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between shadow-lg relative overflow-hidden group">
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Approved Today</span>
+            <div className="p-2 rounded-xl bg-slate-950 border border-slate-800 text-emerald-400">
               <CheckCircle2 className="w-4 h-4" />
             </div>
           </div>
-          <div>
-            <p className="text-2xl font-black text-white font-mono">{approvedTodayCount}</p>
-            <p className="text-[10px] text-slate-400 font-medium font-sans">Payouts sent today</p>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-white font-mono">{approvedTodayCount}</h3>
+            <p className="text-[10px] text-slate-400 font-semibold mt-1">Disbursed to UPI endpoints</p>
           </div>
         </div>
 
-        {/* Rejected Today */}
-        <div className="p-5 rounded-2xl bg-gradient-to-br from-rose-500/10 to-transparent border border-rose-500/20 shadow-lg shadow-rose-500/5 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-rose-400 uppercase tracking-wider">Rejected Today</span>
-            <div className="p-1.5 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20">
+        <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between shadow-lg relative overflow-hidden group">
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Rejected Today</span>
+            <div className="p-2 rounded-xl bg-slate-950 border border-slate-800 text-rose-400">
               <XCircle className="w-4 h-4" />
             </div>
           </div>
-          <div>
-            <p className="text-2xl font-black text-white font-mono">{rejectedTodayCount}</p>
-            <p className="text-[10px] text-slate-400 font-medium font-sans">Refunded to wallets</p>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-white font-mono">{rejectedTodayCount}</h3>
+            <p className="text-[10px] text-slate-400 font-semibold mt-1">Automatically refunded back to wallet</p>
           </div>
         </div>
 
-        {/* Total Withdraw Amount */}
-        <div className="p-5 rounded-2xl bg-gradient-to-br from-sky-500/10 to-transparent border border-sky-500/20 shadow-lg shadow-sky-500/5 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-sky-400 uppercase tracking-wider">Total Withdraw Amount</span>
-            <div className="p-1.5 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
+        <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between shadow-lg relative overflow-hidden group">
+          <div className="flex justify-between items-start">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Total Approved Pool</span>
+            <div className="p-2 rounded-xl bg-slate-950 border border-slate-800 text-blue-400">
               <DollarSign className="w-4 h-4" />
             </div>
           </div>
-          <div>
-            <p className="text-2xl font-black text-white font-mono">₹{totalApprovedAmount.toLocaleString()}</p>
-            <p className="text-[10px] text-slate-400 font-medium font-sans">Processed payout volume</p>
+          <div className="mt-4">
+            <h3 className="text-2xl font-black text-white font-mono">₹{totalApprovedAmount.toLocaleString()}</h3>
+            <p className="text-[10px] text-slate-400 font-semibold mt-1">Accumulated cleared ledger volume</p>
           </div>
         </div>
       </div>
 
-      {/* 1. CONFIGURATION SETTINGS SECTION */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800/80 shadow-xl space-y-6">
-        <h3 className="text-xs font-bold text-slate-400 tracking-wide uppercase">
+      {/* 1. CONFIGURATION SETTINGS */}
+      <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-6">
+        <h3 className="text-xs font-black text-slate-400 tracking-wider uppercase flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-orange-400" />
           Withdrawal System Controls & Limits
         </h3>
 
-        {/* Toggles List */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Master Enable Withdraw Toggle */}
-          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <div className="p-2 rounded-lg bg-orange-500/10 text-orange-400 border border-orange-500/20">
                 <ArrowDownRight className="w-4 h-4" />
               </div>
               <div>
                 <p className="text-xs font-bold text-slate-200">Global Withdrawals</p>
-                <p className="text-[10px] text-slate-400">Master system switch</p>
+                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">Core System Switch</p>
               </div>
             </div>
             <button
@@ -375,22 +510,21 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               id="enable-withdraw-toggle"
               onClick={() => updateConfig({ enableWithdraw: !config.enableWithdraw })}
               className={`p-1 rounded-lg transition ${
-                config.enableWithdraw ? 'text-sky-400' : 'text-slate-600'
+                config.enableWithdraw ? 'text-orange-400' : 'text-slate-600'
               }`}
             >
               {config.enableWithdraw ? <ToggleRight className="w-7 h-7" /> : <ToggleLeft className="w-7 h-7" />}
             </button>
           </div>
 
-          {/* Enable UPI Toggle */}
-          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
+              <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
                 <CreditCard className="w-4 h-4" />
               </div>
               <div>
                 <p className="text-xs font-bold text-slate-200">UPI Method</p>
-                <p className="text-[10px] text-slate-400">Allow UPI ID inputs</p>
+                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">UPI ID payouts</p>
               </div>
             </div>
             <button
@@ -398,22 +532,21 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               id="enable-upi-toggle"
               onClick={() => updateConfig({ enableUpi: !config.enableUpi })}
               className={`p-1 rounded-lg transition ${
-                config.enableUpi ? 'text-sky-400' : 'text-slate-600'
+                config.enableUpi ? 'text-blue-400' : 'text-slate-600'
               }`}
             >
               {config.enableUpi ? <ToggleRight className="w-7 h-7" /> : <ToggleLeft className="w-7 h-7" />}
             </button>
           </div>
 
-          {/* Enable QR Code Toggle */}
-          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
                 <QrCode className="w-4 h-4" />
               </div>
               <div>
                 <p className="text-xs font-bold text-slate-200">QR Code Method</p>
-                <p className="text-[10px] text-slate-400">Allow QR image uploads</p>
+                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">QR uploads</p>
               </div>
             </div>
             <button
@@ -421,22 +554,21 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               id="enable-qr-toggle"
               onClick={() => updateConfig({ enableQr: !config.enableQr })}
               className={`p-1 rounded-lg transition ${
-                config.enableQr ? 'text-sky-400' : 'text-slate-600'
+                config.enableQr ? 'text-purple-400' : 'text-slate-600'
               }`}
             >
               {config.enableQr ? <ToggleRight className="w-7 h-7" /> : <ToggleLeft className="w-7 h-7" />}
             </button>
           </div>
 
-          {/* Enable Redeem Code Toggle */}
-          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-pink-500/10 text-pink-400 border border-pink-500/20">
                 <Gift className="w-4 h-4" />
               </div>
               <div>
                 <p className="text-xs font-bold text-slate-200">Redeem Code</p>
-                <p className="text-[10px] text-slate-400">Allow gift card codes</p>
+                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">Google Redeem codes</p>
               </div>
             </div>
             <button
@@ -444,7 +576,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               id="enable-redeem-toggle"
               onClick={() => updateConfig({ enableRedeemCode: !config.enableRedeemCode })}
               className={`p-1 rounded-lg transition ${
-                config.enableRedeemCode ? 'text-sky-400' : 'text-slate-600'
+                config.enableRedeemCode ? 'text-pink-400' : 'text-slate-600'
               }`}
             >
               {config.enableRedeemCode ? <ToggleRight className="w-7 h-7" /> : <ToggleLeft className="w-7 h-7" />}
@@ -452,41 +584,40 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
           </div>
         </div>
 
-        {/* Min, Max Limits & Platform Fee */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
             <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-              <DollarSign className="w-4 h-4 text-emerald-400" />
-              <span>Minimum Withdrawal Limit (₹)</span>
+              <DollarSign className="w-4 h-4 text-orange-400" />
+              <span>Minimum Payout (₹)</span>
             </label>
             <input
               type="number"
               id="min-withdrawal-input"
               value={config.minWithdrawal}
               onChange={(e) => updateConfig({ minWithdrawal: Number(e.target.value) })}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-500"
+              className="w-full px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-orange-500 font-mono"
             />
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
             <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-              <DollarSign className="w-4 h-4 text-sky-400" />
-              <span>Maximum Withdrawal Limit (₹)</span>
+              <DollarSign className="w-4 h-4 text-blue-400" />
+              <span>Maximum Payout Limit (₹)</span>
             </label>
             <input
               type="number"
               id="max-withdrawal-input"
               value={config.maxWithdrawal}
               onChange={(e) => updateConfig({ maxWithdrawal: Number(e.target.value) })}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-500"
+              className="w-full px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
             />
           </div>
 
-          <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
             <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
               <span className="flex items-center gap-1.5">
-                <Percent className="w-4 h-4 text-rose-400" />
-                <span>Platform Fee (%)</span>
+                <Percent className="w-4 h-4 text-purple-400" />
+                <span>Withdrawal Tax Platform Fee (%)</span>
               </span>
               <span className="text-[10px] text-slate-500">Default: 6%</span>
             </label>
@@ -500,15 +631,14 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               }}
               min={0}
               max={100}
-              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+              className="w-full px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-purple-500 font-mono"
             />
           </div>
         </div>
 
-        {/* Processing Time Notice */}
         <div className="space-y-2 pt-2">
           <label className="text-xs font-bold text-slate-300 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-sky-400" />
+            <Clock className="w-4 h-4 text-orange-400" />
             <span>Processing Time Notice</span>
           </label>
           <textarea
@@ -517,49 +647,49 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
             onChange={(e) => updateConfig({ processingTimeNotice: e.target.value })}
             rows={2}
             placeholder="e.g. Withdrawal requests are processed within 24 hours."
-            className="w-full px-4 py-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition resize-none"
+            className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-orange-500 transition resize-none font-sans"
           />
         </div>
 
-        {/* Save Button */}
         <div className="pt-2 border-t border-slate-800 flex items-center justify-end">
           <button
             type="button"
             id="withdrawal-save-btn"
             onClick={onSave}
             disabled={isSaving}
-            className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs sm:text-sm shadow-lg shadow-sky-500/20 flex items-center gap-2 transition disabled:opacity-50"
+            className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-400 hover:to-amber-500 text-slate-950 font-black text-xs uppercase tracking-wider shadow-lg shadow-orange-500/10 flex items-center gap-2 transition disabled:opacity-50"
           >
-            <Save className="w-4 h-4" />
-            <span>{isSaving ? 'Saving...' : 'Save Limits & Config'}</span>
+            <Save className="w-4.5 h-4.5" />
+            <span>{isSaving ? 'Saving...' : 'Sync Limits'}</span>
           </button>
         </div>
       </div>
 
-      {/* 2. PENDING WITHDRAWALS & PAYOUT QUEUE */}
-      <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800/80 shadow-xl space-y-6">
+      {/* 2. WITHDRAWAL QUEUE TABLE */}
+      <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <span>Withdrawal Requests & Payout Queue</span>
+            <h3 className="text-base font-black text-white tracking-wide uppercase flex items-center gap-2">
+              <span>Payout Requests & Auditing Queue</span>
               {pendingCount > 0 && (
-                <span className="px-2 py-0.5 text-[10px] font-extrabold rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  {pendingCount} Action Required
+                <span className="px-2.5 py-0.5 text-[9px] font-black rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/20 tracking-wider">
+                  {pendingCount} IN QUEUE
                 </span>
               )}
             </h3>
-            <p className="text-xs text-slate-400">Review requests, check UPI/QR/Redeem code details, approve or reject with automatic refund.</p>
+            <p className="text-xs text-slate-400 font-semibold mt-1">
+              Verify UPI codes, analyze user balances, and complete manual payouts.
+            </p>
           </div>
 
-          {/* Status & Method Filters */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             {/* Status Tabs */}
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
               <button
                 onClick={() => setStatusFilter('Pending')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition ${
+                className={`px-3 py-1 rounded-lg font-black tracking-wide text-[11px] transition ${
                   statusFilter === 'Pending'
-                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                    ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -567,9 +697,9 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               </button>
               <button
                 onClick={() => setStatusFilter('Approved')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition ${
+                className={`px-3 py-1 rounded-lg font-black tracking-wide text-[11px] transition ${
                   statusFilter === 'Approved'
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -577,9 +707,9 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               </button>
               <button
                 onClick={() => setStatusFilter('Rejected')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition ${
+                className={`px-3 py-1 rounded-lg font-black tracking-wide text-[11px] transition ${
                   statusFilter === 'Rejected'
-                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -587,9 +717,9 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               </button>
               <button
                 onClick={() => setStatusFilter('all')}
-                className={`px-2.5 py-1 rounded-lg font-bold transition ${
+                className={`px-3 py-1 rounded-lg font-black tracking-wide text-[11px] transition ${
                   statusFilter === 'all'
-                    ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                    ? 'bg-slate-800 text-slate-200'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -601,228 +731,253 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
             <select
               value={methodFilter}
               onChange={(e) => setMethodFilter(e.target.value as any)}
-              className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 font-bold focus:outline-none focus:border-sky-500"
+              className="px-3.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 font-bold focus:outline-none focus:border-orange-500"
             >
               <option value="all">All Methods</option>
               <option value="upi">💳 UPI ID</option>
               <option value="qr">🖼 QR Code</option>
               <option value="redeem_code">🎁 Redeem Code</option>
             </select>
+
+            {/* CSV Export */}
+            <button
+              onClick={handleExportCSV}
+              disabled={filteredWithdrawals.length === 0}
+              className="px-3.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-orange-500/20 text-xs font-bold text-slate-300 hover:text-orange-400 flex items-center gap-1.5 transition disabled:opacity-50"
+              title="Export filtered records to CSV"
+            >
+              <Download className="w-4 h-4" />
+              <span>Export CSV</span>
+            </button>
           </div>
         </div>
 
         {/* Action Alerts */}
         {actionSuccess && (
-          <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center justify-between gap-2">
+          <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center justify-between gap-2 font-semibold">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>{actionSuccess}</span>
             </div>
-            <button onClick={() => setActionSuccess(null)} className="text-slate-400 hover:text-white">
-              ✕
-            </button>
+            <button onClick={() => setActionSuccess(null)} className="text-slate-400 hover:text-white">✕</button>
           </div>
         )}
 
         {actionError && (
-          <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center justify-between gap-2">
+          <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center justify-between gap-2 font-semibold">
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
               <span>{actionError}</span>
             </div>
-            <button onClick={() => setActionError(null)} className="text-slate-400 hover:text-white">
-              ✕
-            </button>
+            <button onClick={() => setActionError(null)} className="text-slate-400 hover:text-white">✕</button>
           </div>
         )}
 
-        {/* Search Bar */}
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
-          <input
-            type="text"
-            placeholder="Search by Withdrawal ID, UID, Telegram ID, UPI ID, or Redeem details..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
-          />
+        {/* Search & Bulk Action Bar */}
+        <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
+            <input
+              type="text"
+              placeholder="Search by Withdrawal ID, UID, Telegram ID, UPI ID, or Redeem details..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-850 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-orange-500"
+            />
+          </div>
+
+          {/* Bulk actions menu */}
+          {statusFilter === 'Pending' && selectedIds.length > 0 && (
+            <div className="flex items-center gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800 animate-fade-in shrink-0">
+              <span className="text-[10px] font-black tracking-wider text-slate-400 px-3 uppercase">
+                {selectedIds.length} Selected
+              </span>
+              <button
+                disabled={isBulkProcessing}
+                onClick={handleBulkApprove}
+                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow transition disabled:opacity-50"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Bulk Approve</span>
+              </button>
+              <button
+                disabled={isBulkProcessing}
+                onClick={() => {
+                  setRejectReason('Details verification failed - bulk rejected');
+                  setIsBulkRejecting(true);
+                }}
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 shadow transition disabled:opacity-50"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                <span>Bulk Reject</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Table / List */}
         {loading ? (
           <div className="p-8 text-center text-slate-500 flex items-center justify-center gap-2 text-xs">
-            <RefreshCw className="w-4 h-4 animate-spin text-sky-400" />
-            <span>Loading withdrawal queue...</span>
+            <RefreshCw className="w-4 h-4 animate-spin text-orange-400" />
+            <span>Loading database payout ledger...</span>
           </div>
         ) : filteredWithdrawals.length === 0 ? (
-          <div className="p-12 text-center rounded-xl bg-slate-950/40 border border-slate-800/60 space-y-2">
+          <div className="p-12 text-center rounded-2xl bg-slate-950/40 border border-slate-850 space-y-2">
             <Clock className="w-8 h-8 text-slate-600 mx-auto" />
             <p className="text-sm font-bold text-slate-400">No Withdrawal Requests Found</p>
             <p className="text-xs text-slate-500">
               {statusFilter !== 'all' || methodFilter !== 'all'
                 ? `No requests match active filters.`
-                : 'No withdrawal requests recorded yet.'}
+                : 'No withdrawal requests recorded in Firestore yet.'}
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <div className="overflow-x-auto rounded-2xl border border-slate-850">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-950/80 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                  <th className="p-3.5">ID & Date</th>
-                  <th className="p-3.5">User Details</th>
-                  <th className="p-3.5 text-emerald-400">Wallet Balance</th>
-                  <th className="p-3.5">Method</th>
-                  <th className="p-3.5">Payout Details</th>
-                  <th className="p-3.5 text-slate-300">Requested</th>
-                  <th className="p-3.5 text-rose-400">Platform Fee</th>
-                  <th className="p-3.5 text-emerald-400 font-bold">Final Payout</th>
-                  <th className="p-3.5">Status</th>
-                  <th className="p-3.5 text-right">Actions</th>
+                <tr className="bg-slate-950 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-850">
+                  {statusFilter === 'Pending' && (
+                    <th className="p-4 w-10">
+                      <button
+                        onClick={handleSelectAll}
+                        className="text-slate-500 hover:text-white transition"
+                      >
+                        {selectedIds.length === filteredWithdrawals.filter(w => String(w.status).toLowerCase() === 'pending').length ? (
+                          <CheckSquare className="w-4 h-4 text-orange-500" />
+                        ) : (
+                          <Square className="w-4 h-4" />
+                        )}
+                      </button>
+                    </th>
+                  )}
+                  <th className="p-4">UID</th>
+                  <th className="p-4">Telegram ID</th>
+                  <th className="p-4">Username</th>
+                  <th className="p-4">Payout Details</th>
+                  <th className="p-4 text-emerald-400 font-bold">Payout Value</th>
+                  <th className="p-4">Status</th>
+                  <th className="p-4">Requested Time</th>
+                  <th className="p-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 text-xs">
+              <tbody className="divide-y divide-slate-850 text-xs">
                 {filteredWithdrawals.map((w) => {
                   const isProcessing = processingId === w.id;
+                  const isSelected = selectedIds.includes(w.id!);
+                  const isPending = String(w.status).toLowerCase() === 'pending';
                   const method = w.method || 'upi';
 
                   return (
-                    <tr key={w.id || w.withdrawalId} className="hover:bg-slate-800/30 transition">
-                      {/* Withdrawal ID & Date */}
-                      <td className="p-3.5 font-mono">
-                        <span className="font-bold text-white block">#{w.withdrawalId || w.requestId}</span>
-                        <span className="text-[10px] text-slate-500">
-                          {new Date(w.createdAt).toLocaleString()}
-                        </span>
+                    <tr
+                      key={w.id || w.withdrawalId}
+                      className={`hover:bg-slate-900/30 transition ${
+                        isSelected ? 'bg-orange-500/5' : ''
+                      }`}
+                    >
+                      {statusFilter === 'Pending' && (
+                        <td className="p-4">
+                          {isPending ? (
+                            <button
+                              onClick={() => handleSelectId(w.id!)}
+                              className="text-slate-500 hover:text-orange-400 transition"
+                            >
+                              {isSelected ? (
+                                <CheckSquare className="w-4 h-4 text-orange-500" />
+                              ) : (
+                                <Square className="w-4 h-4" />
+                              )}
+                            </button>
+                          ) : (
+                            <span className="w-4 h-4 block"></span>
+                          )}
+                        </td>
+                      )}
+
+                      {/* App Generated UID */}
+                      <td className="p-4 font-mono font-black text-white select-all">
+                        {w.uid || 'Missing'}
                       </td>
 
-                      {/* User Details */}
-                      <td className="p-3.5">
-                        <div className="flex items-center gap-2">
-                          <User className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      {/* Telegram ID - Hidden from ordinary users, visible to admin */}
+                      <td className="p-4 font-mono text-slate-400 select-all">
+                        {w.telegramId || 'N/A'}
+                      </td>
+
+                      {/* Username */}
+                      <td className="p-4">
+                        <div className="flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 text-blue-400 shrink-0" />
                           <div>
                             <span className="font-bold text-slate-200 block">{w.userName || 'User'}</span>
                             {w.username && (
-                              <span className="text-[11px] text-amber-400 block font-semibold">
+                              <span className="text-[10px] text-orange-400 font-mono">
                                 @{w.username.replace('@', '')}
                               </span>
                             )}
-                            <span className="text-[10px] text-slate-400 block font-mono">
-                              UID: #{w.uid || w.userId} | TG: {w.telegramId}
-                            </span>
                           </div>
                         </div>
                       </td>
 
-                      {/* Wallet Balance */}
-                      <td className="p-3.5 font-mono text-slate-300 font-bold">
-                        ₹{w.currentWalletBalance !== undefined ? w.currentWalletBalance : 'N/A'}
-                      </td>
-
-                      {/* Method Badge */}
-                      <td className="p-3.5">
+                      {/* Payout Destination */}
+                      <td className="p-4 font-mono">
                         {method === 'upi' && (
-                          <span className="px-2.5 py-1 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400 font-bold text-[11px] inline-flex items-center gap-1.5">
-                            <CreditCard className="w-3.5 h-3.5" />
-                            <span>UPI ID</span>
-                          </span>
-                        )}
-                        {method === 'qr' && (
-                          <span className="px-2.5 py-1 rounded-lg bg-purple-500/10 border border-purple-500/20 text-purple-400 font-bold text-[11px] inline-flex items-center gap-1.5">
-                            <QrCode className="w-3.5 h-3.5" />
-                            <span>QR Code</span>
-                          </span>
-                        )}
-                        {method === 'redeem_code' && (
-                          <span className="px-2.5 py-1 rounded-lg bg-pink-500/10 border border-pink-500/20 text-pink-400 font-bold text-[11px] inline-flex items-center gap-1.5">
-                            <Gift className="w-3.5 h-3.5" />
-                            <span>Redeem Code</span>
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Payout Details */}
-                      <td className="p-3.5 font-mono">
-                        {method === 'upi' && (
-                          <span className="px-2 py-1 rounded bg-slate-950 text-sky-300 border border-slate-800 font-semibold block text-ellipsis overflow-hidden max-w-[180px]">
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-950 text-blue-300 border border-slate-800 font-bold block truncate max-w-[200px]">
                             {w.upiId || 'N/A'}
                           </span>
                         )}
-
                         {method === 'qr' && (
                           <div>
                             {w.qrImageUrl ? (
                               <button
                                 onClick={() => setPreviewQrUrl(w.qrImageUrl!)}
-                                className="group relative rounded-lg border border-purple-500/30 overflow-hidden bg-slate-950 p-1 flex items-center gap-2 text-purple-300 hover:text-white hover:border-purple-400 transition"
+                                className="group relative rounded-lg border border-purple-500/30 overflow-hidden bg-slate-950 px-2 py-1 flex items-center gap-1.5 text-purple-300 hover:text-white hover:border-purple-400 transition"
                               >
-                                <img
-                                  src={w.qrImageUrl}
-                                  alt="QR Code"
-                                  className="w-10 h-10 object-cover rounded border border-slate-800"
-                                  onError={(e) => {
-                                    // Fallback if image fails loading directly
-                                    (e.target as HTMLElement).style.display = 'none';
-                                  }}
-                                />
-                                <span className="text-[11px] font-sans font-semibold underline flex items-center gap-1">
-                                  <Eye className="w-3 h-3 text-purple-400" />
-                                  <span>View QR Code</span>
-                                </span>
+                                <Eye className="w-3.5 h-3.5 text-purple-400" />
+                                <span className="text-[10px] font-bold">Open QR Code</span>
                               </button>
                             ) : (
-                              <span className="text-[11px] text-slate-500 italic">No QR Image</span>
+                              <span className="text-slate-500 italic text-[11px]">No QR Image</span>
                             )}
                           </div>
                         )}
-
                         {method === 'redeem_code' && (
-                          <div className="p-2 rounded bg-slate-950 text-pink-300 border border-slate-800 font-sans text-xs">
-                            <p className="font-semibold">{w.redeemCodeDetails || 'Redeem Code Requested'}</p>
-                          </div>
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-950 text-pink-300 border border-slate-800 font-bold block truncate max-w-[200px]">
+                            {w.redeemCodeDetails || 'N/A'}
+                          </span>
                         )}
                       </td>
 
-                      {/* Requested Amount */}
-                      <td className="p-3.5 font-medium text-slate-300 font-mono">
-                        ₹{w.requestedAmount !== undefined ? w.requestedAmount : w.amount}
-                      </td>
-
-                      {/* Platform Fee */}
-                      <td className="p-3.5 text-rose-400 font-medium font-mono">
-                        ₹{w.platformFee !== undefined ? w.platformFee : 0}
-                        {w.feePercent !== undefined && (
-                          <span className="text-[10px] text-slate-500 ml-1 font-sans">({w.feePercent}%)</span>
-                        )}
-                      </td>
-
-                      {/* Final Payout */}
-                      <td className="p-3.5 font-bold text-emerald-400 text-sm font-mono">
-                        ₹{w.payoutAmount !== undefined ? w.payoutAmount : (w.requestedAmount !== undefined ? w.requestedAmount : w.amount)}
+                      {/* Requested Amount -> Platform Fee -> Payout Value */}
+                      <td className="p-4 font-mono">
+                        <div className="space-y-0.5">
+                          <span className="text-base font-black text-emerald-400 block">
+                            ₹{w.payoutAmount !== undefined ? w.payoutAmount : w.amount}
+                          </span>
+                          <span className="text-[9px] text-slate-500 block">
+                            Requested: ₹{w.requestedAmount || w.amount} | Tax: ₹{w.platformFee || 0}
+                          </span>
+                        </div>
                       </td>
 
                       {/* Status */}
-                      <td className="p-3.5">
+                      <td className="p-4">
                         {['pending', 'pending'].includes(String(w.status).toLowerCase()) && (
-                          <span className="px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[10px] font-bold inline-flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            <span>Pending</span>
+                          <span className="px-2 py-0.5 rounded bg-orange-500/10 border border-orange-500/20 text-orange-400 text-[10px] font-black uppercase tracking-wider">
+                            Pending
                           </span>
                         )}
                         {['completed', 'approved'].includes(String(w.status).toLowerCase()) && (
-                          <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold inline-flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span>Approved</span>
+                          <span className="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-wider">
+                            Approved
                           </span>
                         )}
                         {['rejected', 'rejected'].includes(String(w.status).toLowerCase()) && (
                           <div>
-                            <span className="px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] font-bold inline-flex items-center gap-1">
-                              <XCircle className="w-3 h-3" />
-                              <span>Rejected</span>
+                            <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] font-black uppercase tracking-wider">
+                              Rejected
                             </span>
                             {w.rejectReason && (
-                              <p className="text-[10px] text-slate-500 mt-1 max-w-[150px] truncate">
+                              <p className="text-[9px] text-slate-500 mt-1 max-w-[150px] truncate leading-none">
                                 {w.rejectReason}
                               </p>
                             )}
@@ -830,19 +985,24 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                         )}
                       </td>
 
+                      {/* Requested Time */}
+                      <td className="p-4 text-slate-500 font-mono text-[10px]">
+                        {w.createdAt ? new Date(w.createdAt).toLocaleString() : 'N/A'}
+                      </td>
+
                       {/* Actions */}
-                      <td className="p-3.5 text-right">
+                      <td className="p-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {/* View Details Button */}
+                          {/* View Info */}
                           <button
                             onClick={() => setSelectedWithdrawal(w)}
                             title="View Details"
-                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                            className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-850 transition"
                           >
-                            <Eye className="w-3.5 h-3.5 text-amber-400" />
+                            <Eye className="w-3.5 h-3.5 text-orange-400" />
                           </button>
 
-                          {/* Send Message Button */}
+                          {/* Message */}
                           <button
                             onClick={() =>
                               setMessagingUser({
@@ -850,35 +1010,31 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                                 userName: w.userName,
                               })
                             }
-                            title="Send Direct Telegram Message"
-                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                            title="Direct Telegram Message"
+                            className="p-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-850 transition"
                           >
-                            <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
+                            <MessageSquare className="w-3.5 h-3.5 text-blue-400" />
                           </button>
 
-                          {String(w.status).toLowerCase() === 'pending' ? (
+                          {isPending ? (
                             <>
                               <button
                                 disabled={isProcessing}
                                 onClick={() => handleApprove(w.id!, w.withdrawalId || w.requestId || '')}
-                                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center gap-1 shadow transition disabled:opacity-50"
+                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] uppercase tracking-wide transition disabled:opacity-50"
                               >
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                <span>Approve</span>
+                                Approve
                               </button>
                               <button
                                 disabled={isProcessing}
                                 onClick={() => setRejectingDocId(w.id!)}
-                                className="px-3 py-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1 shadow transition disabled:opacity-50"
+                                className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-black text-[10px] uppercase tracking-wide transition disabled:opacity-50"
                               >
-                                <XCircle className="w-3.5 h-3.5" />
-                                <span>Reject</span>
+                                Reject
                               </button>
                             </>
                           ) : (
-                            <span className="text-[10px] text-slate-500 italic">
-                              Processed {w.processedAt ? new Date(w.processedAt).toLocaleDateString() : ''}
-                            </span>
+                            <span className="text-[10px] text-slate-500 font-semibold italic">Processed</span>
                           )}
                         </div>
                       </td>
@@ -893,33 +1049,28 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
 
       {/* REJECT REASON MODAL */}
       {rejectingDocId && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-fade-in">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-rose-400" />
-                <span>Reject Withdrawal Request</span>
+              <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
+                <ShieldAlert className="w-4.5 h-4.5 text-rose-500" />
+                <span>Reject & Refund</span>
               </h3>
-              <button
-                onClick={() => setRejectingDocId(null)}
-                className="text-slate-400 hover:text-white"
-              >
-                ✕
-              </button>
+              <button onClick={() => setRejectingDocId(null)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <p className="text-xs text-slate-300">
-              Rejecting this request will automatically refund the withdrawal amount back to the user's wallet balance and send a Telegram notification with the reason.
+            <p className="text-xs text-slate-400 leading-relaxed font-semibold">
+              Rejection automatically refunds this transaction's amount back to the user's wallet ledger and notifies them via Bot.
             </p>
 
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-300">Rejection Reason:</label>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Rejection Reason</label>
               <textarea
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 rows={3}
-                placeholder="e.g. Invalid UPI ID / Unreadable QR code / Account mismatch"
-                className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-rose-500"
+                placeholder="e.g. Invalid UPI ID / Account mismatch"
+                className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-rose-500 font-sans"
               />
             </div>
 
@@ -935,44 +1086,78 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                 disabled={processingId === rejectingDocId}
                 className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow transition disabled:opacity-50"
               >
-                {processingId === rejectingDocId ? 'Processing Refund...' : 'Confirm Reject & Refund'}
+                Confirm Reject
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* SEND DIRECT MESSAGE MODAL */}
-      {messagingUser && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+      {/* BULK REJECT MODAL */}
+      {isBulkRejecting && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-fade-in">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <MessageSquare className="w-4 h-4 text-sky-400" />
-                <span>Send Message to {messagingUser.userName || messagingUser.telegramId}</span>
+              <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
+                <ShieldAlert className="w-4.5 h-4.5 text-rose-500" />
+                <span>Bulk Reject Selection ({selectedIds.length})</span>
               </h3>
-              <button
-                onClick={() => setMessagingUser(null)}
-                className="text-slate-400 hover:text-white"
-              >
-                ✕
-              </button>
+              <button onClick={() => setIsBulkRejecting(false)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <p className="text-xs text-slate-400">
-              This message will be delivered immediately to the user's Telegram chat via your bot.
+            <p className="text-xs text-slate-400 leading-relaxed font-semibold">
+              All {selectedIds.length} chosen requests will be rejected and fully refunded.
             </p>
 
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-300">Message Content:</label>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Common Rejection Reason</label>
               <textarea
-                value={directMessageText}
-                onChange={(e) => setDirectMessageText(e.target.value)}
-                rows={4}
-                placeholder="e.g. Please send a clearer QR code image, or contact support if you need assistance."
-                className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-sky-500 resize-none"
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                rows={3}
+                placeholder="e.g. Bulk cancellation / Details verification failed"
+                className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-rose-500 font-sans"
               />
             </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setIsBulkRejecting(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold hover:bg-slate-700 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkRejectSubmit}
+                disabled={isBulkProcessing}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow transition disabled:opacity-50"
+              >
+                Confirm Bulk Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DIRECT TELEGRAM MESSAGE MODAL */}
+      {messagingUser && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl animate-fade-in">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
+                <MessageSquare className="w-4.5 h-4.5 text-blue-400" />
+                <span>Message TG: {messagingUser.userName || messagingUser.telegramId}</span>
+              </h3>
+              <button onClick={() => setMessagingUser(null)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <textarea
+              value={directMessageText}
+              onChange={(e) => setDirectMessageText(e.target.value)}
+              rows={4}
+              placeholder="e.g. Please re-check your UPI address and register again."
+              className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-orange-500 font-sans resize-none"
+            />
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
@@ -984,39 +1169,30 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               <button
                 onClick={handleSendMessageSubmit}
                 disabled={isSendingMsg || !directMessageText.trim()}
-                className="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition disabled:opacity-50"
+                className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 shadow transition disabled:opacity-50"
               >
                 <Send className="w-3.5 h-3.5" />
-                <span>{isSendingMsg ? 'Sending...' : 'Send Message'}</span>
+                <span>Send</span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* QR CODE IMAGE PREVIEW MODAL */}
+      {/* QR PREVIEW MODAL */}
       {previewQrUrl && (
         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl relative">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl relative animate-fade-in">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <QrCode className="w-4 h-4 text-purple-400" />
-                <span>User Uploaded Payment QR Code</span>
+              <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
+                <QrCode className="w-4.5 h-4.5 text-purple-400" />
+                <span>QR Destination</span>
               </h3>
-              <button
-                onClick={() => setPreviewQrUrl(null)}
-                className="text-slate-400 hover:text-white"
-              >
-                ✕
-              </button>
+              <button onClick={() => setPreviewQrUrl(null)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <div className="bg-slate-950 rounded-xl p-4 flex items-center justify-center border border-slate-800">
-              <img
-                src={previewQrUrl}
-                alt="User QR Code Full Preview"
-                className="max-h-[380px] max-w-full object-contain rounded-lg border border-slate-800 shadow-md"
-              />
+            <div className="bg-slate-950 rounded-xl p-4 flex items-center justify-center border border-slate-800 shadow-inner">
+              <img src={previewQrUrl} alt="User Payout QR" className="max-h-[300px] max-w-full object-contain rounded-lg" />
             </div>
 
             <div className="flex items-center justify-between pt-2">
@@ -1024,220 +1200,105 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                 href={previewQrUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="text-xs text-purple-400 hover:text-purple-300 flex items-center gap-1 underline font-semibold"
+                className="text-[11px] text-purple-400 hover:text-purple-300 flex items-center gap-1 underline font-black uppercase tracking-wider"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open Original Image</span>
+                <span>Original Link</span>
               </a>
-
               <button
                 onClick={() => setPreviewQrUrl(null)}
-                className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition"
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition"
               >
-                Close Preview
+                Close
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* 👁 VIEW DETAILS MODAL */}
+      {/* DETAILS MODAL */}
       {selectedWithdrawal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl relative">
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative animate-fade-in">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <Eye className="w-4 h-4 text-amber-400" />
-                <span>Withdrawal Request Details</span>
+              <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
+                <Eye className="w-4.5 h-4.5 text-orange-400" />
+                <span>Request Verification Details</span>
               </h3>
-              <button
-                onClick={() => setSelectedWithdrawal(null)}
-                className="text-slate-400 hover:text-white font-bold"
-              >
-                ✕
-              </button>
+              <button onClick={() => setSelectedWithdrawal(null)} className="text-slate-400 hover:text-white">✕</button>
             </div>
 
-            <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-              {/* Request ID, Date, Status */}
-              <div className="grid grid-cols-2 gap-3 bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+              <div className="grid grid-cols-2 gap-3 bg-slate-950 p-4 rounded-xl border border-slate-850">
                 <div>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Request ID</p>
+                  <p className="text-[9px] text-slate-500 font-black uppercase">Payout ID</p>
                   <p className="text-xs font-mono font-bold text-white">#{selectedWithdrawal.withdrawalId || selectedWithdrawal.requestId}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Status</p>
-                  <span className={`inline-block px-2 py-0.5 mt-0.5 text-[10px] font-bold rounded-full ${
+                  <p className="text-[9px] text-slate-500 font-black uppercase">Status</p>
+                  <span className={`inline-block px-2 py-0.5 mt-0.5 text-[9px] font-black rounded-full uppercase ${
                     ['pending'].includes(String(selectedWithdrawal.status).toLowerCase())
-                      ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400'
+                      ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
                       : ['completed', 'approved'].includes(String(selectedWithdrawal.status).toLowerCase())
-                      ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
-                      : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
+                      ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+                      : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                   }`}>
                     {selectedWithdrawal.status}
                   </span>
                 </div>
-                <div className="col-span-2">
-                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Request Time</p>
-                  <p className="text-xs text-slate-300 font-mono">
-                    {new Date(selectedWithdrawal.createdAt).toLocaleString()}
-                  </p>
-                </div>
               </div>
 
-              {/* User Account Info */}
-              <div className="p-4 rounded-xl border border-slate-800 space-y-3 bg-slate-950/20">
-                <h4 className="text-xs font-bold text-sky-400 border-b border-slate-800/80 pb-1.5 uppercase tracking-wider">
-                  User Information
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-850 space-y-2">
+                <h4 className="text-[10px] font-black text-blue-400 uppercase tracking-widest pb-1 border-b border-slate-800">
+                  User Account Registry
                 </h4>
-                <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                   <div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase">Display Name</p>
-                    <p className="text-slate-200 font-semibold">{selectedWithdrawal.userName || 'N/A'}</p>
+                    <span className="text-slate-500 block text-[9px] uppercase font-sans">Name</span>
+                    <span className="text-slate-200 block">{selectedWithdrawal.userName || 'N/A'}</span>
                   </div>
                   <div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase">Username</p>
-                    <p className="text-amber-400 font-semibold">
-                      {selectedWithdrawal.username ? `@${selectedWithdrawal.username.replace('@', '')}` : 'N/A'}
-                    </p>
+                    <span className="text-slate-500 block text-[9px] uppercase font-sans">Username</span>
+                    <span className="text-orange-400 block">@{selectedWithdrawal.username || 'N/A'}</span>
                   </div>
                   <div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase">Telegram ID</p>
-                    <p className="text-slate-300 font-mono font-medium">{selectedWithdrawal.telegramId || 'N/A'}</p>
+                    <span className="text-slate-500 block text-[9px] uppercase font-sans">Telegram ID</span>
+                    <span className="text-slate-300 block select-all">{selectedWithdrawal.telegramId || 'N/A'}</span>
                   </div>
                   <div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase">User UID</p>
-                    <p className="text-slate-400 font-mono text-[11px] truncate">{selectedWithdrawal.uid || selectedWithdrawal.userId || 'N/A'}</p>
+                    <span className="text-slate-500 block text-[9px] uppercase font-sans">User App UID</span>
+                    <span className="text-slate-300 block select-all">{selectedWithdrawal.uid || 'N/A'}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Wallet & Amount Details */}
-              <div className="p-4 rounded-xl border border-slate-800 space-y-3 bg-slate-950/20">
-                <h4 className="text-xs font-bold text-emerald-400 border-b border-slate-800/80 pb-1.5 uppercase tracking-wider">
-                  Financial details
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-850 space-y-2">
+                <h4 className="text-[10px] font-black text-emerald-400 uppercase tracking-widest pb-1 border-b border-slate-800">
+                  Transaction Ledgers
                 </h4>
-                <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                   <div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase">Requested Amount</p>
-                    <p className="text-sm font-bold text-white font-mono">
-                      ₹{selectedWithdrawal.requestedAmount !== undefined ? selectedWithdrawal.requestedAmount : selectedWithdrawal.amount}
-                    </p>
+                    <span className="text-slate-500 block text-[9px] uppercase font-sans">Requested</span>
+                    <span className="text-slate-200 block">₹{selectedWithdrawal.requestedAmount || selectedWithdrawal.amount}</span>
                   </div>
                   <div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase">Wallet Balance (At Request)</p>
-                    <p className="text-sm font-bold text-emerald-400 font-mono">
-                      ₹{selectedWithdrawal.currentWalletBalance !== undefined ? selectedWithdrawal.currentWalletBalance : 'N/A'}
-                    </p>
+                    <span className="text-slate-500 block text-[9px] uppercase font-sans">Tax Deduction</span>
+                    <span className="text-rose-400 block">₹{selectedWithdrawal.platformFee || 0}</span>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase">Platform Fee</p>
-                    <p className="text-rose-400 font-mono font-semibold">
-                      ₹{selectedWithdrawal.platformFee || 0}
-                      {selectedWithdrawal.feePercent !== undefined && ` (${selectedWithdrawal.feePercent}%)`}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase">Final Payout</p>
-                    <p className="text-sm font-black text-emerald-400 font-mono">
-                      ₹{selectedWithdrawal.payoutAmount !== undefined ? selectedWithdrawal.payoutAmount : selectedWithdrawal.amount}
-                    </p>
+                  <div className="col-span-2">
+                    <span className="text-slate-500 block text-[9px] uppercase font-sans">Final Disbursable Payout</span>
+                    <span className="text-base font-black text-emerald-400 block">₹{selectedWithdrawal.payoutAmount || selectedWithdrawal.amount}</span>
                   </div>
                 </div>
               </div>
-
-              {/* Payout Details (Method specific) */}
-              <div className="p-4 rounded-xl border border-slate-800 space-y-3 bg-slate-950/20">
-                <h4 className="text-xs font-bold text-purple-400 border-b border-slate-800/80 pb-1.5 uppercase tracking-wider">
-                  Payout Method & Destination
-                </h4>
-                <div className="text-xs space-y-2">
-                  <div>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase">Method Type</p>
-                    <span className="inline-block mt-1 font-bold text-slate-200">
-                      {selectedWithdrawal.method === 'upi' && '💳 UPI ID'}
-                      {selectedWithdrawal.method === 'qr' && '🖼 QR Code'}
-                      {selectedWithdrawal.method === 'redeem_code' && '🎁 Google Play Redeem Code'}
-                    </span>
-                  </div>
-
-                  {selectedWithdrawal.method === 'upi' && (
-                    <div>
-                      <p className="text-[10px] text-slate-500 font-bold uppercase">UPI Address</p>
-                      <p className="mt-1 font-mono text-sky-400 bg-slate-950 px-3 py-2 rounded border border-slate-800 font-bold text-sm">
-                        {selectedWithdrawal.upiId || 'N/A'}
-                      </p>
-                    </div>
-                  )}
-
-                  {selectedWithdrawal.method === 'qr' && (
-                    <div className="space-y-1">
-                      <p className="text-[10px] text-slate-500 font-bold uppercase">QR Code Image</p>
-                      {selectedWithdrawal.qrImageUrl ? (
-                        <div className="bg-slate-950 p-2 rounded-lg border border-slate-800 flex justify-center">
-                          <img
-                            src={selectedWithdrawal.qrImageUrl}
-                            alt="QR code"
-                            className="max-h-[160px] object-contain rounded border border-slate-800"
-                          />
-                        </div>
-                      ) : (
-                        <p className="text-slate-500 italic">No QR Image uploaded</p>
-                      )}
-                    </div>
-                  )}
-
-                  {selectedWithdrawal.method === 'redeem_code' && (
-                    <div>
-                      <p className="text-[10px] text-slate-500 font-bold uppercase">Redeem Code Details</p>
-                      <p className="mt-1 font-mono text-pink-400 bg-slate-950 px-3 py-2 rounded border border-slate-800 font-bold">
-                        {selectedWithdrawal.redeemCodeDetails || 'N/A'}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Processing Info (if any) */}
-              {(selectedWithdrawal.processedAt || selectedWithdrawal.rejectReason) && (
-                <div className="p-4 rounded-xl border border-slate-800 space-y-3 bg-slate-950/20">
-                  <h4 className="text-xs font-bold text-slate-400 border-b border-slate-800/80 pb-1.5 uppercase tracking-wider">
-                    Processing Details
-                  </h4>
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    {selectedWithdrawal.processedAt && (
-                      <div>
-                        <p className="text-[10px] text-slate-500 font-bold uppercase">Processed At</p>
-                        <p className="text-slate-300 font-mono">
-                          {new Date(selectedWithdrawal.processedAt).toLocaleString()}
-                        </p>
-                      </div>
-                    )}
-                    {selectedWithdrawal.processedBy && (
-                      <div>
-                        <p className="text-[10px] text-slate-500 font-bold uppercase font-sans">Processed By</p>
-                        <p className="text-slate-300">{selectedWithdrawal.processedBy}</p>
-                      </div>
-                    )}
-                    {selectedWithdrawal.rejectReason && (
-                      <div className="col-span-2">
-                        <p className="text-[10px] text-rose-400 font-bold uppercase">Rejection Reason</p>
-                        <p className="text-rose-300 font-medium bg-rose-500/5 p-2 rounded border border-rose-500/10 mt-1">
-                          {selectedWithdrawal.rejectReason}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
 
-            <div className="flex items-center justify-end pt-2 border-t border-slate-800/80">
+            <div className="flex items-center justify-end pt-2 border-t border-slate-800">
               <button
                 onClick={() => setSelectedWithdrawal(null)}
-                className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition"
+                className="px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold transition"
               >
-                Close Details
+                Close
               </button>
             </div>
           </div>

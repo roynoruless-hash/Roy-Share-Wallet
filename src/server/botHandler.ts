@@ -389,7 +389,14 @@ export async function getUserByTelegramId(telegramId: string) {
     const querySnapshot = await getDocs(q);
     if (!querySnapshot.empty) {
       const docSnap = querySnapshot.docs[0];
-      return { id: docSnap.id, ...docSnap.data() } as any;
+      const data = docSnap.data();
+      if (!data.uid) {
+        const uid = await generateUniqueUid();
+        await setDoc(doc(db, 'users', docSnap.id), { uid }, { merge: true });
+        console.log(`[Lazy Migration] Assigned missing UID ${uid} to user ID ${docSnap.id}`);
+        return { id: docSnap.id, ...data, uid } as any;
+      }
+      return { id: docSnap.id, ...data } as any;
     }
   } catch (err) {
     console.error('Error fetching user by telegramId:', err);
@@ -2154,7 +2161,7 @@ Final Payout: ₹${payoutAmount}`);
           chat_id: chatId,
           text: `🎁 <b>Lucky Number Giveaway System V2</b>\n\n` +
                 `Active Giveaway: <b>${activeGiveaway.title}</b>\n` +
-                `Prize Pool: <b>₹${activeGiveaway.prizePool}</b>\n\n` +
+                `Prize Pool: <b>₹${activeGiveaway.prizeAmount !== undefined ? activeGiveaway.prizeAmount : activeGiveaway.prizePool}</b>\n\n` +
                 `Claim your lucky number slot directly in the Roy Wallet Mini App to win real cash prizes!\n\n` +
                 `Click the button below to choose your number!`,
           parse_mode: 'HTML',
