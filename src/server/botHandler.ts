@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction, setDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction, setDoc, limit } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
 import { getContests, getContestants, submitVote } from '../services/contestService';
@@ -2086,27 +2086,97 @@ Final Payout: ₹${payoutAmount}`);
     }
 
     if (text === '🎁 Lucky Draw' || text === '👥 Open Waiting Lobby' || text === 'Open Waiting Lobby' || text === '/lobby' || text === '/waitingroom' || text === '/lucky' || text === '/giveaway') {
-      const miniAppUrl = process.env.TELEGRAM_MINI_APP_URL || '';
-      // Create inline keyboard markup with a button to open the web app
-      const inlineKeyboard = {
-        inline_keyboard: [
-          [
-            {
-              text: '🎟️ Open Lucky Draw Grid',
-              web_app: { url: `${miniAppUrl}?startapp=giveaways` }
-            }
-          ]
-        ]
-      };
+      console.log('[LUCKY_DRAW_CLICK] Lucky Draw command clicked or typed:', text, 'Chat ID:', chatId);
+      console.log('[LUCKY_DRAW_HANDLER] Beginning processing for Lucky Draw action...');
 
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `🎁 <b>Lucky Number Giveaway System V2</b>\n\n` +
-              `Claim your lucky number slot directly in the Roy Wallet Mini App to win real cash prizes!\n\n` +
-              `Click the button below to choose your number!`,
-        parse_mode: 'HTML',
-        reply_markup: inlineKeyboard,
-      });
+      try {
+        // Query Firestore to get active giveaway
+        let activeGiveaway: any = null;
+        const giveawaysRef = collection(db, 'giveaways');
+        const q = query(giveawaysRef, where('status', '==', 'active'), limit(1));
+        const snap = await getDocs(q);
+
+        if (!snap.empty) {
+          activeGiveaway = snap.docs[0].data();
+          console.log('[LUCKY_DRAW_HANDLER] Successfully loaded active giveaway from Firestore:', JSON.stringify(activeGiveaway));
+        } else {
+          console.log('[LUCKY_DRAW_HANDLER] Checked Firestore but no active giveaway was found.');
+        }
+
+        if (!activeGiveaway) {
+          console.log('[LUCKY_DRAW_RESPONSE] Sending no active giveaway response');
+          const res = await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: '🎁 <b>No Lucky Giveaway is currently running.</b>\n\nStay tuned for upcoming draws!',
+            parse_mode: 'HTML',
+          });
+          console.log('[LUCKY_DRAW_RESPONSE] Telegram API response for no active giveaway:', JSON.stringify(res));
+          if (res && !res.ok) {
+            console.error('[LUCKY_DRAW_RESPONSE] Failed to send "No active giveaway" message:', JSON.stringify(res));
+          }
+          return;
+        }
+
+        // We have an active giveaway. Prepare Mini App button
+        let miniAppUrl = process.env.TELEGRAM_MINI_APP_URL || process.env.PUBLIC_APP_URL || process.env.APP_URL || '';
+        if (miniAppUrl.includes('t.me/')) {
+          miniAppUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL || '';
+        }
+
+        if (!miniAppUrl) {
+          console.warn('[LUCKY_DRAW_HANDLER] Both TELEGRAM_MINI_APP_URL and PUBLIC_APP_URL are empty. Using current environment host as fallback.');
+          miniAppUrl = 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app';
+        }
+
+        const separator = miniAppUrl.includes('?') ? '&' : '?';
+        const webAppUrl = `${miniAppUrl}${separator}startapp=giveaways`;
+
+        console.log('[LUCKY_DRAW_HANDLER] Final web_app URL resolved to:', webAppUrl);
+
+        const inlineKeyboard = {
+          inline_keyboard: [
+            [
+              {
+                text: '🎟️ Open Lucky Draw Grid',
+                web_app: { url: webAppUrl }
+              }
+            ]
+          ]
+        };
+
+        const res = await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `🎁 <b>Lucky Number Giveaway System V2</b>\n\n` +
+                `Active Giveaway: <b>${activeGiveaway.title}</b>\n` +
+                `Prize Pool: <b>₹${activeGiveaway.prizePool}</b>\n\n` +
+                `Claim your lucky number slot directly in the Roy Wallet Mini App to win real cash prizes!\n\n` +
+                `Click the button below to choose your number!`,
+          parse_mode: 'HTML',
+          reply_markup: inlineKeyboard,
+        });
+
+        console.log('[LUCKY_DRAW_RESPONSE] Telegram API response for active giveaway button:', JSON.stringify(res));
+        if (res && !res.ok) {
+          console.error('[LUCKY_DRAW_RESPONSE] Failed to send active giveaway Mini App button:', JSON.stringify(res));
+        }
+
+      } catch (err: any) {
+        console.error('[LUCKY_DRAW_HANDLER] ERROR: Exception occurred in Lucky Draw handler:', err);
+        if (err && err.stack) {
+          console.error('[LUCKY_DRAW_HANDLER] Stack trace:', err.stack);
+        }
+        
+        // Try to send fallback error message so user is not left hanging
+        try {
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `❌ <b>An error occurred while opening the Lucky Draw.</b>\n\nPlease try again later.`,
+            parse_mode: 'HTML',
+          });
+        } catch (sendErr) {
+          console.error('[LUCKY_DRAW_HANDLER] Failed to send fallback error message to user:', sendErr);
+        }
+      }
       return;
     }
   }
