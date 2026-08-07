@@ -2595,48 +2595,175 @@ Final Payout: ₹${payoutAmount}`);
       uid = await generateUniqueUid();
     }
 
+    // Requirement 1: Read current Registration Bonus from Firestore Admin Settings (settings/config)
     const bonus = Number(adminConfig?.registrationBonus) || 0;
     const enteredDigits = (session?.mobile || otpData?.mobile || '').replace(/\D/g, '').slice(-10);
 
-    const newUserData: Record<string, any> = {
-      appUid: uid,
-      uid: uid,
-      telegramId: cleanTgId,
-      username: message.from.username ? `@${message.from.username.replace('@', '')}` : (existingDoc?.username || ''),
-      firstName: session?.fullName || message.from.first_name || existingDoc?.firstName || 'User',
-      lastName: message.from.last_name || existingDoc?.lastName || '',
-      mobile: enteredDigits,
-      mobileVerified: true,
-      telegramVerified: true,
-      walletBalance: existingDoc?.walletBalance ?? bonus,
-      bonus: bonus,
-      coins: existingDoc?.coins ?? 0,
-      status: 'active',
-      banned: false,
-      securityScore: 98,
-      channelVerified: true,
-      groupVerified: true,
-      createdAt: existingDoc?.createdAt || nowStr,
-      joinDate: existingDoc?.createdAt || nowStr,
-      lastActive: nowStr,
-      lastLogin: nowStr,
-      referrerUid: session?.referrerUid || existingDoc?.referrerUid || null,
-      referredBy: session?.referrerUid || existingDoc?.referredBy || null,
-      referralRewardReceived: existingDoc?.referralRewardReceived || false,
-      totalReferrals: existingDoc?.totalReferrals || 0,
-      successfulReferrals: existingDoc?.successfulReferrals || 0,
-      totalReferralEarnings: existingDoc?.totalReferralEarnings || 0,
-      verifiedChannels: session?.verifiedChannels || [],
-      verifiedGroups: session?.verifiedGroups || [],
-      verificationVersion: session?.verificationVersion || (adminConfig?.verificationVersion || 1),
-      lastVerificationTime: nowStr,
-    };
-
-    let userDocCreated = false;
-    const userDocRef = doc(db, 'users', cleanTgId);
+    // Requirement 10: Log "Registration Bonus Loaded"
+    console.log(`[BONUS_LOG] Registration Bonus Loaded: ₹${bonus}`);
     try {
-      await setDoc(userDocRef, newUserData);
-      userDocCreated = true;
+      await addDoc(collection(db, 'logs'), {
+        type: 'bonus',
+        message: 'Registration Bonus Loaded',
+        timestamp: nowStr,
+        details: { telegramId: cleanTgId, bonus }
+      });
+    } catch (e) {}
+
+    let finalWalletBalance = 0;
+    let creditedBonus = 0;
+    let isNewRegistration = false;
+    let txId = '';
+    let bonusSkippedReason = '';
+
+    const userDocRef = doc(db, 'users', cleanTgId);
+
+    // Requirement 3: Atomic Firestore Transaction (Create account -> Credit wallet -> Create transaction -> Commit)
+    try {
+      await runTransaction(db, async (transaction) => {
+        const userSnap = await transaction.get(userDocRef);
+
+        if (userSnap.exists()) {
+          // Requirement 2 & 9: Account already exists - NEVER credit bonus again
+          const exData = userSnap.data();
+          finalWalletBalance = Number(exData.walletBalance) || 0;
+          creditedBonus = 0;
+          isNewRegistration = false;
+          bonusSkippedReason = 'Bonus Skipped (Already Claimed)';
+          return;
+        }
+
+        // NEW USER REGISTRATION
+        isNewRegistration = true;
+
+        if (bonus > 0) {
+          // Requirement 1, 3, 4, 8: Bonus > 0 -> credit bonus atomically & create transaction
+          creditedBonus = bonus;
+          finalWalletBalance = bonus;
+
+          // Requirement 4: Auto Generated Transaction ID
+          const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+          let randStr = '';
+          for (let i = 0; i < 8; i++) {
+            randStr += characters.charAt(Math.floor(Math.random() * characters.length));
+          }
+          txId = `TXN_REG_${randStr}`;
+
+          const txRef = doc(db, 'transactions', txId);
+
+          // Requirement 4: Create Wallet Transaction
+          transaction.set(txRef, {
+            id: txId,
+            transactionId: txId,
+            userId: cleanTgId,
+            uid: uid,
+            telegramId: cleanTgId,
+            fullName: session?.fullName || message.from.first_name || 'User',
+            mobile: enteredDigits,
+            type: 'Registration Bonus',
+            amount: bonus,
+            balanceBefore: 0,
+            balanceAfter: bonus,
+            status: 'completed',
+            description: 'New Account Registration',
+            reason: 'New Account Registration',
+            createdAt: nowStr,
+            timestamp: nowStr,
+          });
+
+          const passbookItem = {
+            id: txId,
+            transactionId: txId,
+            type: 'Registration Bonus',
+            amount: bonus,
+            balanceAfter: bonus,
+            description: 'New Account Registration',
+            timestamp: nowStr,
+          };
+
+          // Requirement 5: Update users.walletBalance, users.totalEarned, users.passbook, etc.
+          const newUserData: Record<string, any> = {
+            appUid: uid,
+            uid: uid,
+            telegramId: cleanTgId,
+            username: message.from.username ? `@${message.from.username.replace('@', '')}` : (existingDoc?.username || ''),
+            firstName: session?.fullName || message.from.first_name || existingDoc?.firstName || 'User',
+            lastName: message.from.last_name || existingDoc?.lastName || '',
+            mobile: enteredDigits,
+            mobileVerified: true,
+            telegramVerified: true,
+            walletBalance: bonus,
+            totalEarned: bonus,
+            bonus: bonus,
+            coins: 0,
+            passbook: [passbookItem],
+            status: 'active',
+            banned: false,
+            securityScore: 98,
+            channelVerified: true,
+            groupVerified: true,
+            createdAt: nowStr,
+            joinDate: nowStr,
+            lastActive: nowStr,
+            lastLogin: nowStr,
+            referrerUid: session?.referrerUid || existingDoc?.referrerUid || null,
+            referredBy: session?.referrerUid || existingDoc?.referredBy || null,
+            referralRewardReceived: false,
+            totalReferrals: 0,
+            successfulReferrals: 0,
+            totalReferralEarnings: 0,
+            verifiedChannels: session?.verifiedChannels || [],
+            verifiedGroups: session?.verifiedGroups || [],
+            verificationVersion: session?.verificationVersion || (adminConfig?.verificationVersion || 1),
+            lastVerificationTime: nowStr,
+          };
+
+          transaction.set(userDocRef, newUserData);
+        } else {
+          // Requirement 8: If Registration Bonus = 0, skip credit, do not create transaction
+          creditedBonus = 0;
+          finalWalletBalance = 0;
+          bonusSkippedReason = 'Bonus Skipped (Bonus is ₹0)';
+
+          const newUserData: Record<string, any> = {
+            appUid: uid,
+            uid: uid,
+            telegramId: cleanTgId,
+            username: message.from.username ? `@${message.from.username.replace('@', '')}` : (existingDoc?.username || ''),
+            firstName: session?.fullName || message.from.first_name || existingDoc?.firstName || 'User',
+            lastName: message.from.last_name || existingDoc?.lastName || '',
+            mobile: enteredDigits,
+            mobileVerified: true,
+            telegramVerified: true,
+            walletBalance: 0,
+            totalEarned: 0,
+            bonus: 0,
+            coins: 0,
+            passbook: [],
+            status: 'active',
+            banned: false,
+            securityScore: 98,
+            channelVerified: true,
+            groupVerified: true,
+            createdAt: nowStr,
+            joinDate: nowStr,
+            lastActive: nowStr,
+            lastLogin: nowStr,
+            referrerUid: session?.referrerUid || existingDoc?.referrerUid || null,
+            referredBy: session?.referrerUid || existingDoc?.referredBy || null,
+            referralRewardReceived: false,
+            totalReferrals: 0,
+            successfulReferrals: 0,
+            totalReferralEarnings: 0,
+            verifiedChannels: session?.verifiedChannels || [],
+            verifiedGroups: session?.verifiedGroups || [],
+            verificationVersion: session?.verificationVersion || (adminConfig?.verificationVersion || 1),
+            lastVerificationTime: nowStr,
+          };
+
+          transaction.set(userDocRef, newUserData);
+        }
+      });
 
       // SERVER LOG: Account Created
       console.log(`[OTP_VERIFICATION] Account Created for Telegram ID: ${cleanTgId}, UID: ${uid}`);
@@ -2646,24 +2773,63 @@ Final Payout: ₹${payoutAmount}`);
         timestamp: nowStr,
         details: { telegramId: cleanTgId, uid, mobile: enteredDigits }
       });
-
-      // Credit welcome bonus if new user & bonus > 0
-      if (!existingDoc && bonus > 0) {
-        await recordWalletTransaction({
-          uid,
-          type: 'Registration Bonus',
-          amount: bonus,
-          status: 'completed',
-          description: 'Onboarding welcome bonus credited to wallet',
-          botToken: token,
-        });
-      }
     } catch (dbErr) {
       console.error('Failed to save user account in Firestore:', dbErr);
     }
 
+    const userFirstName = session?.fullName || message.from.first_name || existingDoc?.firstName || 'User';
+    const userUsername = message.from.username ? `@${message.from.username.replace('@', '')}` : (existingDoc?.username || '');
+
+    // Requirement 10: Add Logs
+    if (isNewRegistration && creditedBonus > 0) {
+      // LOG: Registration Bonus Credited
+      console.log(`[BONUS_LOG] Registration Bonus Credited: ₹${creditedBonus} for Telegram ID: ${cleanTgId}`);
+      try {
+        await addDoc(collection(db, 'logs'), {
+          type: 'bonus',
+          message: 'Registration Bonus Credited',
+          timestamp: nowStr,
+          details: { telegramId: cleanTgId, uid, amount: creditedBonus, transactionId: txId }
+        });
+      } catch (e) {}
+
+      // LOG: Wallet Updated
+      console.log(`[BONUS_LOG] Wallet Updated for Telegram ID: ${cleanTgId}, New Balance: ₹${finalWalletBalance}`);
+      try {
+        await addDoc(collection(db, 'logs'), {
+          type: 'wallet',
+          message: 'Wallet Updated',
+          timestamp: nowStr,
+          details: { telegramId: cleanTgId, uid, walletBalance: finalWalletBalance }
+        });
+      } catch (e) {}
+
+      // LOG: Transaction Created
+      console.log(`[BONUS_LOG] Transaction Created: ${txId}`);
+      try {
+        await addDoc(collection(db, 'logs'), {
+          type: 'transaction',
+          message: 'Transaction Created',
+          timestamp: nowStr,
+          details: { telegramId: cleanTgId, uid, transactionId: txId, amount: creditedBonus }
+        });
+      } catch (e) {}
+    } else {
+      // LOG: Bonus Skipped (Already Claimed) or Bonus Skipped (Bonus is ₹0)
+      const skipLog = bonusSkippedReason || 'Bonus Skipped (Already Claimed)';
+      console.log(`[BONUS_LOG] ${skipLog} for Telegram ID: ${cleanTgId}`);
+      try {
+        await addDoc(collection(db, 'logs'), {
+          type: 'bonus',
+          message: skipLog,
+          timestamp: nowStr,
+          details: { telegramId: cleanTgId, uid, bonus }
+        });
+      } catch (e) {}
+    }
+
     // Create pending referral token if applicable
-    if (userDocCreated && !existingDoc && session.referrerUid && session.referrerUid !== uid) {
+    if (isNewRegistration && !existingDoc && session?.referrerUid && session.referrerUid !== uid) {
       try {
         const uniqueToken = 'ref_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
         await addDoc(collection(db, 'referralTokens'), {
@@ -2671,7 +2837,7 @@ Final Payout: ₹${payoutAmount}`);
           referrerUid: String(session.referrerUid),
           referredUid: String(uid),
           referredTelegramId: cleanTgId,
-          referredName: newUserData.firstName,
+          referredName: userFirstName,
           status: 'pending',
           createdAt: nowStr,
         });
@@ -2693,30 +2859,29 @@ Final Payout: ₹${payoutAmount}`);
       }
     }
 
-    const pendingVote = session.pendingVote;
-    const pendingWarJoin = session.pendingWarJoin;
+    const pendingVote = session?.pendingVote;
+    const pendingWarJoin = session?.pendingWarJoin;
 
     userSessions.delete(chatId);
 
     const { hasActiveEvent } = await checkLiveEventActive();
 
-    // SHOW SUCCESS MESSAGE
+    // Requirement 6: SHOW REGISTRATION SUCCESSFUL MESSAGE
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
-      text: `🎉 <b>Wallet Verified & Created Successfully!</b>\n\n` +
-        `👤 <b>Name:</b> ${newUserData.firstName}\n` +
+      text: `🎉 <b>Registration Successful!</b>\n\n` +
+        `👤 <b>Name:</b> ${userFirstName}\n` +
         `🆔 <b>UID:</b> <code>${uid}</code>\n` +
         `📱 <b>Verified Mobile:</b> <code>${enteredDigits}</code>\n` +
-        `🟢 <b>Telegram Verified:</b> Yes\n` +
-        `🟢 <b>Mobile Verified:</b> Yes\n` +
-        `💰 <b>Wallet Balance:</b> ₹${newUserData.walletBalance || bonus}`,
+        `🎁 <b>Registration Bonus:</b> ₹${creditedBonus}\n` +
+        `💰 <b>Wallet Balance:</b> ₹${finalWalletBalance}`,
       parse_mode: 'HTML',
       reply_markup: buildMainMenuKeyboard(hasActiveEvent),
     });
 
     if (pendingVote) {
-      const voterName = (newUserData.firstName || 'User') + (newUserData.username ? ' (@' + newUserData.username + ')' : '');
-      const voterUsername = newUserData.username || '';
+      const voterName = (userFirstName || 'User') + (userUsername ? ' (' + userUsername + ')' : '');
+      const voterUsername = userUsername;
 
       const voteRes = await submitVote({
         contestId: pendingVote.contestId,
@@ -2751,8 +2916,8 @@ Final Payout: ₹${payoutAmount}`);
         pendingWarJoin.warId,
         {
           telegramId: String(chatId),
-          name: newUserData.firstName,
-          username: newUserData.username,
+          name: userFirstName,
+          username: userUsername,
         },
         pendingWarJoin.teamId,
         { invitedByTelegramId: pendingWarJoin.inviterTgId }
