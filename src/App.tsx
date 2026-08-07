@@ -16,6 +16,7 @@ import { FeedbackCampaignsView } from './components/FeedbackCampaignsView';
 import { FeedbackReviewsView } from './components/FeedbackReviewsView';
 import { FeedbackUserFlowView } from './components/FeedbackUserFlowView';
 import { SecurityView } from './components/SecurityView';
+import { SecurityReviewView } from './components/admin/SecurityReviewView';
 import { DiagnosticsView } from './components/DiagnosticsView';
 import { LogsView } from './components/LogsView';
 import { UserManagementView } from './components/UserManagementView';
@@ -69,6 +70,7 @@ function resolveTabFromPath(pathname: string): { tab: TabType; isUnknown: boolea
   if (p.startsWith('/feedback-reviews') || p.startsWith('/feedback_reviews')) return { tab: 'feedback_reviews', isUnknown: false };
   if (p.startsWith('/voting-contests') || p.startsWith('/voting_contests') || p.startsWith('/contests')) return { tab: 'voting_contests', isUnknown: false };
   if (p.startsWith('/support')) return { tab: 'support', isUnknown: false };
+  if (p.startsWith('/security-review') || p.startsWith('/security_review')) return { tab: 'security_review', isUnknown: false };
   if (p.startsWith('/security') || p.startsWith('/system')) return { tab: 'security', isUnknown: false };
   if (p.startsWith('/diagnostics')) return { tab: 'diagnostics', isUnknown: false };
   if (p.startsWith('/logs')) return { tab: 'logs', isUnknown: false };
@@ -899,6 +901,14 @@ export default function App() {
                   onSave={handleSaveConfiguration}
                   isSaving={isSaving}
                 />
+              )}
+
+              {activeTab === 'security_review' && (
+                <SecurityReviewView showToast={showToast} />
+              )}
+
+              {activeTab === 'security_review' && (
+                <SecurityReviewView showToast={showToast} />
               )}
 
               {activeTab === 'diagnostics' && <DiagnosticsView config={config} />}

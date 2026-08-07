@@ -7662,6 +7662,584 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
+  // =========================================================
+  // 🚀 PRODUCTION SIGNUP & LOGIN SYSTEM V2 API ENDPOINTS
+  // =========================================================
+
+  // 1. INITIATE REGISTRATION
+  app.post('/api/register/initiate', async (req, res) => {
+    try {
+      const { telegramId, username, firstName, lastName, fullName, mobile, sharedContactMobile, gmail, deviceFingerprint, ip } = req.body;
+
+      const cleanTgId = String(telegramId || '').trim();
+      const cleanMobile = String(mobile || '').replace(/\D/g, '').slice(-10);
+      const cleanSharedMobile = String(sharedContactMobile || '').replace(/\D/g, '').slice(-10);
+      const cleanGmail = String(gmail || '').trim().toLowerCase();
+      const fingerprint = String(deviceFingerprint || '').trim();
+      const clientIp = String(ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+      const userFullName = String(fullName || `${firstName || ''} ${lastName || ''}`).trim() || 'User';
+
+      if (!cleanTgId) {
+        return res.status(400).json({ success: false, error: 'Telegram ID is required' });
+      }
+      if (!cleanMobile || cleanMobile.length !== 10) {
+        return res.status(400).json({ success: false, error: 'Please enter a valid 10-digit mobile number' });
+      }
+      // Step 3 Check: Entered Number = Shared Contact Number
+      if (cleanMobile !== cleanSharedMobile) {
+        return res.status(400).json({ success: false, error: '❌ Mobile number does not match your Telegram contact.' });
+      }
+      if (!cleanGmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanGmail)) {
+        return res.status(400).json({ success: false, error: 'Please enter a valid Gmail address.' });
+      }
+
+      // Check Layer 1: Telegram ID existing account
+      const tgUserSnap = await getDoc(doc(db, 'users', cleanTgId));
+      if (tgUserSnap.exists()) {
+        return res.status(400).json({
+          success: false,
+          isExistingUser: true,
+          error: 'An account already exists for this Telegram ID. Please log in.'
+        });
+      }
+
+      // Check Layer 2: Mobile Number duplicate
+      const mobileQuery = query(collection(db, 'users'), where('mobile', '==', cleanMobile));
+      const mobileSnap = await getDocs(mobileQuery);
+      if (!mobileSnap.empty) {
+        return res.status(400).json({
+          success: false,
+          error: 'This mobile number is already registered with another account.'
+        });
+      }
+
+      // Check Layer 3: Gmail Address duplicate
+      const gmailQuery = query(collection(db, 'users'), where('gmail', '==', cleanGmail));
+      const gmailSnap = await getDocs(gmailQuery);
+      if (!gmailSnap.empty) {
+        return res.status(400).json({
+          success: false,
+          error: 'This Gmail address is already registered with another account.'
+        });
+      }
+
+      // Check Layer 4: Device Fingerprint duplicate
+      const fpQuery = query(collection(db, 'users'), where('deviceFingerprint', '==', fingerprint));
+      const fpSnap = await getDocs(fpQuery);
+      let needsSecurityReview = false;
+      let reviewReason = '';
+      let riskScore = 15;
+
+      if (!fpSnap.empty) {
+        needsSecurityReview = true;
+        reviewReason = 'Duplicate Device Fingerprint detected on system';
+        riskScore = 85;
+      }
+
+      if (needsSecurityReview) {
+        const reviewDoc = {
+          id: cleanTgId,
+          telegramId: cleanTgId,
+          fullName: userFullName,
+          username: username ? username.replace('@', '') : '',
+          mobile: cleanMobile,
+          gmail: cleanGmail,
+          deviceFingerprint: fingerprint,
+          riskScore,
+          reason: reviewReason,
+          ip: clientIp,
+          status: 'PENDING',
+          createdAt: new Date().toISOString(),
+        };
+        await setDoc(doc(db, 'securityReviews', cleanTgId), reviewDoc);
+
+        return res.json({
+          success: false,
+          status: 'SECURITY_REVIEW',
+          error: '🛡 Your account registration has been submitted for Security Review by Admin.'
+        });
+      }
+
+      // Check session rate limiting & 5 wrong attempts limit
+      const sessionDocRef = doc(db, 'registrationSessions', cleanTgId);
+      const existingSessionSnap = await getDoc(sessionDocRef);
+      if (existingSessionSnap.exists()) {
+        const sData = existingSessionSnap.data();
+        if ((sData.attempts || 0) >= 5 && Date.now() - (sData.createdAt || 0) < 1800000) {
+          return res.status(400).json({
+            success: false,
+            error: 'Maximum 5 wrong OTP attempts reached. Please wait 30 minutes before trying again.'
+          });
+        }
+      }
+
+      // Generate 6-digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const sessionData = {
+        telegramId: cleanTgId,
+        username: username ? username.replace('@', '') : '',
+        fullName: userFullName,
+        mobile: cleanMobile,
+        gmail: cleanGmail,
+        deviceFingerprint: fingerprint,
+        otp,
+        otpExpiry: Date.now() + 120000, // 120s
+        attempts: 0,
+        createdAt: Date.now(),
+      };
+
+      await setDoc(sessionDocRef, sessionData);
+
+      // Send OTP to user's Telegram Chat
+      const config = await getDecryptedConfig();
+      if (config?.botToken) {
+        const otpMessage =
+          `━━━━━━━━━━━━━━\n` +
+          `🔐 <b>Roy Share OTP Code</b>\n\n` +
+          `Your 6-digit OTP for registration is:\n` +
+          `<code>${otp}</code>\n\n` +
+          `⏱ This code will expire in <b>02:00</b> minutes.\n` +
+          `━━━━━━━━━━━━━━`;
+        await sendTelegramMessage(config.botToken, cleanTgId, otpMessage);
+      }
+
+      return res.json({
+        success: true,
+        message: 'OTP generated and sent to your Telegram Bot chat.',
+        expiresInSeconds: 120
+      });
+    } catch (err: any) {
+      console.error('[API Initiate Registration Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 2. VERIFY OTP & CREATE ACCOUNT (ATOMIC TRANSACTION)
+  app.post('/api/register/verify-otp', async (req, res) => {
+    try {
+      const { telegramId, otp } = req.body;
+      const cleanTgId = String(telegramId || '').trim();
+      const cleanOtp = String(otp || '').trim();
+
+      if (!cleanTgId || !cleanOtp) {
+        return res.status(400).json({ success: false, error: 'Telegram ID and OTP are required' });
+      }
+
+      const sessionDocRef = doc(db, 'registrationSessions', cleanTgId);
+      const sessionSnap = await getDoc(sessionDocRef);
+
+      if (!sessionSnap.exists()) {
+        return res.status(400).json({
+          success: false,
+          error: 'No active registration session found. Please restart registration.'
+        });
+      }
+
+      const session = sessionSnap.data();
+
+      // Check 10 minute timeout
+      if (Date.now() - (session.createdAt || 0) > 600000) {
+        await deleteDoc(sessionDocRef);
+        return res.status(400).json({
+          success: false,
+          error: 'Registration session expired (10 minutes limit). Please restart registration.'
+        });
+      }
+
+      // Check 5 wrong attempts
+      if ((session.attempts || 0) >= 5) {
+        return res.status(400).json({
+          success: false,
+          error: 'Maximum 5 wrong OTP attempts reached. Please wait 30 minutes before trying again.'
+        });
+      }
+
+      // Check 120s OTP expiry
+      if (Date.now() > session.otpExpiry) {
+        return res.status(400).json({
+          success: false,
+          error: 'OTP Expired. Please request a new OTP.'
+        });
+      }
+
+      // Verify OTP match
+      if (String(session.otp).trim() !== cleanOtp) {
+        const newAttempts = (session.attempts || 0) + 1;
+        await setDoc(sessionDocRef, { attempts: newAttempts }, { merge: true });
+        return res.status(400).json({
+          success: false,
+          error: `❌ Invalid OTP. Attempt ${newAttempts} of 5.`
+        });
+      }
+
+      // OTP is VALID -> Execute Atomic Firestore Transaction
+      const config = await getDecryptedConfig();
+      const registrationBonus = Number(config?.registrationBonus || 0);
+      let uidLen = Number(config?.uidLength) || 6;
+      uidLen = Math.min(12, Math.max(4, uidLen));
+
+      let createdUser: any = null;
+      let generatedUid = '';
+
+      await runTransaction(db, async (transaction) => {
+        const userRef = doc(db, 'users', cleanTgId);
+        const uSnap = await transaction.get(userRef);
+
+        if (uSnap.exists()) {
+          createdUser = uSnap.data();
+          generatedUid = createdUser.uid || createdUser.appUid;
+          return;
+        }
+
+        // Generate unique numeric UID
+        let newUid = '';
+        const min = Math.pow(10, uidLen - 1);
+        const max = Math.pow(10, uidLen) - 1;
+        newUid = Math.floor(min + Math.random() * (max - min + 1)).toString();
+        if (newUid === cleanTgId) {
+          newUid = (Number(newUid) + 1).toString();
+        }
+        generatedUid = newUid;
+
+        const nowStr = new Date().toISOString();
+        const txId = `TXN_REG_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+
+        const newUserDoc = {
+          appUid: generatedUid,
+          uid: generatedUid,
+          telegramId: cleanTgId,
+          username: session.username ? `@${session.username.replace('@', '')}` : '',
+          fullName: session.fullName,
+          firstName: session.fullName.split(' ')[0] || 'User',
+          lastName: session.fullName.split(' ').slice(1).join(' ') || '',
+          mobile: session.mobile,
+          gmail: session.gmail,
+          deviceFingerprint: session.deviceFingerprint,
+          mobileVerified: true,
+          telegramVerified: true,
+          walletBalance: registrationBonus,
+          totalEarned: registrationBonus,
+          bonus: registrationBonus,
+          coins: 0,
+          passbook: registrationBonus > 0 ? [{
+            id: txId,
+            transactionId: txId,
+            type: 'REGISTRATION BONUS',
+            amount: registrationBonus,
+            balanceAfter: registrationBonus,
+            description: 'New Account Registration',
+            timestamp: nowStr,
+          }] : [],
+          status: 'active',
+          banned: false,
+          securityScore: 98,
+          channelVerified: false,
+          groupVerified: false,
+          createdAt: nowStr,
+          lastLogin: nowStr,
+          lastActive: nowStr,
+        };
+
+        transaction.set(userRef, newUserDoc);
+
+        if (registrationBonus > 0) {
+          const txRef = doc(db, 'transactions', txId);
+          transaction.set(txRef, {
+            id: txId,
+            transactionId: txId,
+            userId: cleanTgId,
+            uid: generatedUid,
+            telegramId: cleanTgId,
+            fullName: session.fullName,
+            mobile: session.mobile,
+            type: 'REGISTRATION BONUS',
+            amount: registrationBonus,
+            balanceBefore: 0,
+            balanceAfter: registrationBonus,
+            status: 'completed',
+            description: 'New Account Registration',
+            reason: 'New Account Registration',
+            createdAt: nowStr,
+            timestamp: nowStr,
+          });
+
+          const walletTxRef = doc(db, 'walletTransactions', txId);
+          transaction.set(walletTxRef, {
+            id: txId,
+            transactionId: txId,
+            telegramId: cleanTgId,
+            uid: generatedUid,
+            type: 'REGISTRATION BONUS',
+            amount: registrationBonus,
+            reason: 'New Account Registration',
+            createdAt: nowStr,
+          });
+        }
+
+        createdUser = newUserDoc;
+      });
+
+      // Cleanup registration session
+      await deleteDoc(sessionDocRef);
+
+      // Send Registration Success Message via Bot
+      if (config?.botToken) {
+        const successMessage =
+          `🎉 <b>Registration Successful!</b>\n\n` +
+          `👤 <b>Name:</b> ${session.fullName}\n` +
+          `🆔 <b>UID:</b> <code>${generatedUid}</code>\n` +
+          `📱 <b>Mobile:</b> ${session.mobile}\n` +
+          `📧 <b>Gmail:</b> ${session.gmail}\n` +
+          `💰 <b>Wallet Balance:</b> ₹${registrationBonus}\n\n` +
+          `🎁 <b>Registration Bonus:</b> +₹${registrationBonus} credited!\n\n` +
+          `━━━━━━━━━━━━━━\n` +
+          `Please complete Channel & Group verification in Mini App to unlock full features.`;
+
+        await sendTelegramMessage(config.botToken, cleanTgId, successMessage);
+      }
+
+      return res.json({
+        success: true,
+        user: createdUser,
+        uid: generatedUid,
+        bonus: registrationBonus
+      });
+    } catch (err: any) {
+      console.error('[API Verify OTP Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 3. LOGIN ENDPOINT
+  app.post('/api/login', async (req, res) => {
+    try {
+      const { telegramId, deviceFingerprint, ip } = req.body;
+      const cleanTgId = String(telegramId || '').trim();
+
+      if (!cleanTgId) {
+        return res.status(400).json({ success: false, error: 'Telegram ID is required' });
+      }
+
+      const userRef = doc(db, 'users', cleanTgId);
+      const userSnap = await getDoc(userRef);
+
+      if (!userSnap.exists()) {
+        return res.json({
+          success: false,
+          isRegistered: false,
+          error: 'No registered account found for this Telegram ID.'
+        });
+      }
+
+      const userData = userSnap.data();
+      const nowStr = new Date().toISOString();
+
+      // Update last active
+      await setDoc(userRef, {
+        lastLogin: nowStr,
+        lastActive: nowStr,
+        ...(deviceFingerprint ? { deviceFingerprint } : {}),
+      }, { merge: true });
+
+      return res.json({
+        success: true,
+        isRegistered: true,
+        user: { ...userData, lastLogin: nowStr, lastActive: nowStr }
+      });
+    } catch (err: any) {
+      console.error('[API Login Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 4. ADMIN SECURITY REVIEWS API
+  app.get('/api/admin/security-reviews', requireAdminSession, async (req, res) => {
+    try {
+      const snap = await getDocs(collection(db, 'securityReviews'));
+      const reviews = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      reviews.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      return res.json({ success: true, reviews });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/admin/security-reviews/approve', requireAdminSession, async (req, res) => {
+    try {
+      const { reviewId } = req.body;
+      if (!reviewId) {
+        return res.status(400).json({ success: false, error: 'Review ID required' });
+      }
+
+      const reviewRef = doc(db, 'securityReviews', reviewId);
+      const reviewSnap = await getDoc(reviewRef);
+
+      if (!reviewSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Review request not found' });
+      }
+
+      const review = reviewSnap.data();
+      if (review.status === 'APPROVED') {
+        return res.status(400).json({ success: false, error: 'Registration request already approved' });
+      }
+
+      const config = await getDecryptedConfig();
+      const registrationBonus = Number(config?.registrationBonus || 0);
+      let uidLen = Number(config?.uidLength) || 6;
+      uidLen = Math.min(12, Math.max(4, uidLen));
+
+      let generatedUid = '';
+      let createdUser: any = null;
+
+      await runTransaction(db, async (transaction) => {
+        const userRef = doc(db, 'users', review.telegramId);
+        const uSnap = await transaction.get(userRef);
+
+        if (uSnap.exists()) {
+          createdUser = uSnap.data();
+          generatedUid = createdUser.uid || createdUser.appUid;
+        } else {
+          const min = Math.pow(10, uidLen - 1);
+          const max = Math.pow(10, uidLen) - 1;
+          generatedUid = Math.floor(min + Math.random() * (max - min + 1)).toString();
+
+          const nowStr = new Date().toISOString();
+          const txId = `TXN_REG_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+
+          const newUserDoc = {
+            appUid: generatedUid,
+            uid: generatedUid,
+            telegramId: review.telegramId,
+            username: review.username ? `@${review.username.replace('@', '')}` : '',
+            fullName: review.fullName,
+            firstName: review.fullName.split(' ')[0] || 'User',
+            lastName: review.fullName.split(' ').slice(1).join(' ') || '',
+            mobile: review.mobile,
+            gmail: review.gmail,
+            deviceFingerprint: review.deviceFingerprint,
+            mobileVerified: true,
+            telegramVerified: true,
+            walletBalance: registrationBonus,
+            totalEarned: registrationBonus,
+            bonus: registrationBonus,
+            coins: 0,
+            passbook: registrationBonus > 0 ? [{
+              id: txId,
+              transactionId: txId,
+              type: 'REGISTRATION BONUS',
+              amount: registrationBonus,
+              balanceAfter: registrationBonus,
+              description: 'New Account Registration',
+              timestamp: nowStr,
+            }] : [],
+            status: 'active',
+            banned: false,
+            securityScore: 90,
+            channelVerified: false,
+            groupVerified: false,
+            createdAt: nowStr,
+            lastLogin: nowStr,
+            lastActive: nowStr,
+          };
+
+          transaction.set(userRef, newUserDoc);
+
+          if (registrationBonus > 0) {
+            const txRef = doc(db, 'transactions', txId);
+            transaction.set(txRef, {
+              id: txId,
+              transactionId: txId,
+              userId: review.telegramId,
+              uid: generatedUid,
+              telegramId: review.telegramId,
+              fullName: review.fullName,
+              mobile: review.mobile,
+              type: 'REGISTRATION BONUS',
+              amount: registrationBonus,
+              balanceBefore: 0,
+              balanceAfter: registrationBonus,
+              status: 'completed',
+              description: 'New Account Registration',
+              reason: 'New Account Registration',
+              createdAt: nowStr,
+              timestamp: nowStr,
+            });
+          }
+
+          createdUser = newUserDoc;
+        }
+
+        transaction.set(reviewRef, {
+          status: 'APPROVED',
+          approvedAt: new Date().toISOString(),
+          approvedBy: 'SuperAdmin',
+        }, { merge: true });
+      });
+
+      if (config?.botToken) {
+        const approvedMessage =
+          `🎉 <b>Your Account Registration Has Been Approved!</b>\n\n` +
+          `👤 <b>Name:</b> ${review.fullName}\n` +
+          `🆔 <b>UID:</b> <code>${generatedUid}</code>\n` +
+          `💰 <b>Wallet Balance:</b> ₹${registrationBonus}\n\n` +
+          `Please open the Mini App and complete Channel & Group verification to unlock your wallet.`;
+
+        await sendTelegramMessage(config.botToken, review.telegramId, approvedMessage);
+      }
+
+      return res.json({
+        success: true,
+        uid: generatedUid,
+        bonus: registrationBonus,
+        message: 'Security review approved and account created successfully.'
+      });
+    } catch (err: any) {
+      console.error('[API Approve Security Review Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/admin/security-reviews/reject', requireAdminSession, async (req, res) => {
+    try {
+      const { reviewId, reason } = req.body;
+      if (!reviewId) {
+        return res.status(400).json({ success: false, error: 'Review ID required' });
+      }
+
+      const reviewRef = doc(db, 'securityReviews', reviewId);
+      const reviewSnap = await getDoc(reviewRef);
+
+      if (!reviewSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Review request not found' });
+      }
+
+      const review = reviewSnap.data();
+      const rejectReason = reason || 'Failed security verification checks.';
+
+      await setDoc(reviewRef, {
+        status: 'REJECTED',
+        rejectReason,
+        rejectedAt: new Date().toISOString(),
+        rejectedBy: 'SuperAdmin',
+      }, { merge: true });
+
+      const config = await getDecryptedConfig();
+      if (config?.botToken) {
+        const rejectedMsg =
+          `❌ <b>Account Registration Rejected</b>\n\n` +
+          `Your registration request was reviewed and rejected by Admin.\n` +
+          `<b>Reason:</b> ${rejectReason}`;
+
+        await sendTelegramMessage(config.botToken, review.telegramId, rejectedMsg);
+      }
+
+      return res.json({ success: true, message: 'Security review rejected successfully.' });
+    } catch (err: any) {
+      console.error('[API Reject Security Review Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // API fallback handler: Ensure any request starting with /api that doesn't match an actual registered Express route
   // is returned as a 404 JSON response instead of falling through to serve the static frontend index.html
   app.all('/api/*', (req, res) => {

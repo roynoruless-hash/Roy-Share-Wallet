@@ -87,6 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'channel' as TabType, label: 'Channel & Group', icon: ShieldCheck },
         { id: 'settings' as TabType, label: 'System Settings', icon: Settings },
         { id: 'security' as TabType, label: 'Security Hub', icon: ShieldCheck },
+        { id: 'security_review' as TabType, label: 'Security Review', icon: ShieldCheck, badge: 'QUEUE' },
         { id: 'advanced' as TabType, label: 'Developer/API', icon: Zap, badge: 'PRO' },
       ]
     }

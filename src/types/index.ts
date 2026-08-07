@@ -133,6 +133,7 @@ export type TabType =
   | 'tasks'
   | 'support'
   | 'security'
+  | 'security_review'
   | 'logs'
   | 'diagnostics'
   | 'feedback_campaigns'
