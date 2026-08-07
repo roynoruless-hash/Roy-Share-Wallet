@@ -173,6 +173,106 @@ export const SecurityView: React.FC<SecurityViewProps> = ({
           </div>
         </div>
 
+        {/* OTP & ACCOUNT VERIFICATION SETTINGS PANEL */}
+        <div className="p-5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-5">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+              <Key className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-white uppercase tracking-wider">🔐 OTP & Account Security Settings</h3>
+              <p className="text-[11px] text-slate-400">
+                Configure Mini App OTP lengths, expiry windows, device limits, and contact verification enforcement.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* OTP Length */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-300">OTP Code Length</label>
+              <select
+                value={config.otpLength || 6}
+                onChange={(e) => updateConfig({ otpLength: parseInt(e.target.value) || 6 })}
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
+              >
+                <option value={4}>4 Digits</option>
+                <option value={6}>6 Digits (Recommended)</option>
+                <option value={8}>8 Digits</option>
+              </select>
+            </div>
+
+            {/* OTP Expiry */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-300">OTP Expiry Timeout</label>
+              <select
+                value={config.otpExpiry || 120}
+                onChange={(e) => updateConfig({ otpExpiry: parseInt(e.target.value) || 120 })}
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
+              >
+                <option value={30}>30 Seconds</option>
+                <option value={60}>60 Seconds (1 Min)</option>
+                <option value={90}>90 Seconds</option>
+                <option value={120}>120 Seconds (2 Mins - Recommended)</option>
+                <option value={180}>180 Seconds (3 Mins)</option>
+              </select>
+            </div>
+
+            {/* Max Accounts Per Device */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-300">Max Accounts Per Device</label>
+              <select
+                value={config.maxAccountsPerDevice || 1}
+                onChange={(e) => updateConfig({ maxAccountsPerDevice: parseInt(e.target.value) || 1 })}
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono"
+              >
+                <option value={1}>1 Account (Strict Security)</option>
+                <option value={2}>2 Accounts</option>
+                <option value={3}>3 Accounts</option>
+              </select>
+            </div>
+
+            {/* Toggles */}
+            <div className="space-y-3 pt-2">
+              {/* Contact Verification Required */}
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                <span className="text-xs font-medium text-slate-300">Contact Share Verification</span>
+                <button
+                  type="button"
+                  onClick={() => updateConfig({ contactVerificationRequired: !(config.contactVerificationRequired ?? true) })}
+                  className={`p-1 rounded-lg transition ${
+                    (config.contactVerificationRequired ?? true) ? 'text-emerald-400' : 'text-slate-600'
+                  }`}
+                >
+                  {(config.contactVerificationRequired ?? true) ? (
+                    <ToggleRight className="w-7 h-7" />
+                  ) : (
+                    <ToggleLeft className="w-7 h-7" />
+                  )}
+                </button>
+              </div>
+
+              {/* Allow Device Limit */}
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                <span className="text-xs font-medium text-slate-300">Device Limit Enforcement</span>
+                <button
+                  type="button"
+                  onClick={() => updateConfig({ allowDeviceLimit: !(config.allowDeviceLimit ?? true) })}
+                  className={`p-1 rounded-lg transition ${
+                    (config.allowDeviceLimit ?? true) ? 'text-emerald-400' : 'text-slate-600'
+                  }`}
+                >
+                  {(config.allowDeviceLimit ?? true) ? (
+                    <ToggleRight className="w-7 h-7" />
+                  ) : (
+                    <ToggleLeft className="w-7 h-7" />
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Future Ready Architecture Section */}
         <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
           <div className="flex items-center gap-2 text-sky-400 font-bold text-xs uppercase tracking-wider">

@@ -30,6 +30,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { AdminConfig, BotUser, WalletTransaction } from '../types';
+import { BulkDeleteModal } from './BulkDeleteModal';
 import {
   fetchUsersFromDb,
   fetchUserTransactions,
@@ -68,6 +69,10 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
   const [modalReason, setModalReason] = useState('');
   const [modalMessage, setModalMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Bulk Delete Modal States
+  const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
+  const [bulkDeleteActionType, setBulkDeleteActionType] = useState<'DELETE_ALL_USERS' | 'RESET_PLATFORM'>('DELETE_ALL_USERS');
 
   // Load Users from Firestore
   const loadUsers = async () => {
@@ -406,15 +411,38 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
             <button
               onClick={loadUsers}
               disabled={isLoading}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition shadow-sm disabled:opacity-50"
+              className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition shadow-sm disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-sky-400' : ''}`} />
               <span>Refresh Users</span>
             </button>
+
+            <button
+              onClick={() => {
+                setBulkDeleteActionType('DELETE_ALL_USERS');
+                setIsBulkDeleteOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white border border-rose-500/40 transition shadow-md shadow-rose-600/15 active:scale-95"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>🗑 Delete All Users</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setBulkDeleteActionType('RESET_PLATFORM');
+                setIsBulkDeleteOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white border border-amber-500/40 transition shadow-md shadow-amber-600/15 active:scale-95"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>🧹 Reset Platform</span>
+            </button>
+
             <div className="px-3 py-2.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 text-xs font-bold">
               Total Users: {users.length}
             </div>
@@ -1409,6 +1437,17 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
           </div>
         </div>
       )}
+
+      {/* Bulk Delete All Users & Reset Platform Modal */}
+      <BulkDeleteModal
+        isOpen={isBulkDeleteOpen}
+        onClose={() => setIsBulkDeleteOpen(false)}
+        actionType={bulkDeleteActionType}
+        onSuccess={() => {
+          loadUsers();
+        }}
+        showToast={showToast}
+      />
     </div>
   );
 };

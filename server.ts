@@ -7,7 +7,7 @@ import { getMilestoneTokenInfo, processMilestoneClaim } from './src/server/miles
 import { approveWithdrawal, rejectWithdrawal } from './src/server/withdrawalHandler';
 import { approveFeedbackReview, rejectFeedbackReview } from './src/server/feedbackHandler';
 import { recordWalletTransaction } from './src/server/transactionService';
-import { doc, setDoc, collection, query, where, getDocs, getDoc, addDoc, deleteDoc, orderBy, limit, updateDoc, runTransaction } from 'firebase/firestore';
+import { doc, setDoc, collection, query, where, getDocs, getDoc, addDoc, deleteDoc, orderBy, limit, updateDoc, runTransaction, writeBatch } from 'firebase/firestore';
 import { db } from './src/services/firebase';
 import { GoogleGenAI } from '@google/genai';
 import crypto from 'crypto';
@@ -3523,45 +3523,265 @@ Claim now and don't forget to share your screenshot!`;
       console.log(`[WEBAPP_AUTH] Telegram WebApp auth request received. initData present: ${Boolean(initData)}`);
       console.log(`[TELEGRAM_USER] Authenticating user:`, { telegramId: cleanTgId, username, firstName, lastName });
 
-      const userRef = doc(db, 'users', cleanTgId);
-      const userDoc = await getDoc(userRef);
-      const nowStr = new Date().toISOString();
-      let userData: any = null;
+      // 1. Search for existing account by direct doc ID OR telegramId query field
+      let userDocRef = doc(db, 'users', cleanTgId);
+      let userSnap = await getDoc(userDocRef);
+      let userData: any = userSnap.exists() ? userSnap.data() : null;
+      let matchedDocId = userSnap.exists() ? userSnap.id : null;
 
-      if (userDoc.exists()) {
-        userData = userDoc.data();
-        await setDoc(userRef, {
+      if (!userData) {
+        const qUser = query(collection(db, 'users'), where('telegramId', '==', cleanTgId));
+        const snap = await getDocs(qUser);
+        if (!snap.empty) {
+          // Prioritize any banned document to strictly enforce account bans
+          const bannedDoc = snap.docs.find(d => {
+            const data = d.data();
+            return data.banned === true || data.status === 'banned' || data.isBanned === true || data.status === 'blocked';
+          });
+          const targetDoc = bannedDoc || snap.docs[0];
+          matchedDocId = targetDoc.id;
+          userDocRef = doc(db, 'users', matchedDocId);
+          userData = targetDoc.data();
+        }
+      }
+
+      const nowStr = new Date().toISOString();
+
+      // 2. STAGE 1 SECURITY CHECK: REJECT BANNED ACCOUNTS
+      if (userData) {
+        const isBanned = Boolean(userData.banned === true || userData.status === 'banned' || userData.isBanned === true || userData.status === 'blocked');
+        if (isBanned) {
+          console.warn(`[WEBAPP_AUTH_BLOCKED] Banned account attempted WebApp login: Telegram ID ${cleanTgId}, UID ${userData.uid || userData.appUid}`);
+          return res.status(403).json({
+            success: false,
+            banned: true,
+            error: 'This Telegram account is banned.',
+            message: 'This Telegram account is banned.',
+            user: {
+              telegramId: cleanTgId,
+              uid: userData.uid || userData.appUid || cleanTgId,
+              status: 'banned',
+              banned: true,
+              banReason: userData.banReason || 'Violation of Bot Rules'
+            }
+          });
+        }
+
+        // 3. EXISTING ACTIVE USER - UPDATE PROFILE & PRESERVE PERMANENT UID
+        const existingUid = userData.appUid || userData.uid;
+        let finalUid = (existingUid && String(existingUid).trim() !== cleanTgId) ? String(existingUid).trim() : '';
+
+        if (!finalUid) {
+          // Auto-repair missing or invalid UID with permanent 6-digit numeric UID
+          const configDoc = await getDoc(doc(db, 'settings', 'config'));
+          const configData = configDoc.exists() ? configDoc.data() : {};
+          let len = Number(configData?.uidLength) || 6;
+          len = Math.min(12, Math.max(4, len));
+
+          let attempts = 0;
+          while (attempts < 20) {
+            const min = Math.pow(10, len - 1);
+            const max = Math.pow(10, len) - 1;
+            finalUid = Math.floor(min + Math.random() * (max - min + 1)).toString();
+            if (finalUid !== cleanTgId) break;
+            attempts++;
+          }
+          if (!finalUid) finalUid = String(Date.now()).slice(-len);
+        }
+
+        const updatePayload: Record<string, any> = {
           lastActive: nowStr,
-          username: username || userData.username || '',
+          appUid: finalUid,
+          uid: finalUid,
+          username: username ? `@${username.replace('@', '')}` : (userData.username || ''),
           firstName: firstName || userData.firstName || 'User',
           lastName: lastName || userData.lastName || '',
-        }, { merge: true });
-        userData = { ...userData, lastActive: nowStr };
-        console.log(`[AUTO_LOGIN_SUCCESS] Existing Telegram user loaded from Firestore: ${cleanTgId}`);
-      } else {
-        const fullUserName = firstName ? `${firstName} ${lastName || ''}`.trim() : (username ? `@${username}` : `User #${cleanTgId}`);
-        userData = {
-          uid: cleanTgId,
-          telegramId: cleanTgId,
-          username: username || '',
-          firstName: firstName || fullUserName,
-          lastName: lastName || '',
-          mobile: 'N/A',
-          walletBalance: 0,
-          status: 'active',
-          banned: false,
-          channelVerified: true,
-          groupVerified: true,
-          createdAt: nowStr,
-          lastActive: nowStr,
         };
-        await setDoc(userRef, userData);
-        console.log(`[AUTO_LOGIN_SUCCESS] New Telegram user auto-created in Firestore: ${cleanTgId}`);
+
+        await setDoc(userDocRef, updatePayload, { merge: true });
+        userData = { ...userData, ...updatePayload };
+        console.log(`[AUTO_LOGIN_SUCCESS] Existing Telegram user authenticated: ${cleanTgId} (UID: ${finalUid})`);
+        return res.json({ success: true, user: userData });
       }
+
+      // 4. BRAND NEW USER REGISTRATION - CREATE SINGLE DOCUMENT AT users/{telegramId}
+      const configDoc = await getDoc(doc(db, 'settings', 'config'));
+      const configData = configDoc.exists() ? configDoc.data() : {};
+      let len = Number(configData?.uidLength) || 6;
+      len = Math.min(12, Math.max(4, len));
+
+      let newUid = '';
+      let attempts = 0;
+      while (attempts < 20) {
+        const min = Math.pow(10, len - 1);
+        const max = Math.pow(10, len) - 1;
+        newUid = Math.floor(min + Math.random() * (max - min + 1)).toString();
+        if (newUid !== cleanTgId) break;
+        attempts++;
+      }
+      if (!newUid) newUid = String(Date.now()).slice(-len);
+
+      const fullUserName = firstName ? `${firstName} ${lastName || ''}`.trim() : (username ? `@${username}` : `User #${cleanTgId}`);
+      userData = {
+        appUid: newUid,
+        uid: newUid,
+        telegramId: cleanTgId,
+        username: username ? `@${username.replace('@', '')}` : '',
+        firstName: firstName || fullUserName,
+        lastName: lastName || '',
+        mobile: 'N/A',
+        walletBalance: 0,
+        status: 'active',
+        banned: false,
+        channelVerified: true,
+        groupVerified: true,
+        createdAt: nowStr,
+        lastActive: nowStr,
+      };
+
+      await setDoc(doc(db, 'users', cleanTgId), userData);
+      console.log(`[AUTO_LOGIN_SUCCESS] New Telegram user created in Firestore: ${cleanTgId} (UID: ${newUid})`);
 
       return res.json({ success: true, user: userData });
     } catch (err: any) {
       console.error('[WEBAPP_AUTH] Error processing Telegram WebApp authentication:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // MINI APP OTP GENERATION ENDPOINT
+  app.post('/api/otp/generate', async (req, res) => {
+    try {
+      const { telegramId } = req.body || {};
+      const cleanTgId = String(telegramId || '').trim();
+
+      if (!cleanTgId) {
+        return res.status(400).json({ success: false, error: 'Telegram ID is required' });
+      }
+
+      // Check if user is banned
+      const userDocSnap = await getDoc(doc(db, 'users', cleanTgId));
+      if (userDocSnap.exists()) {
+        const uData = userDocSnap.data();
+        if (uData.banned || uData.status === 'banned') {
+          return res.status(403).json({ success: false, error: 'This account is banned.' });
+        }
+      }
+
+      // Read admin settings for OTP length & expiry
+      const configDoc = await getDoc(doc(db, 'settings', 'config'));
+      const configData = configDoc.exists() ? configDoc.data() : {};
+      const otpLength = Number(configData.otpLength) || 6;
+      const otpExpirySeconds = Number(configData.otpExpiry) || 120;
+
+      // Generate random numeric OTP
+      const min = Math.pow(10, otpLength - 1);
+      const max = Math.pow(10, otpLength) - 1;
+      const otpCode = Math.floor(min + Math.random() * (max - min + 1)).toString();
+
+      // Compute SHA-256 hash of OTP
+      const crypto = await import('crypto');
+      const otpHash = crypto.createHash('sha256').update(otpCode).digest('hex');
+
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + otpExpirySeconds * 1000).toISOString();
+
+      // Save to Firestore otps/{telegramId}
+      await setDoc(doc(db, 'otps', cleanTgId), {
+        telegramId: cleanTgId,
+        otpHash,
+        expiresAt,
+        createdAt: now.toISOString(),
+        verified: false,
+      });
+
+      // Log event
+      await addDoc(collection(db, 'logs'), {
+        type: 'activity',
+        message: `OTP Generated for Telegram ID ${cleanTgId} (${otpLength} digits, ${otpExpirySeconds}s expiry)`,
+        timestamp: now.toISOString(),
+        details: { telegramId: cleanTgId, otpLength, otpExpirySeconds }
+      });
+
+      console.log(`[OTP_GENERATE] Generated ${otpLength}-digit OTP for ${cleanTgId}: ${otpCode} (expires in ${otpExpirySeconds}s)`);
+
+      return res.json({
+        success: true,
+        otp: otpCode,
+        expirySeconds: otpExpirySeconds,
+        expiresAt
+      });
+    } catch (err: any) {
+      console.error('[OTP_GENERATE] Error generating OTP:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // MINI APP OTP VERIFICATION ENDPOINT
+  app.post('/api/otp/verify', async (req, res) => {
+    try {
+      const { telegramId, otp } = req.body || {};
+      const cleanTgId = String(telegramId || '').trim();
+      const cleanOtp = String(otp || '').trim();
+
+      if (!cleanTgId || !cleanOtp) {
+        return res.status(400).json({ success: false, error: 'Telegram ID and OTP are required' });
+      }
+
+      const otpDocRef = doc(db, 'otps', cleanTgId);
+      const otpSnap = await getDoc(otpDocRef);
+
+      if (!otpSnap.exists()) {
+        await addDoc(collection(db, 'logs'), {
+          type: 'error',
+          message: `OTP Verification Failed for ${cleanTgId}: No active OTP record found`,
+          timestamp: new Date().toISOString(),
+          details: { telegramId: cleanTgId }
+        });
+        return res.status(400).json({ success: false, error: 'No active OTP found. Please generate a new OTP in Mini App.' });
+      }
+
+      const otpData = otpSnap.data();
+      const nowStr = new Date().toISOString();
+
+      if (nowStr > otpData.expiresAt) {
+        await addDoc(collection(db, 'logs'), {
+          type: 'error',
+          message: `OTP Verification Failed for ${cleanTgId}: OTP Expired`,
+          timestamp: nowStr,
+          details: { telegramId: cleanTgId, expiresAt: otpData.expiresAt }
+        });
+        return res.status(400).json({ success: false, error: 'OTP has expired. Please generate a new OTP in Mini App.' });
+      }
+
+      const crypto = await import('crypto');
+      const inputHash = crypto.createHash('sha256').update(cleanOtp).digest('hex');
+
+      if (inputHash !== otpData.otpHash) {
+        await addDoc(collection(db, 'logs'), {
+          type: 'error',
+          message: `OTP Verification Failed for ${cleanTgId}: Invalid OTP Code`,
+          timestamp: nowStr,
+          details: { telegramId: cleanTgId }
+        });
+        return res.status(400).json({ success: false, error: 'Invalid OTP code. Please check and try again.' });
+      }
+
+      // Mark verified & cleanup OTP record
+      await setDoc(otpDocRef, { verified: true, verifiedAt: nowStr }, { merge: true });
+
+      await addDoc(collection(db, 'logs'), {
+        type: 'registration',
+        message: `OTP Verified successfully for Telegram ID ${cleanTgId}`,
+        timestamp: nowStr,
+        details: { telegramId: cleanTgId }
+      });
+
+      console.log(`[OTP_VERIFY] OTP successfully verified for Telegram ID ${cleanTgId}`);
+
+      return res.json({ success: true, message: 'OTP verified successfully.' });
+    } catch (err: any) {
+      console.error('[OTP_VERIFY] Error verifying OTP:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -5585,6 +5805,230 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
+  // PROTECTED SYSTEM COLLECTIONS THAT CAN NEVER BE DELETED UNDER ANY CIRCUMSTANCES
+  const PROTECTED_SYSTEM_COLLECTIONS = [
+    'admins',
+    'settings',
+    'config',
+    'adminSessions',
+    'adminOtps',
+    'adminLogs',
+    'auditLogs',
+    'systemSettings',
+    'firebaseConfig',
+  ];
+
+  // Helper function to safely purge a single Firestore collection using Chunked Batch Writes
+  async function safePurgeCollection(collectionName: string): Promise<number> {
+    if (PROTECTED_SYSTEM_COLLECTIONS.includes(collectionName)) {
+      console.warn(`[SAFETY GUARD] Attempted deletion of protected collection '${collectionName}' blocked!`);
+      return 0;
+    }
+
+    let deletedTotal = 0;
+    const CHUNK_LIMIT = 400;
+
+    while (true) {
+      const colRef = collection(db, collectionName);
+      const q = query(colRef, limit(CHUNK_LIMIT));
+      const snap = await getDocs(q);
+
+      if (snap.empty) break;
+
+      const batch = writeBatch(db);
+      snap.docs.forEach((docSnap) => {
+        batch.delete(docSnap.ref);
+      });
+
+      await batch.commit();
+      deletedTotal += snap.docs.length;
+
+      // If we fetched fewer than chunk size, collection is completely purged
+      if (snap.docs.length < CHUNK_LIMIT) break;
+    }
+
+    console.log(`[BULK DELETE] Purged ${deletedTotal} docs from collection '${collectionName}'`);
+    return deletedTotal;
+  }
+
+  // Bulk Delete Collection Endpoint (For step-by-step progress execution)
+  app.post('/api/admin/bulk-delete-collection', requireAdminSession, async (req, res) => {
+    try {
+      const { collectionName, confirmationText, actionType, adminPassword } = req.body;
+
+      if (PROTECTED_SYSTEM_COLLECTIONS.includes(collectionName)) {
+        return res.status(400).json({
+          success: false,
+          error: `Collection '${collectionName}' is a protected system collection and CANNOT be deleted.`,
+        });
+      }
+
+      const expectedText = actionType === 'RESET_PLATFORM' ? 'RESET PLATFORM' : 'DELETE ALL USERS';
+      if (String(confirmationText || '').trim() !== expectedText) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid confirmation text. Must type exactly '${expectedText}' to proceed.`,
+        });
+      }
+
+      // Verify Admin Password if configured
+      const configDoc = await getDoc(doc(db, 'settings', 'config'));
+      const configData = configDoc.exists() ? configDoc.data() : {};
+      if (configData.adminPassword) {
+        if (!adminPassword || String(adminPassword).trim() !== String(configData.adminPassword).trim()) {
+          return res.status(401).json({
+            success: false,
+            error: 'Invalid Admin Password. Authentication failed.',
+          });
+        }
+      }
+
+      const deletedCount = await safePurgeCollection(collectionName);
+
+      return res.json({
+        success: true,
+        collectionName,
+        deletedCount,
+        message: `Successfully purged ${deletedCount} document(s) from '${collectionName}'.`,
+      });
+    } catch (err: any) {
+      console.error('[BULK DELETE COLLECTION ERROR]', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Master Bulk Delete All Users / Reset Platform System Endpoint
+  app.post('/api/admin/bulk-delete', requireAdminSession, async (req, res) => {
+    try {
+      const sessionInfo = (req as any).adminSession || {};
+      const adminId = sessionInfo.adminUid || 'super_admin_01';
+      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+
+      const {
+        actionType = 'DELETE_ALL_USERS',
+        confirmationText,
+        adminPassword,
+        options = {},
+      } = req.body;
+
+      const expectedText = actionType === 'RESET_PLATFORM' ? 'RESET PLATFORM' : 'DELETE ALL USERS';
+      if (String(confirmationText || '').trim() !== expectedText) {
+        return res.status(400).json({
+          success: false,
+          error: `Security Check Failed: You must type exactly '${expectedText}' in uppercase to continue.`,
+        });
+      }
+
+      // Check Admin Password if set in settings config
+      const configDoc = await getDoc(doc(db, 'settings', 'config'));
+      const configData = configDoc.exists() ? configDoc.data() : {};
+      if (configData.adminPassword) {
+        if (!adminPassword || String(adminPassword).trim() !== String(configData.adminPassword).trim()) {
+          return res.status(401).json({
+            success: false,
+            error: 'Security Password Verification Failed: Invalid Admin Password.',
+          });
+        }
+      }
+
+      // Map options to collection lists
+      const collectionsToPurge: string[] = [];
+
+      if (options.users) {
+        collectionsToPurge.push('users', 'userDeleteLogs');
+      }
+      if (options.wallet) {
+        collectionsToPurge.push('transactions', 'walletTransactions', 'ledger');
+      }
+      if (options.giveaways) {
+        collectionsToPurge.push('giveaways', 'contestants', 'entries', 'voteLogs', 'voteLinks', 'claimLogs', 'wars', 'contestRegistrations', 'contests');
+      }
+      if (options.referrals) {
+        collectionsToPurge.push('referralTokens', 'referralLogs', 'milestoneTokens', 'milestoneClaimRecords');
+      }
+      if (options.notifications) {
+        collectionsToPurge.push('notifications', 'broadcasts', 'feedbackOtps', 'feedbackReviews');
+      }
+      if (options.taskProgress) {
+        collectionsToPurge.push('tasks', 'taskProgress', 'userTasks', 'logs');
+      }
+      if (options.userSessions) {
+        collectionsToPurge.push('sessions', 'otps');
+      }
+      if (options.deviceFingerprints) {
+        collectionsToPurge.push('deviceFingerprints', 'bannedDevices');
+      }
+      if (options.withdraws) {
+        collectionsToPurge.push('withdrawals', 'withdrawRequests');
+      }
+
+      if (actionType === 'RESET_PLATFORM') {
+        // Platform reset also clears operational event history
+        const resetAdditions = ['feedbackCampaigns', 'retentionCampaigns', 'incidentAlerts', 'autoRewardRules', 'liveRedeemEventsHistory'];
+        resetAdditions.forEach(c => {
+          if (!collectionsToPurge.includes(c)) collectionsToPurge.push(c);
+        });
+      }
+
+      // Deduplicate collection names
+      const uniqueCollections = Array.from(new Set(collectionsToPurge));
+
+      console.log(`[BULK DELETE SYSTEM] Action: ${actionType} | Admin: ${adminId} | Target Collections (${uniqueCollections.length}):`, uniqueCollections);
+
+      const collectionCounts: Record<string, number> = {};
+      let grandTotalDeleted = 0;
+
+      for (const colName of uniqueCollections) {
+        if (PROTECTED_SYSTEM_COLLECTIONS.includes(colName)) continue;
+        const count = await safePurgeCollection(colName);
+        collectionCounts[colName] = count;
+        grandTotalDeleted += count;
+      }
+
+      const nowIso = new Date().toISOString();
+      const auditLogRef = await addDoc(collection(db, 'auditLogs'), {
+        action: actionType,
+        adminId,
+        adminName: 'Super Admin',
+        ip: clientIp,
+        totalDeleted: grandTotalDeleted,
+        collectionsDeleted: collectionCounts,
+        optionsSelected: options,
+        timestamp: nowIso,
+        createdAt: nowIso,
+      });
+
+      await addDoc(collection(db, 'adminLogs'), {
+        action: actionType,
+        adminId,
+        adminName: 'Super Admin',
+        target: 'ALL_USERS_AND_PLATFORM_DATA',
+        reason: `Super Admin ${actionType} Executed Successfully`,
+        totalDeleted: grandTotalDeleted,
+        auditLogId: auditLogRef.id,
+        timestamp: nowIso,
+        createdAt: nowIso,
+      });
+
+      console.log(`[BULK DELETE SYSTEM] Completed successfully! Grand Total Deleted: ${grandTotalDeleted} docs across ${Object.keys(collectionCounts).length} collections.`);
+
+      return res.json({
+        success: true,
+        actionType,
+        grandTotalDeleted,
+        collectionCounts,
+        auditLogId: auditLogRef.id,
+        timestamp: nowIso,
+        message: actionType === 'RESET_PLATFORM'
+          ? 'Platform Reset Completed Successfully! All user data removed while Admin Config & Protected Settings remain intact.'
+          : 'Delete All Users System Executed Successfully! All selected user data collections purged.',
+      });
+    } catch (err: any) {
+      console.error('[BULK DELETE SYSTEM ERROR]', err);
+      return res.status(500).json({ success: false, error: err.message || 'Bulk deletion failed.' });
+    }
+  });
+
   // Load Admin Config (Protected)
   app.get('/api/admin/config', requireAdminSession, async (req, res) => {
     try {
@@ -6112,11 +6556,13 @@ Claim now and don't forget to share your screenshot!`;
       else if (activityScore >= 500) { levelBadge = '🥇 Elite'; levelTitle = 'ELITE'; }
       else if (activityScore >= 200) { levelBadge = '🥈 Pro'; levelTitle = 'PRO'; }
 
+      const isBanned = Boolean(userData.banned === true || userData.status === 'banned' || userData.isBanned === true || userData.status === 'blocked');
+
       const profile = {
         appUid: finalAppUid,
         uid: finalUid,
         telegramId,
-        userName: userData.userName || userData.name || `User #${telegramId}`,
+        userName: userData.userName || userData.name || userData.firstName || `User #${telegramId}`,
         avatar: userData.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${telegramId}`,
         levelBadge,
         levelTitle,
@@ -6125,8 +6571,12 @@ Claim now and don't forget to share your screenshot!`;
         votes: userData.votesCount || 3,
         rewardsEarned: totalRewards || userData.balance || 50,
         fastestTypingSpeedSec: fastestSpeed,
-        securityBadge: 'TRUSTED',
-        securityScore: 98,
+        securityBadge: isBanned ? 'SUSPENDED' : 'TRUSTED',
+        securityScore: isBanned ? 0 : 98,
+        status: isBanned ? 'banned' : (userData.status || 'active'),
+        banned: isBanned,
+        isBanned: isBanned,
+        banReason: userData.banReason || 'Violation of Bot Rules',
         referralCount: userData.referralsCount || 0,
         walletBalance: Number(userData.walletBalance) || Number(userData.balance) || 0,
         coinsBalance: Number(userData.coinsBalance) || 0,

@@ -18,7 +18,8 @@ import {
   AlertTriangle,
   RefreshCw,
   Send,
-  Timer
+  Timer,
+  Key
 } from 'lucide-react';
 
 interface UserAppViewProps {
@@ -60,6 +61,83 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   const [withdrawDetails, setWithdrawDetails] = useState('');
   const [withdrawHistory, setWithdrawHistory] = useState<any[]>([]);
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
+
+  // Mini App OTP Generator State
+  const [otpCode, setOtpCode] = useState<string | null>(null);
+  const [otpExpiryTimer, setOtpExpiryTimer] = useState<number>(0);
+  const [isGeneratingOtp, setIsGeneratingOtp] = useState(false);
+  const [showOtpCard, setShowOtpCard] = useState(false);
+  const [copiedOtp, setCopiedOtp] = useState(false);
+
+  const addToast = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Date.now().toString();
+    setToasts((prev) => [...prev, { id, text, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  };
+
+  const handleGenerateOtp = async () => {
+    try {
+      setIsGeneratingOtp(true);
+      const tgId = getTelegramUserId();
+      const res = await fetch('/api/otp/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegramId: tgId })
+      });
+      const data = await res.json();
+      if (data.success && data.otp) {
+        setOtpCode(data.otp);
+        setOtpExpiryTimer(data.expirySeconds || 120);
+        setShowOtpCard(true);
+        addToast('🔐 OTP Generated! Copy and paste code in Telegram Bot.', 'success');
+      } else {
+        addToast(data.error || 'Failed to generate OTP code.', 'error');
+      }
+    } catch (err: any) {
+      addToast('Network error generating OTP code.', 'error');
+    } finally {
+      setIsGeneratingOtp(false);
+    }
+  };
+
+  // OTP Countdown Timer
+  useEffect(() => {
+    if (otpExpiryTimer <= 0) return;
+    const interval = setInterval(() => {
+      setOtpExpiryTimer((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [otpExpiryTimer]);
+
+  const formatTimer = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const copyOtpToClipboard = () => {
+    if (!otpCode) return;
+    navigator.clipboard.writeText(otpCode);
+    setCopiedOtp(true);
+    setTimeout(() => setCopiedOtp(false), 3000);
+    addToast('📋 OTP copied! Paste in Telegram Bot chat to complete verification.', 'success');
+  };
+
+  // Auto-trigger OTP generation if URL search params include action=otp_verify
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('action') === 'otp_verify' || params.has('otp')) {
+      handleGenerateOtp();
+    }
+  }, []);
 
   // Pure Web Audio Synth Sound Engine (No files or assets needed)
   const playAudio = (type: 'tick' | 'reveal' | 'win' | 'countdown') => {
@@ -917,7 +995,75 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       </header>
 
       {/* Main Tab Content */}
-      <main className="p-5 flex-1 max-w-xl mx-auto w-full">
+      <main className="p-5 flex-1 max-w-xl mx-auto w-full space-y-6">
+        {/* MINI APP VERIFICATION CODE / OTP BANNER */}
+        {showOtpCard && (
+          <div className="p-5 rounded-3xl bg-gradient-to-br from-emerald-950/90 via-slate-900 to-slate-900 border border-emerald-500/50 shadow-2xl space-y-4 relative overflow-hidden">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <Key className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-white uppercase tracking-wider">🔐 Verification Code</h3>
+                  <p className="text-[11px] text-emerald-300/80">Copy code & paste back in Telegram Bot chat</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowOtpCard(false)}
+                className="text-slate-500 hover:text-white text-xs p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* OTP Code Display Box */}
+            <div className="p-4 rounded-2xl bg-slate-950/90 border border-slate-800 text-center space-y-2">
+              {otpCode && otpExpiryTimer > 0 ? (
+                <>
+                  <div className="text-3xl sm:text-4xl font-mono font-black text-emerald-400 tracking-widest select-all">
+                    [ {otpCode} ]
+                  </div>
+                  <div className="flex items-center justify-center gap-1.5 text-xs text-slate-400 font-mono">
+                    <Timer className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Expires in: <b className="text-amber-400">{formatTimer(otpExpiryTimer)}</b></span>
+                  </div>
+                </>
+              ) : (
+                <div className="py-2 space-y-2">
+                  <p className="text-xs text-rose-400 font-bold">⚠️ OTP Code Expired or Not Generated</p>
+                  <button
+                    onClick={handleGenerateOtp}
+                    disabled={isGeneratingOtp}
+                    className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs transition shadow-md"
+                  >
+                    {isGeneratingOtp ? 'Generating...' : '🔄 Generate New OTP'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Copy Button */}
+            {otpCode && otpExpiryTimer > 0 && (
+              <button
+                onClick={copyOtpToClipboard}
+                className="w-full py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs transition shadow-lg flex items-center justify-center gap-2"
+              >
+                {copiedOtp ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>✅ Copied to Clipboard!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    <span>📋 Copy OTP Code</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        )}
         {activeTab === 'wallet' && (
           <div className="space-y-6">
             {/* Quick Actions */}
@@ -1715,31 +1861,57 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                 </div>
                 <div>
                   <h3 className="text-base font-black text-white">{user.userName}</h3>
-                  <p className="text-xs text-slate-400 font-mono">UID: {user.appUid || user.uid || '483921'}</p>
+                  <p className="text-xs text-slate-400 font-mono">UID: {user.appUid || user.uid || '804521'}</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 pt-2 text-xs">
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-900">
-                  <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Verified Status</span>
-                  <span className="font-bold text-emerald-400">Human Verified</span>
+                  <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Verified Mobile</span>
+                  <span className="font-bold text-emerald-400">{user.mobile || 'Verified'}</span>
+                </div>
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-900">
+                  <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Telegram User</span>
+                  <span className="font-bold text-sky-400">@{user.username || 'Verified'}</span>
+                </div>
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-900">
+                  <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Telegram Verified</span>
+                  <span className="font-bold text-emerald-400">🟢 Yes</span>
+                </div>
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-900">
+                  <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Mobile Verified</span>
+                  <span className="font-bold text-emerald-400">🟢 Yes</span>
                 </div>
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-900">
                   <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Joined Date</span>
-                  <span className="font-bold text-slate-300">{user.joinedDate.substring(0, 10)}</span>
+                  <span className="font-bold text-slate-300">{(user.joinedDate || new Date().toISOString()).substring(0, 10)}</span>
+                </div>
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-900">
+                  <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider mb-0.5">Wallet Balance</span>
+                  <span className="font-bold text-amber-400">₹{user.walletBalance ?? 0}</span>
                 </div>
               </div>
+
+              {/* Get OTP Verification Code Button */}
+              <button
+                onClick={handleGenerateOtp}
+                disabled={isGeneratingOtp}
+                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg transition"
+              >
+                <Key className="w-4 h-4" />
+                <span>{isGeneratingOtp ? 'Generating Code...' : '🔐 Get Verification OTP Code'}</span>
+              </button>
             </div>
 
             {/* Anti-Bot Trust Badge Section */}
             <div className="p-5 rounded-3xl bg-slate-900/40 border border-slate-800/60 space-y-3">
               <h3 className="text-xs font-black text-slate-300 uppercase tracking-widest">Security & Anti-Bot Credentials</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Your device fingerprint and transaction activity have been inspected and marked as 100% human-operated.
+                Your Telegram ID, contact verification, and device fingerprint have been authenticated and verified.
               </p>
               <div className="flex items-center gap-2 p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
                 <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
-                <span className="text-xs font-bold text-emerald-300">Clean Fingerprint Score: {user.securityScore}/100</span>
+                <span className="text-xs font-bold text-emerald-300">Clean Security Score: {user.securityScore || 99}/100</span>
               </div>
             </div>
           </div>

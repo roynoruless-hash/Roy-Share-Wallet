@@ -70,6 +70,14 @@ export const DEFAULT_CONFIG: AdminConfig = {
   diagnosticError: '',
   imgbbApiKey: '',
 
+  // OTP & Account Security Settings
+  otpLength: 6,
+  otpExpiry: 120,
+  allowDeviceLimit: true,
+  maxAccountsPerDevice: 1,
+  contactVerificationRequired: true,
+  telegramVerificationRequired: true,
+
   // Metadata
   updatedAt: new Date().toISOString(),
   verificationVersion: 1,

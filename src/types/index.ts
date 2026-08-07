@@ -80,6 +80,14 @@ export interface AdminConfig {
   diagnosticError?: string;
   imgbbApiKey?: string;
 
+  // OTP & Account Security Settings
+  otpLength?: number;
+  otpExpiry?: number;
+  allowDeviceLimit?: boolean;
+  maxAccountsPerDevice?: number;
+  contactVerificationRequired?: boolean;
+  telegramVerificationRequired?: boolean;
+
   // Metadata
   updatedAt?: string;
   verificationVersion?: number;
@@ -409,12 +417,21 @@ export interface BotUser {
   telegramId: string;
   username?: string;
   firstName: string;
+  lastName?: string;
   mobile: string;
+  mobileVerified?: boolean;
+  telegramVerified?: boolean;
   walletBalance: number;
+  coins?: number;
+  bonus?: number;
+  securityScore?: number;
+  deviceFingerprint?: string;
   channelVerified: boolean;
   groupVerified: boolean;
   createdAt: string;
+  joinDate?: string;
   lastActive?: string;
+  lastLogin?: string;
   referrerUid?: string;
   referredBy?: string;
   referralRewardReceived?: boolean;
