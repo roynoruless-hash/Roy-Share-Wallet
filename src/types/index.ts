@@ -404,6 +404,7 @@ export interface AIBroadcastItem {
 
 export interface BotUser {
   id: string;
+  appUid?: string;
   uid: string;
   telegramId: string;
   username?: string;

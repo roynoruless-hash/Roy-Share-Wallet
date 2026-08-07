@@ -527,9 +527,9 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
                         🆔 UID:
                       </span>
                       <span className="font-mono font-bold text-white flex items-center gap-1">
-                        <code>{user.uid}</code>
+                        <code>{user.appUid || user.uid}</code>
                         <button
-                          onClick={() => copyToClipboard(user.uid, 'UID')}
+                          onClick={() => copyToClipboard(user.appUid || user.uid, 'UID')}
                           className="hover:text-sky-400 text-slate-500 p-0.5"
                           title="Copy UID"
                         >
@@ -617,7 +617,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
                     </span>
                   </div>
                   <p className="text-xs text-slate-400">
-                    UID: <code className="text-sky-400 font-mono">{selectedUser.uid}</code> | Telegram ID: <code className="text-slate-300 font-mono">{selectedUser.telegramId}</code>
+                    UID: <code className="text-sky-400 font-mono">{selectedUser.appUid || selectedUser.uid}</code> | Telegram ID: <code className="text-slate-300 font-mono">{selectedUser.telegramId}</code>
                   </p>
                 </div>
               </div>
@@ -842,7 +842,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
             </div>
 
             <div className="text-xs text-slate-300">
-              Target User: <b className="text-white">{selectedUser.firstName}</b> (UID: <code className="text-sky-400">{selectedUser.uid}</code>)
+              Target User: <b className="text-white">{selectedUser.firstName}</b> (UID: <code className="text-sky-400">{selectedUser.appUid || selectedUser.uid}</code>)
             </div>
 
             <div className="space-y-3">
@@ -981,7 +981,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
             </div>
 
             <div className="text-xs text-slate-300">
-              Are you sure you want to suspend user <b className="text-white">{selectedUser.firstName}</b> (UID: <code className="text-sky-400">{selectedUser.uid}</code>)?
+              Are you sure you want to suspend user <b className="text-white">{selectedUser.firstName}</b> (UID: <code className="text-sky-400">{selectedUser.appUid || selectedUser.uid}</code>)?
             </div>
 
             <div>
@@ -1035,7 +1035,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
             </div>
 
             <div className="text-xs text-slate-300">
-              Re-activate account for <b className="text-white">{selectedUser.firstName}</b> (UID: <code className="text-sky-400">{selectedUser.uid}</code>)?
+              Re-activate account for <b className="text-white">{selectedUser.firstName}</b> (UID: <code className="text-sky-400">{selectedUser.appUid || selectedUser.uid}</code>)?
             </div>
 
             <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300">
@@ -1143,7 +1143,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ config, 
             <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs text-slate-300">
               <div className="font-bold text-white text-sm pb-1 border-b border-slate-800 flex justify-between">
                 <span>👤 {selectedUser.firstName}</span>
-                <span className="text-sky-400 font-mono">UID: {selectedUser.uid}</span>
+                <span className="text-sky-400 font-mono">UID: {selectedUser.appUid || selectedUser.uid}</span>
               </div>
               <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
                 <div>📱 Mobile: <b className="text-slate-200">{selectedUser.mobile || 'N/A'}</b></div>

@@ -109,7 +109,7 @@ export async function sendAdminWithdrawalNotification(
   const text =
     `💸 <b>New Withdrawal Request</b>\n\n` +
     `👤 <b>Name:</b> ${userData.firstName || userData.name || 'User'}\n` +
-    `🆔 <b>UID:</b> <code>${userData.uid}</code>\n` +
+    `🆔 <b>UID:</b> <code>${userData.appUid || userData.uid}</code>\n` +
     `📱 <b>Mobile:</b> <code>${userData.mobile || 'N/A'}</code>\n` +
     `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n\n` +
     `💸 <b>Requested Amount:</b> ₹${requestedAmount}\n` +
@@ -276,7 +276,7 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
         `🟢 <b>Approved</b>\n\n` +
         `💸 <b>Withdrawal Request Processed</b>\n\n` +
         `👤 <b>Name:</b> ${wData.userName || 'User'}\n` +
-        `🆔 <b>UID:</b> <code>${wData.uid}</code>\n` +
+        `🆔 <b>UID:</b> <code>${wData.appUid || wData.uid}</code>\n` +
         `📱 <b>Mobile:</b> <code>${wData.mobile || 'N/A'}</code>\n` +
         `💰 <b>Wallet Balance:</b> ₹${freshUserBal}\n\n` +
         `💸 <b>Requested Amount:</b> ₹${requestedAmount}\n` +
@@ -575,7 +575,7 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
       const profileText =
         `👤 <b>Complete User Profile</b>\n\n` +
         `👤 <b>Name:</b> ${userData.firstName || userData.name || 'User'}\n` +
-        `🆔 <b>UID:</b> <code>${userData.uid}</code>\n` +
+        `🆔 <b>UID:</b> <code>${userData.appUid || userData.uid}</code>\n` +
         `📱 <b>Mobile:</b> <code>${userData.mobile || 'N/A'}</code>\n` +
         `🤖 <b>Telegram ID:</b> <code>${userData.telegramId || 'N/A'}</code>\n` +
         `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n` +
@@ -917,7 +917,7 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
           `🟢 <b>Approved</b>\n\n` +
           `💸 <b>Withdrawal Request Processed</b>\n\n` +
           `👤 <b>Name:</b> ${wData.userName || 'User'}\n` +
-          `🆔 <b>UID:</b> <code>${wData.uid}</code>\n` +
+          `🆔 <b>UID:</b> <code>${wData.appUid || wData.uid}</code>\n` +
           `📱 <b>Mobile:</b> <code>${userData.mobile || 'N/A'}</code>\n` +
           `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n\n` +
           `💸 <b>Requested Amount:</b> ₹${requestedAmount}\n` +
@@ -1004,7 +1004,7 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
       const pendingText =
         `💸 <b>New Withdrawal Request</b>\n\n` +
         `👤 <b>Name:</b> ${userData.firstName || userData.name || wData.userName || 'User'}\n` +
-        `🆔 <b>UID:</b> <code>${userData.uid}</code>\n` +
+        `🆔 <b>UID:</b> <code>${userData.appUid || userData.uid}</code>\n` +
         `📱 <b>Mobile:</b> <code>${userData.mobile || 'N/A'}</code>\n` +
         `💰 <b>Wallet Balance:</b> ₹${userData.walletBalance || 0}\n\n` +
         `💸 <b>Requested Amount:</b> ₹${requestedAmountPending}\n` +

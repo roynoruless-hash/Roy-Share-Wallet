@@ -384,19 +384,24 @@ async function getAdminConfig(): Promise<Record<string, any> | null> {
  */
 export async function getUserByTelegramId(telegramId: string) {
   try {
+    const tgStr = String(telegramId).trim();
     const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('telegramId', '==', String(telegramId)));
+    const q = query(usersRef, where('telegramId', '==', tgStr));
     const querySnapshot = await getDocs(q);
     if (!querySnapshot.empty) {
       const docSnap = querySnapshot.docs[0];
       const data = docSnap.data();
-      if (!data.uid) {
-        const uid = await generateUniqueUid();
-        await setDoc(doc(db, 'users', docSnap.id), { uid }, { merge: true });
-        console.log(`[Lazy Migration] Assigned missing UID ${uid} to user ID ${docSnap.id}`);
-        return { id: docSnap.id, ...data, uid } as any;
+      const currentAppUid = data.appUid ? String(data.appUid).trim() : '';
+      const currentUid = data.uid ? String(data.uid).trim() : '';
+
+      const needsUidFix = !currentAppUid || currentAppUid === tgStr || currentUid === tgStr || !currentUid;
+      if (needsUidFix) {
+        const newUid = await generateUniqueUid();
+        await setDoc(doc(db, 'users', docSnap.id), { appUid: newUid, uid: newUid }, { merge: true });
+        console.log(`[Auto-Repair UID] Assigned separate appUid ${newUid} to user ID ${docSnap.id} (telegramId: ${tgStr})`);
+        return { id: docSnap.id, ...data, appUid: newUid, uid: newUid } as any;
       }
-      return { id: docSnap.id, ...data } as any;
+      return { id: docSnap.id, ...data, appUid: currentAppUid || currentUid } as any;
     }
   } catch (err) {
     console.error('Error fetching user by telegramId:', err);
@@ -410,11 +415,18 @@ export async function getUserByTelegramId(telegramId: string) {
 export async function getUserByUid(uid: string) {
   if (!uid) return null;
   try {
+    const searchStr = String(uid).trim();
     const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('uid', '==', String(uid).trim()));
-    const querySnapshot = await getDocs(q);
-    if (!querySnapshot.empty) {
-      const docSnap = querySnapshot.docs[0];
+    const qApp = query(usersRef, where('appUid', '==', searchStr));
+    const snapApp = await getDocs(qApp);
+    if (!snapApp.empty) {
+      const docSnap = snapApp.docs[0];
+      return { id: docSnap.id, ...docSnap.data() } as any;
+    }
+    const qUid = query(usersRef, where('uid', '==', searchStr));
+    const snapUid = await getDocs(qUid);
+    if (!snapUid.empty) {
+      const docSnap = snapUid.docs[0];
       return { id: docSnap.id, ...docSnap.data() } as any;
     }
   } catch (err) {
@@ -435,15 +447,17 @@ async function generateUniqueUid(): Promise<string> {
   let exists = true;
   let attempts = 0;
 
-  while (exists && attempts < 10) {
+  while (exists && attempts < 25) {
     const min = Math.pow(10, len - 1);
     const max = Math.pow(10, len) - 1;
     uid = Math.floor(min + Math.random() * (max - min + 1)).toString();
     attempts++;
     try {
-      const q = query(collection(db, 'users'), where('uid', '==', uid));
-      const snap = await getDocs(q);
-      if (snap.empty) {
+      const qApp = query(collection(db, 'users'), where('appUid', '==', uid));
+      const snapApp = await getDocs(qApp);
+      const qUid = query(collection(db, 'users'), where('uid', '==', uid));
+      const snapUid = await getDocs(qUid);
+      if (snapApp.empty && snapUid.empty) {
         exists = false;
       }
     } catch (e) {
@@ -2341,6 +2355,7 @@ Final Payout: ₹${payoutAmount}`);
     const referralReward = Number(adminConfig?.rewardPerReferral ?? adminConfig?.referralBonus ?? 5);
 
     const newUserData: Record<string, any> = {
+      appUid: uid,
       uid,
       telegramId: String(chatId),
       username: message.from.username ? `@${message.from.username.replace('@', '')}` : '',

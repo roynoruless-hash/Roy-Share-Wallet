@@ -12,10 +12,17 @@ export async function fetchUsersFromDb(): Promise<BotUser[]> {
     const users: BotUser[] = [];
     querySnapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      const tgId = String(data.telegramId || '').trim();
+      const rawAppUid = data.appUid ? String(data.appUid).trim() : '';
+      const rawUid = data.uid ? String(data.uid).trim() : '';
+      const finalAppUid = rawAppUid && rawAppUid !== tgId ? rawAppUid : (rawUid && rawUid !== tgId ? rawUid : '');
+      const finalUid = finalAppUid || rawUid;
+
       users.push({
         id: docSnap.id,
-        uid: data.uid || '',
-        telegramId: String(data.telegramId || ''),
+        appUid: finalAppUid,
+        uid: finalUid,
+        telegramId: tgId,
         username: data.username || '',
         firstName: data.firstName || 'User',
         mobile: data.mobile || 'N/A',

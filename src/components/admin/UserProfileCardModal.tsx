@@ -123,6 +123,10 @@ export const UserProfileCardModal: React.FC<UserProfileCardModalProps> = ({ tele
               {/* Detailed Info */}
               <div className="space-y-2.5 bg-slate-950/20 p-4 rounded-2xl border border-slate-800/60 font-mono text-[11px]">
                 <div className="flex items-center justify-between py-1 border-b border-slate-800/40">
+                  <span className="text-slate-500">App UID</span>
+                  <span className="text-sky-400 font-bold select-all">{user.appUid || user.uid || 'N/A'}</span>
+                </div>
+                <div className="flex items-center justify-between py-1 border-b border-slate-800/40">
                   <span className="text-slate-500">Telegram ID</span>
                   <span className="text-slate-300 select-all">{user.telegramId || 'N/A'}</span>
                 </div>

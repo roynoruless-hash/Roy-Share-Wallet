@@ -193,8 +193,10 @@ export async function processReferralVerification(params: VerifyReferralParams) 
 
     // Check referrer's Telegram ID
     let referrerTelegramId = '';
-    const referrerQuery = query(collection(db, 'users'), where('uid', '==', String(referrerUid)));
-    const referrerSnap = await getDocs(referrerQuery);
+    let referrerSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', String(referrerUid))));
+    if (referrerSnap.empty) {
+      referrerSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', String(referrerUid))));
+    }
     if (!referrerSnap.empty) {
       const refUser = referrerSnap.docs[0].data();
       referrerTelegramId = String(refUser.telegramId || '');
@@ -232,8 +234,10 @@ export async function processReferralVerification(params: VerifyReferralParams) 
     }
 
     // Check C: Already Rewarded Check
-    const referredQuery = query(collection(db, 'users'), where('uid', '==', String(referredUid)));
-    const referredSnap = await getDocs(referredQuery);
+    let referredSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', String(referredUid))));
+    if (referredSnap.empty) {
+      referredSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', String(referredUid))));
+    }
     let referredDocRef: any = null;
     if (!referredSnap.empty) {
       referredDocRef = doc(db, 'users', referredSnap.docs[0].id);

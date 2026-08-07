@@ -467,12 +467,17 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       if (!snapshot.empty) {
         const userDoc = snapshot.docs[0];
         const data = userDoc.data();
+        const rawAppUid = data.appUid ? String(data.appUid).trim() : '';
+        const rawUid = data.uid ? String(data.uid).trim() : '';
+        const cleanUid = (rawAppUid && rawAppUid !== tgId) ? rawAppUid : ((rawUid && rawUid !== tgId) ? rawUid : '');
+
         setUser((prev: any) => ({
           ...prev,
           ...data,
           id: userDoc.id, // Store the real document ID
           telegramId: tgId,
-          uid: data.uid || '',
+          appUid: cleanUid || data.appUid || data.uid || '',
+          uid: cleanUid || data.uid || data.appUid || '',
           userName: data.userName || data.name || data.firstName || `User #${tgId}`,
           avatar: data.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
           walletBalance: Number(data.walletBalance) || Number(data.balance) || 0,
@@ -645,7 +650,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           randStr += characters.charAt(Math.floor(Math.random() * characters.length));
         }
         const withdrawalId = `WD${randStr}`;
-        const finalUid = userData.uid || user?.uid || tgId;
+        const finalUid = userData.appUid || user?.appUid || userData.uid || user?.uid || '';
 
         // Create withdrawal record in withdraw_requests (as required)
         const withdrawRequestsRef = doc(collection(db, 'withdraw_requests'));
@@ -1710,7 +1715,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                 </div>
                 <div>
                   <h3 className="text-base font-black text-white">{user.userName}</h3>
-                  <p className="text-xs text-slate-400 font-mono">UID: {user.uid || '866114'}</p>
+                  <p className="text-xs text-slate-400 font-mono">UID: {user.appUid || user.uid || '483921'}</p>
                 </div>
               </div>
 

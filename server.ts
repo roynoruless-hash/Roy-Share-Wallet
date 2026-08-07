@@ -5973,8 +5973,51 @@ Claim now and don't forget to share your screenshot!`;
   app.get('/api/user-profile', async (req, res) => {
     try {
       const telegramId = String(req.query.telegramId || 'guest_user').trim();
-      const userDoc = await getDoc(doc(db, 'users', telegramId));
-      const userData = userDoc.exists() ? userDoc.data() : {};
+      let userDocRef = doc(db, 'users', telegramId);
+      let userDoc = await getDoc(userDocRef);
+      let userData: any = userDoc.exists() ? userDoc.data() : null;
+
+      if (!userData) {
+        const qUser = query(collection(db, 'users'), where('telegramId', '==', telegramId));
+        const snap = await getDocs(qUser);
+        if (!snap.empty) {
+          userDocRef = doc(db, 'users', snap.docs[0].id);
+          userData = snap.docs[0].data();
+        } else {
+          userData = {};
+        }
+      }
+
+      // Check if user needs UID repair
+      let finalAppUid = userData.appUid ? String(userData.appUid).trim() : '';
+      let finalUid = userData.uid ? String(userData.uid).trim() : '';
+
+      if (!finalAppUid || finalAppUid === telegramId || finalUid === telegramId || !finalUid) {
+        // Generate a new 6-digit numeric UID
+        const configDoc = await getDoc(doc(db, 'settings', 'config'));
+        const configData = configDoc.exists() ? configDoc.data() : {};
+        let len = Number(configData?.uidLength) || 6;
+        len = Math.min(12, Math.max(4, len));
+
+        let newUid = '';
+        let attempts = 0;
+        while (attempts < 20) {
+          const min = Math.pow(10, len - 1);
+          const max = Math.pow(10, len) - 1;
+          newUid = Math.floor(min + Math.random() * (max - min + 1)).toString();
+          if (newUid !== telegramId) break;
+          attempts++;
+        }
+        if (!newUid) newUid = String(Date.now()).slice(-len);
+
+        finalAppUid = newUid;
+        finalUid = newUid;
+
+        if (userDocRef) {
+          await setDoc(userDocRef, { appUid: newUid, uid: newUid }, { merge: true });
+          console.log(`[/api/user-profile] Auto-repaired appUid for user ${telegramId} -> ${newUid}`);
+        }
+      }
 
       const redeemSnap = await getDocs(collection(db, 'liveRedeemEventsHistory'));
       let redeemWins = 0;
@@ -6005,6 +6048,8 @@ Claim now and don't forget to share your screenshot!`;
       else if (activityScore >= 200) { levelBadge = '🥈 Pro'; levelTitle = 'PRO'; }
 
       const profile = {
+        appUid: finalAppUid,
+        uid: finalUid,
         telegramId,
         userName: userData.userName || userData.name || `User #${telegramId}`,
         avatar: userData.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${telegramId}`,
@@ -6030,6 +6075,15 @@ Claim now and don't forget to share your screenshot!`;
       };
 
       return res.json({ success: true, profile });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/admin/migrate-uids', async (req, res) => {
+    try {
+      const count = await migrateMissingUserUids();
+      return res.json({ success: true, migratedCount: count, message: `Successfully migrated ${count} users with distinct appUid!` });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
@@ -7142,44 +7196,65 @@ async function migrateMissingUserUids() {
     len = Math.min(12, Math.max(4, len));
 
     const usersSnap = await getDocs(collection(db, 'users'));
-    const users = usersSnap.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+    const users = usersSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() as any }));
 
     const existingUids = new Set<string>();
     users.forEach(u => {
-      if (u.uid) {
+      const tgId = String(u.telegramId || u.id || '').trim();
+      if (u.appUid && String(u.appUid).trim() !== tgId) {
+        existingUids.add(String(u.appUid).trim());
+      }
+      if (u.uid && String(u.uid).trim() !== tgId) {
         existingUids.add(String(u.uid).trim());
       }
     });
 
     let migratedCount = 0;
     for (const user of users) {
-      if (!user.uid) {
+      const tgId = String(user.telegramId || user.id || '').trim();
+      const currentAppUid = String(user.appUid || '').trim();
+      const currentUid = String(user.uid || '').trim();
+
+      const needsMigration =
+        !currentAppUid ||
+        currentAppUid === tgId ||
+        currentUid === tgId ||
+        !currentUid;
+
+      if (needsMigration) {
         // Generate a unique numeric UID
-        let uid = '';
+        let newUid = '';
         let exists = true;
         let attempts = 0;
-        while (exists && attempts < 20) {
+        while (exists && attempts < 50) {
           const min = Math.pow(10, len - 1);
           const max = Math.pow(10, len) - 1;
-          uid = Math.floor(min + Math.random() * (max - min + 1)).toString();
-          if (!existingUids.has(uid)) {
+          newUid = Math.floor(min + Math.random() * (max - min + 1)).toString();
+          if (!existingUids.has(newUid) && newUid !== tgId) {
             exists = false;
           }
           attempts++;
         }
-        if (!uid) {
-          uid = String(Date.now()).slice(-len);
+        if (!newUid || newUid === tgId) {
+          newUid = String(Date.now()).slice(-len);
         }
 
-        existingUids.add(uid);
-        await updateDoc(doc(db, 'users', user.id), { uid });
-        console.log(`[Migration] Migrated user ${user.id} (${user.firstName || 'User'}) with new UID: ${uid}`);
+        existingUids.add(newUid);
+        await setDoc(doc(db, 'users', user.id), {
+          appUid: newUid,
+          uid: newUid,
+          telegramId: tgId || user.id
+        }, { merge: true });
+
+        console.log(`[Migration] Migrated user ${user.id} (${user.firstName || 'User'}). Set appUid & uid = ${newUid} (telegramId: ${tgId})`);
         migratedCount++;
       }
     }
     console.log(`[Migration] App UID migration completed. Migrated ${migratedCount} users.`);
+    return migratedCount;
   } catch (err) {
     console.error('[Migration] App UID migration failed:', err);
+    return 0;
   }
 }
 
