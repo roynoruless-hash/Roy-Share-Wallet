@@ -810,6 +810,11 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           }));
           setIsRegistered(true);
           setRegistrationState('ACTIVE');
+        } else {
+          setIsRegistered(false);
+          setUser(null);
+          setRegistrationState('UNREGISTERED');
+          setRegStep('DETAILS');
         }
       }, (err) => {
         console.error('Error listening to user doc:', err);

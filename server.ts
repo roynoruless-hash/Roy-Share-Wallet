@@ -3604,45 +3604,15 @@ Claim now and don't forget to share your screenshot!`;
         return res.json({ success: true, user: userData });
       }
 
-      // 4. BRAND NEW USER REGISTRATION - CREATE SINGLE DOCUMENT AT users/{telegramId}
-      const configDoc = await getDoc(doc(db, 'settings', 'config'));
-      const configData = configDoc.exists() ? configDoc.data() : {};
-      let len = Number(configData?.uidLength) || 6;
-      len = Math.min(12, Math.max(4, len));
-
-      let newUid = '';
-      let attempts = 0;
-      while (attempts < 20) {
-        const min = Math.pow(10, len - 1);
-        const max = Math.pow(10, len) - 1;
-        newUid = Math.floor(min + Math.random() * (max - min + 1)).toString();
-        if (newUid !== cleanTgId) break;
-        attempts++;
-      }
-      if (!newUid) newUid = String(Date.now()).slice(-len);
-
-      const fullUserName = firstName ? `${firstName} ${lastName || ''}`.trim() : (username ? `@${username}` : `User #${cleanTgId}`);
-      userData = {
-        appUid: newUid,
-        uid: newUid,
-        telegramId: cleanTgId,
-        username: username ? `@${username.replace('@', '')}` : '',
-        firstName: firstName || fullUserName,
-        lastName: lastName || '',
-        mobile: 'N/A',
-        walletBalance: 0,
-        status: 'active',
-        banned: false,
-        channelVerified: true,
-        groupVerified: true,
-        createdAt: nowStr,
-        lastActive: nowStr,
-      };
-
-      await setDoc(doc(db, 'users', cleanTgId), userData);
-      console.log(`[AUTO_LOGIN_SUCCESS] New Telegram user created in Firestore: ${cleanTgId} (UID: ${newUid})`);
-
-      return res.json({ success: true, user: userData });
+      // 4. UNREGISTERED USER - DO NOT CREATE ACCOUNT AUTOMATICALLY
+      console.log(`[WEBAPP_AUTH_UNREGISTERED] No registered account found for Telegram ID ${cleanTgId}`);
+      return res.json({
+        success: false,
+        isRegistered: false,
+        status: 'ACCOUNT_NOT_FOUND',
+        registrationState: 'UNREGISTERED',
+        message: 'No registered account found. Please complete registration to create your Roy Share account.'
+      });
     } catch (err: any) {
       console.error('[WEBAPP_AUTH] Error processing Telegram WebApp authentication:', err);
       return res.status(500).json({ success: false, error: err.message });
@@ -5720,10 +5690,19 @@ Claim now and don't forget to share your screenshot!`;
       if (targetDocId) {
         try {
           await deleteDoc(doc(db, 'users', targetDocId));
+          await deleteDoc(doc(db, 'registrationSessions', targetDocId));
         } catch (e) {}
       }
       await deleteMatchingDocs('users', 'uid', targetUid);
       await deleteMatchingDocs('users', 'telegramId', targetTelegramId);
+      if (targetTelegramId) {
+        try {
+          await deleteDoc(doc(db, 'registrationSessions', targetTelegramId));
+          await deleteDoc(doc(db, 'otps', targetTelegramId));
+        } catch (e) {}
+        await deleteMatchingDocs('registrationSessions', 'telegramId', targetTelegramId);
+        await deleteMatchingDocs('otps', 'telegramId', targetTelegramId);
+      }
       if (targetMobile && targetMobile !== 'N/A') {
         await deleteMatchingDocs('users', 'mobile', targetMobile);
       }
@@ -6486,15 +6465,8 @@ Claim now and don't forget to share your screenshot!`;
       let userDoc = await getDoc(userDocRef);
       let userData: any = userDoc.exists() ? userDoc.data() : null;
 
-      if (!userData) {
-        const qUser = query(collection(db, 'users'), where('telegramId', '==', telegramId));
-        const snap = await getDocs(qUser);
-        if (!snap.empty) {
-          userDocRef = doc(db, 'users', snap.docs[0].id);
-          userData = snap.docs[0].data();
-        } else {
-          userData = {};
-        }
+      if (!userData || !userData.telegramId) {
+        return res.status(404).json({ success: false, isRegistered: false, error: 'User account not found' });
       }
 
       // Check if user needs UID repair
@@ -8175,43 +8147,199 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
-  // 4. ADMIN DIAGNOSTIC LOOKUP ENDPOINT
-  app.post('/api/admin/diagnostic-lookup', async (req, res) => {
+  // 4. ACCOUNT STATUS CHECK ENDPOINT
+  app.all('/api/account/status', async (req, res) => {
     try {
-      const { telegramId } = req.body;
-      const cleanTgId = String(telegramId || '').trim();
+      let telegramId = '';
+      let initDataStr = '';
 
-      if (!cleanTgId) {
-        return res.status(400).json({ success: false, error: 'Telegram ID is required' });
+      if (req.method === 'GET') {
+        telegramId = String(req.query.telegramId || '').trim();
+        initDataStr = String(req.query.initData || '').trim();
+      } else {
+        telegramId = String(req.body?.telegramId || '').trim();
+        initDataStr = String(req.body?.initData || '').trim();
       }
 
-      const userDocRef = doc(db, 'users', cleanTgId);
-      const userSnap = await getDoc(userDocRef);
-      const sessionSnap = await getDoc(doc(db, 'registrationSessions', cleanTgId));
+      if (initDataStr) {
+        try {
+          const params = new URLSearchParams(initDataStr);
+          const userStr = params.get('user');
+          if (userStr) {
+            const parsed = JSON.parse(userStr);
+            if (parsed?.id) telegramId = String(parsed.id).trim();
+          }
+        } catch (e) {}
+      }
 
-      const accountExists = userSnap.exists();
-      const userData = accountExists ? userSnap.data() : null;
+      if (!telegramId) {
+        return res.json({
+          success: false,
+          status: 'INVALID_TELEGRAM_AUTH',
+          error: 'Telegram authentication required.'
+        });
+      }
+
+      // Query database using telegram_user_id
+      let userDocRef = doc(db, 'users', telegramId);
+      let userSnap = await getDoc(userDocRef);
+      let userData: any = userSnap.exists() ? userSnap.data() : null;
+
+      if (!userData) {
+        const qUser = query(collection(db, 'users'), where('telegramId', '==', telegramId));
+        const qSnap = await getDocs(qUser);
+        if (!qSnap.empty) {
+          const bannedDoc = qSnap.docs.find(d => {
+            const data = d.data();
+            return data.banned === true || data.status === 'banned' || data.isBanned === true || data.status === 'blocked';
+          });
+          const targetDoc = bannedDoc || qSnap.docs[0];
+          userData = targetDoc.data();
+        }
+      }
+
+      if (userData) {
+        const isBanned = Boolean(userData.banned === true || userData.status === 'banned' || userData.isBanned === true || userData.status === 'blocked');
+        if (isBanned) {
+          return res.json({
+            success: true,
+            status: 'ACCOUNT_BANNED',
+            isRegistered: false,
+            isBanned: true
+          });
+        }
+        return res.json({
+          success: true,
+          status: 'ACCOUNT_EXISTS',
+          isRegistered: true,
+          isBanned: false,
+          user: userData
+        });
+      }
+
+      return res.json({
+        success: true,
+        status: 'ACCOUNT_NOT_FOUND',
+        isRegistered: false,
+        isBanned: false
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 4B. ADMIN DIAGNOSTIC LOOKUP ENDPOINT
+  app.post('/api/admin/diagnostic-lookup', async (req, res) => {
+    try {
+      const qInput = String(req.body?.query || req.body?.telegramId || '').trim();
+
+      if (!qInput) {
+        return res.status(400).json({ success: false, error: 'Query term (Telegram ID, UID, Mobile, or Username) is required' });
+      }
+
+      let userDoc: any = null;
+      let userDocId = '';
+
+      // 1. Direct doc match users/{qInput}
+      const directSnap = await getDoc(doc(db, 'users', qInput));
+      if (directSnap.exists()) {
+        userDoc = directSnap.data();
+        userDocId = directSnap.id;
+      }
+
+      // 2. Query by telegramId
+      if (!userDoc) {
+        const snapTg = await getDocs(query(collection(db, 'users'), where('telegramId', '==', qInput)));
+        if (!snapTg.empty) {
+          userDoc = snapTg.docs[0].data();
+          userDocId = snapTg.docs[0].id;
+        }
+      }
+
+      // 3. Query by uid or appUid
+      if (!userDoc) {
+        const snapUid = await getDocs(query(collection(db, 'users'), where('uid', '==', qInput)));
+        if (!snapUid.empty) {
+          userDoc = snapUid.docs[0].data();
+          userDocId = snapUid.docs[0].id;
+        } else {
+          const snapAppUid = await getDocs(query(collection(db, 'users'), where('appUid', '==', qInput)));
+          if (!snapAppUid.empty) {
+            userDoc = snapAppUid.docs[0].data();
+            userDocId = snapAppUid.docs[0].id;
+          }
+        }
+      }
+
+      // 4. Query by mobile
+      if (!userDoc) {
+        const snapMobile = await getDocs(query(collection(db, 'users'), where('mobile', '==', qInput)));
+        if (!snapMobile.empty) {
+          userDoc = snapMobile.docs[0].data();
+          userDocId = snapMobile.docs[0].id;
+        }
+      }
+
+      // 5. Query by username
+      if (!userDoc) {
+        const cleanUn = qInput.replace(/^@/, '');
+        const snapUn = await getDocs(query(collection(db, 'users'), where('username', '==', `@${cleanUn}`)));
+        if (!snapUn.empty) {
+          userDoc = snapUn.docs[0].data();
+          userDocId = snapUn.docs[0].id;
+        }
+      }
+
+      const tgId = userDoc?.telegramId || qInput;
+
+      // Fetch pending session if any
+      const sessionSnap = await getDoc(doc(db, 'registrationSessions', tgId));
       const sessionData = sessionSnap.exists() ? sessionSnap.data() : null;
+
+      // Check user delete logs for last deletion
+      let lastDeletion: any = null;
+      try {
+        const delSnap = await getDocs(query(collection(db, 'userDeleteLogs'), where('telegramId', '==', tgId), limit(1)));
+        if (!delSnap.empty) {
+          lastDeletion = delSnap.docs[0].data()?.deletedAt || delSnap.docs[0].data()?.timestamp;
+        }
+      } catch (e) {}
+
+      const accountExists = Boolean(userDoc);
+      const isBanned = Boolean(userDoc?.banned || userDoc?.status === 'banned' || userDoc?.status === 'blocked');
 
       let registrationState = 'UNREGISTERED';
       if (accountExists) {
-        registrationState = (userData.banned || userData.status === 'banned') ? 'BANNED' : 'ACTIVE';
+        registrationState = isBanned ? 'BANNED' : 'ACTIVE';
       } else if (sessionData) {
-        if (sessionData.contactVerified && sessionData.otp) registrationState = 'OTP_PENDING';
+        if (sessionData.contactVerified) registrationState = 'OTP_PENDING';
         else if (sessionData.fullName) registrationState = 'PROFILE_SUBMITTED';
         else registrationState = 'REGISTRATION_STARTED';
       }
 
       return res.json({
         success: true,
-        telegramIdentity: cleanTgId ? 'Connected' : 'Failed',
-        registrationState,
-        telegramId: cleanTgId,
+        query: qInput,
+        telegramId: tgId,
         accountExists,
-        uid: userData?.uid || userData?.appUid || 'Not set',
-        mobileVerified: userData?.mobileVerified || sessionData?.contactVerified || false,
+        isRegistered: accountExists && !isBanned,
+        accountStatus: isBanned ? 'BANNED' : (accountExists ? 'ACTIVE' : 'UNREGISTERED'),
+        registrationState,
+        uid: userDoc?.appUid || userDoc?.uid || 'Not set',
+        username: userDoc?.username || 'Not set',
+        contactVerified: Boolean(userDoc?.mobileVerified || sessionData?.contactVerified),
         otpVerified: accountExists,
-        webAppInitDataValid: true
+        deviceBinding: userDoc?.deviceFingerprint || sessionData?.deviceFingerprint || 'None',
+        lastAccountCreation: userDoc?.createdAt || 'N/A',
+        lastDeletion: lastDeletion || 'None',
+        userDoc: userDoc ? { ...userDoc, id: userDocId } : null,
+        pendingSession: sessionData || null,
+        walletRecord: userDoc ? {
+          balance: userDoc.walletBalance || userDoc.balance || 0,
+          coins: userDoc.coinsBalance || 0,
+          bonus: userDoc.bonus || 0,
+          totalEarned: userDoc.totalEarned || 0,
+        } : null,
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
