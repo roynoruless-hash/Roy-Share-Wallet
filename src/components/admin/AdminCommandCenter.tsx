@@ -3,6 +3,7 @@ import { ShieldCheck, Activity, Users, Wallet, Zap, ArrowUpRight, Search, Bot, S
 import { AIAssistantModal } from './AIAssistantModal';
 import { GlobalSearchModal } from './GlobalSearchModal';
 import { UserProfileCardModal } from './UserProfileCardModal';
+import { authenticatedFetch } from '../../utils/api';
 
 export const AdminCommandCenter: React.FC = () => {
   const [stats, setStats] = useState<any>(null);
@@ -18,23 +19,7 @@ export const AdminCommandCenter: React.FC = () => {
   const fetchCommandCenterStats = async () => {
     try {
       setLoading(true);
-      let sessionToken = '';
-      try {
-        const raw = localStorage.getItem('royshare_admin_session') || sessionStorage.getItem('royshare_admin_session');
-        if (raw) {
-          sessionToken = JSON.parse(raw).sessionToken || '';
-        }
-      } catch (e) {}
-      if (!sessionToken) {
-        sessionToken = localStorage.getItem('adminSessionToken') || '';
-      }
-
-      const res = await fetch('/api/admin/command-center-stats', {
-        headers: { 
-          'x-admin-session-token': sessionToken,
-          'Authorization': sessionToken ? `Bearer ${sessionToken}` : ''
-        },
-      });
+      const res = await authenticatedFetch('/api/admin/command-center-stats');
       const data = await res.json();
       if (data.success) {
         setStats(data.stats);

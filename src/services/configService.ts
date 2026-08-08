@@ -1,6 +1,7 @@
 import { doc, getDoc, setDoc, collection, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { db } from './firebase';
 import { AdminConfig, LogEntry, LogType } from '../types';
+import { authenticatedFetch } from '../utils/api';
 
 export const DEFAULT_CONFIG: AdminConfig = {
   // Telegram Configuration
@@ -197,11 +198,7 @@ export async function loadAdminConfig(): Promise<LoadConfigResult> {
   const token = getSessionToken();
   if (token) {
     try {
-      const res = await fetch('/api/admin/config', {
-        headers: {
-          'x-admin-session-token': token,
-        },
-      });
+      const res = await authenticatedFetch('/api/admin/config');
       const data = await res.json();
       if (data.success && data.config) {
         const merged: AdminConfig = {
@@ -274,11 +271,10 @@ export async function saveAdminConfig(config: AdminConfig, changeOtp?: string): 
 
   const token = getSessionToken();
   if (token) {
-    const res = await fetch('/api/admin/config', {
+    const res = await authenticatedFetch('/api/admin/config', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-admin-session-token': token,
       },
       body: JSON.stringify({ config: payload, changeOtp }),
     });

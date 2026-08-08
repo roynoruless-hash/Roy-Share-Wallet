@@ -31,6 +31,7 @@ import {
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { AdminConfig, WithdrawalRecord } from '../types';
+import { authenticatedFetch } from '../utils/api';
 
 interface WithdrawalSettingsViewProps {
   config: AdminConfig;
@@ -213,7 +214,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
 
     for (const docId of selectedIds) {
       try {
-        const res = await fetch('/api/admin/withdrawals/approve', {
+        const res = await authenticatedFetch('/api/admin/withdrawals/approve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -250,7 +251,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
 
     for (const docId of selectedIds) {
       try {
-        const res = await fetch('/api/admin/withdrawals/reject', {
+        const res = await authenticatedFetch('/api/admin/withdrawals/reject', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -286,7 +287,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
     setActionSuccess(null);
 
     try {
-      const res = await fetch('/api/admin/withdrawals/approve', {
+      const res = await authenticatedFetch('/api/admin/withdrawals/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -317,7 +318,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
     setActionSuccess(null);
 
     try {
-      const res = await fetch('/api/admin/withdrawals/reject', {
+      const res = await authenticatedFetch('/api/admin/withdrawals/reject', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -350,7 +351,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
     setActionSuccess(null);
 
     try {
-      const res = await fetch('/api/admin/send-message', {
+      const res = await authenticatedFetch('/api/admin/send-message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -804,6 +805,46 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                   className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-slate-300"
                 />
               </div>
+              <div className="pt-2 flex flex-col sm:flex-row gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const saveRes = await authenticatedFetch('/api/admin/withdrawals/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ settings: config }),
+                      });
+                      const saveD = await saveRes.json();
+                      if (!saveD.success) {
+                        alert(`Failed to save config before test: ${saveD.error || 'Unknown error'}`);
+                        return;
+                      }
+
+                      const testRes = await authenticatedFetch('/api/admin/withdrawals/test-ultrapay', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          ultraPayApiToken: config.ultraPayApiToken,
+                          ultraPayApiKey: config.ultraPayApiKey,
+                        }),
+                      });
+                      const testD = await testRes.json();
+                      if (testD.success) {
+                        alert(testD.message || 'Ultra Pay API Connected Successfully!');
+                      } else {
+                        alert(`Ultra Pay API Test Failed: ${testD.error || 'Unknown error'}`);
+                      }
+                    } catch (e: any) {
+                      alert(`Error during test: ${e.message}`);
+                    }
+                  }}
+                  className="w-full px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition shadow-md shadow-amber-500/10"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-slate-950" />
+                  <span>Save & Test API Connection</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -857,7 +898,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
             id="withdrawal-save-btn"
             onClick={async () => {
               try {
-                const res = await fetch('/api/admin/withdrawals/config', {
+                const res = await authenticatedFetch('/api/admin/withdrawals/config', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ settings: config }),
