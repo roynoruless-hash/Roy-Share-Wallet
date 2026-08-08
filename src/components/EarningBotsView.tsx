@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Bot, Plus, ToggleLeft, ToggleRight, Check, X, Shield, Users, Trophy, Gift, ArrowRight, RefreshCw, Layers, Radio, Trash2 } from 'lucide-react';
+import { apiFetch } from '../utils/api';
 
 interface EarningBot {
   id: string;
@@ -64,7 +65,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
   const fetchBots = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/admin/earning-bots');
+      const res = await apiFetch('/api/admin/earning-bots');
       const data = await res.json();
       if (data.success) {
         setBots(data.bots || []);
@@ -84,7 +85,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
 
   const fetchBotAnalytics = async (id: string) => {
     try {
-      const res = await fetch(`/api/admin/earning-bots/${id}/analytics`);
+      const res = await apiFetch(`/api/admin/earning-bots/${id}/analytics`);
       const data = await res.json();
       if (data.success) {
         setBotAnalytics(prev => ({
@@ -110,7 +111,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
 
     setIsConnecting(true);
     try {
-      const res = await fetch('/api/admin/earning-bots/connect', {
+      const res = await apiFetch('/api/admin/earning-bots/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -145,7 +146,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
   const handleToggleStatus = async (bot: EarningBot) => {
     const nextStatus = bot.status === 'active' ? 'paused' : 'active';
     try {
-      const res = await fetch(`/api/admin/earning-bots/${bot.id}/update`, {
+      const res = await apiFetch(`/api/admin/earning-bots/${bot.id}/update`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -181,7 +182,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
 
     setIsVerifyingChat(true);
     try {
-      const res = await fetch(`/api/admin/earning-bots/${selectedBot.id}/add-channel-group`, {
+      const res = await apiFetch(`/api/admin/earning-bots/${selectedBot.id}/add-channel-group`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, chatId, link }),
@@ -219,7 +220,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
     if (!selectedBot) return;
 
     try {
-      const res = await fetch(`/api/admin/earning-bots/${selectedBot.id}/delete-channel-group`, {
+      const res = await apiFetch(`/api/admin/earning-bots/${selectedBot.id}/delete-channel-group`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, chatId }),
@@ -245,7 +246,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
 
   const handleSyncAllWebhooks = async () => {
     try {
-      const res = await fetch('/api/admin/earning-bots/sync-webhooks', { method: 'POST' });
+      const res = await apiFetch('/api/admin/earning-bots/sync-webhooks', { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         showToast(data.message, 'success');

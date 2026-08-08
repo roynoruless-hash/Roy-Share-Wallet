@@ -8756,7 +8756,12 @@ Respond with a JSON object containing two properties:
       await setDoc(doc(db, 'earningBots', docId), newBot);
       await recordAuditLog('CONNECT_EARNING_BOT', 'SYSTEM', { botUsername }, 'SuperAdmin');
 
-      return res.json({ success: true, bot: newBot });
+      const returnedBot = {
+        ...newBot,
+        token: cleanToken.length > 8 ? '••••••••••••' + cleanToken.substring(cleanToken.length - 4) : '••••••••••••',
+      };
+
+      return res.json({ success: true, bot: returnedBot });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
