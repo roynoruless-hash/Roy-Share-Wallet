@@ -64,8 +64,9 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
 
   // Registration V2 States
-  const [isRegistered, setIsRegistered] = useState<boolean>(true);
-  const [regStep, setRegStep] = useState<'DETAILS' | 'OTP'>('DETAILS');
+  const [isRegistered, setIsRegistered] = useState<boolean>(false);
+  const [registrationState, setRegistrationState] = useState<'LOADING' | 'UNREGISTERED' | 'PROFILE_SUBMITTED' | 'CONTACT_VERIFIED' | 'OTP_PENDING' | 'ACTIVE' | 'BANNED' | 'INVALID_SESSION'>('LOADING');
+  const [regStep, setRegStep] = useState<'DETAILS' | 'PENDING_CONTACT' | 'OTP'>('DETAILS');
   const [fullName, setFullName] = useState<string>('');
   const [mobile, setMobile] = useState<string>('');
   const [gmail, setGmail] = useState<string>('');
@@ -224,6 +225,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       setIsSubmittingReg(false);
     }
   };
+  const [otpCode, setOtpCode] = useState<string>('');
   const [otpExpiryTimer, setOtpExpiryTimer] = useState<number>(0);
   const [isGeneratingOtp, setIsGeneratingOtp] = useState(false);
   const [showOtpCard, setShowOtpCard] = useState(false);
@@ -676,18 +678,85 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     if (tg?.initDataUnsafe?.user?.id) {
       return String(tg.initDataUnsafe.user.id);
     }
-    return localStorage.getItem('roy_user_id') || '89421042'; // Reliable fallback
+    const urlParams = new URLSearchParams(window.location.search);
+    const tgIdParam = urlParams.get('tgId') || urlParams.get('telegramId');
+    if (tgIdParam) {
+      return tgIdParam;
+    }
+    return localStorage.getItem('roy_user_id') || '';
+  };
+
+  const formatUsername = (un?: string) => {
+    if (!un || un === 'N/A' || un === '@N/A' || un === 'Not set' || un === 'undefined') {
+      return 'Username: Not set';
+    }
+    return un.startsWith('@') ? un : `@${un}`;
+  };
+
+  const validateUserSession = async () => {
+    setLoading(true);
+    try {
+      const tg = (window as any).Telegram?.WebApp;
+      tg?.ready?.();
+      const initData = tg?.initData || '';
+      const tgId = getTelegramUserId();
+
+      const res = await fetch('/api/user/validate-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData, telegramId: tgId })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setRegistrationState(data.registrationState);
+
+        if (data.registrationState === 'BANNED' || data.isBanned) {
+          setIsRegistered(false);
+          setUser(null);
+        } else if (data.registrationState === 'ACTIVE' && data.isRegistered) {
+          setIsRegistered(true);
+          setUser(data.user);
+        } else if (data.registrationState === 'OTP_PENDING' || data.registrationState === 'CONTACT_VERIFIED') {
+          setIsRegistered(false);
+          setUser(null);
+          setRegStep('OTP');
+          if (data.session) {
+            setFullName(data.session.fullName || '');
+            setMobile(data.session.mobile || '');
+            setGmail(data.session.gmail || '');
+          }
+          setOtpSuccessMsg('✅ Mobile number verified! Enter the 6-digit OTP code sent to your Telegram Bot chat.');
+        } else if (data.registrationState === 'PROFILE_SUBMITTED') {
+          setIsRegistered(false);
+          setUser(null);
+          setRegStep('PENDING_CONTACT');
+          if (data.session) {
+            setFullName(data.session.fullName || '');
+            setMobile(data.session.mobile || '');
+            setGmail(data.session.gmail || '');
+          }
+        } else {
+          // UNREGISTERED
+          setIsRegistered(false);
+          setUser(null);
+          setRegStep('DETAILS');
+        }
+      } else {
+        setRegistrationState('INVALID_SESSION');
+        setIsRegistered(false);
+        setUser(null);
+      }
+    } catch (err) {
+      console.error('[validateUserSession error]:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fetchUserData = async () => {
-    // Left as compatibility hook, real loading handled via real-time onSnapshot
     try {
-      const tgId = getTelegramUserId();
-      const res = await fetch(`/api/user-profile?telegramId=${tgId}`);
-      const data = await res.json();
-      if (data.success && data.profile) {
-        setUser((prev: any) => ({ ...prev, ...data.profile }));
-      }
+      await validateUserSession();
     } catch (err) {
       console.error('Failed to pre-fetch profile:', err);
     } finally {
@@ -699,45 +768,53 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   useEffect(() => {
     const tgId = getTelegramUserId();
 
-    // 1. Listen to active User Document in real-time
-    const qUser = query(collection(db, 'users'), where('telegramId', '==', tgId));
-    const unsubscribeUser = onSnapshot(qUser, (snapshot) => {
-      if (!snapshot.empty) {
-        const userDoc = snapshot.docs[0];
-        const data = userDoc.data();
-        const rawAppUid = data.appUid ? String(data.appUid).trim() : '';
-        const rawUid = data.uid ? String(data.uid).trim() : '';
-        const cleanUid = (rawAppUid && rawAppUid !== tgId) ? rawAppUid : ((rawUid && rawUid !== tgId) ? rawUid : '');
+    // Run session validation on mount
+    validateUserSession();
 
-        setUser((prev: any) => ({
-          ...prev,
-          ...data,
-          id: userDoc.id, // Store the real document ID
-          telegramId: tgId,
-          appUid: cleanUid || data.appUid || data.uid || '',
-          uid: cleanUid || data.uid || data.appUid || '',
-          userName: data.userName || data.name || data.firstName || `User #${tgId}`,
-          avatar: data.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
-          walletBalance: Number(data.walletBalance) || Number(data.balance) || 0,
-          coinsBalance: Number(data.coinsBalance) || 0,
-          bonusBalance: Number(data.bonusBalance) || 0,
-          referralCount: Number(data.referralsCount) || 0,
-          joinedDate: data.createdAt || '2026-08-01',
-          securityBadge: 'TRUSTED',
-          securityScore: 98,
-          completedTasks: data.completedTasks || [],
-          milestoneProgress: data.milestoneProgress || {},
-        }));
-      } else {
-        // User not registered yet
-        setUser(null);
-        setIsRegistered(false);
-      }
-      setLoading(false);
-    }, (err) => {
-      console.error('Error listening to user doc:', err);
-      setLoading(false);
-    });
+    let unsubscribeUser = () => {};
+    if (tgId) {
+      // 1. Listen to active User Document in real-time
+      const qUser = query(collection(db, 'users'), where('telegramId', '==', tgId));
+      unsubscribeUser = onSnapshot(qUser, (snapshot) => {
+        if (!snapshot.empty) {
+          const userDoc = snapshot.docs[0];
+          const data = userDoc.data();
+          if (data.banned || data.status === 'banned') {
+            setRegistrationState('BANNED');
+            setIsRegistered(false);
+            setUser(null);
+            return;
+          }
+          const rawAppUid = data.appUid ? String(data.appUid).trim() : '';
+          const rawUid = data.uid ? String(data.uid).trim() : '';
+          const cleanUid = (rawAppUid && rawAppUid !== tgId) ? rawAppUid : ((rawUid && rawUid !== tgId) ? rawUid : '');
+
+          setUser((prev: any) => ({
+            ...prev,
+            ...data,
+            id: userDoc.id,
+            telegramId: tgId,
+            appUid: cleanUid || data.appUid || data.uid || '',
+            uid: cleanUid || data.uid || data.appUid || '',
+            userName: data.userName || data.fullName || data.name || data.firstName || `User #${tgId}`,
+            avatar: data.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
+            walletBalance: Number(data.walletBalance) || Number(data.balance) || 0,
+            coinsBalance: Number(data.coinsBalance) || 0,
+            bonusBalance: Number(data.bonusBalance) || 0,
+            referralCount: Number(data.referralsCount) || 0,
+            joinedDate: data.createdAt || '2026-08-01',
+            securityBadge: 'TRUSTED',
+            securityScore: 98,
+            completedTasks: data.completedTasks || [],
+            milestoneProgress: data.milestoneProgress || {},
+          }));
+          setIsRegistered(true);
+          setRegistrationState('ACTIVE');
+        }
+      }, (err) => {
+        console.error('Error listening to user doc:', err);
+      });
+    }
 
     // 2. Listen to dynamic Milestones
     const milestonesRef = collection(db, 'referralMilestones');
@@ -1060,15 +1137,50 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     }
   };
 
-  if (loading) {
+  if (loading || registrationState === 'LOADING') {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center space-y-4">
         <RefreshCw className="w-8 h-8 text-amber-500 animate-spin" />
-        <p className="text-sm font-semibold text-slate-400">Loading Roy Wallet App...</p>
+        <p className="text-sm font-semibold text-slate-400">Verifying Telegram Account Session...</p>
       </div>
     );
   }
 
+  // BANNED ACCOUNT SCREEN
+  if (registrationState === 'BANNED' || user?.banned) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white font-sans flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-rose-950/40 border border-rose-500/30 rounded-3xl p-6 text-center space-y-4 shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto text-3xl">
+            🚫
+          </div>
+          <h1 className="text-xl font-black text-rose-300">Account Restricted</h1>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            This Telegram account is permanently restricted from creating or using another Roy Share account.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // INVALID TELEGRAM SESSION
+  if (registrationState === 'INVALID_SESSION') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white font-sans flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 text-center space-y-4 shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/10 text-amber-400 flex items-center justify-center mx-auto text-3xl border border-amber-500/20">
+            ⚠️
+          </div>
+          <h1 className="text-lg font-black text-white">Telegram Session Required</h1>
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Please open this Mini App directly from your Telegram Bot chat.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // UNREGISTERED OR PENDING REGISTRATION USERS
   if (!isRegistered || !user) {
     return (
       <div className="min-h-screen bg-slate-950 text-white font-sans flex items-center justify-center p-4">
@@ -1084,6 +1196,8 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
             <p className="text-xs text-slate-400">
               {regStep === 'DETAILS'
                 ? 'Complete registration in 3 simple steps to access your wallet.'
+                : regStep === 'PENDING_CONTACT'
+                ? 'Share your contact in Telegram Bot chat to complete mobile verification.'
                 : 'Enter the 6-digit OTP code sent to your Telegram Bot chat.'}
             </p>
           </div>
@@ -1146,7 +1260,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                   required
                 />
                 <p className="text-[11px] text-sky-400/90 font-medium bg-sky-500/10 p-2.5 rounded-xl border border-sky-500/20">
-                  Please enter your <b>REAL Gmail address</b>. This Gmail will be used for withdrawals and important account notifications.
+                  Please enter your <b>REAL Gmail address</b>. Incorrect Gmail details may cause withdrawal/payment issues.
                 </p>
               </div>
 
@@ -1160,7 +1274,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                   <span>Generating Security Check...</span>
                 ) : (
                   <>
-                    <span>Verify & Continue</span>
+                    <span>VERIFY & CONTINUE →</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
@@ -1168,7 +1282,37 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
             </form>
           )}
 
-          {/* Step 2: OTP VERIFICATION */}
+          {/* Step 2: PENDING CONTACT VERIFICATION IN TELEGRAM */}
+          {regStep === 'PENDING_CONTACT' && (
+            <div className="space-y-4 text-center">
+              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-medium space-y-2">
+                <div className="font-bold text-amber-400 text-sm flex items-center justify-center gap-1.5">
+                  📱 Mobile Verification Request Sent
+                </div>
+                <p>Please open your <b>Telegram Bot chat</b> and tap the <b>📱 Share Contact</b> button.</p>
+                <p className="text-[11px] text-slate-400">Once shared, your 6-digit OTP will be sent to your Telegram chat.</p>
+              </div>
+
+              <button
+                type="button"
+                onClick={validateUserSession}
+                className="w-full py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl"
+              >
+                <span>Check Verification Status</span>
+                <RefreshCw className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setRegStep('DETAILS')}
+                className="w-full text-center text-xs text-slate-400 hover:text-white py-2"
+              >
+                ← Back to Registration Details
+              </button>
+            </div>
+          )}
+
+          {/* Step 3: OTP VERIFICATION */}
           {regStep === 'OTP' && (
             <form onSubmit={handleVerifyOtp} className="space-y-4">
               <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-medium space-y-1">
@@ -1262,7 +1406,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                   {user.levelTitle}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 font-medium">@{user.username || 'N/A'}</p>
+              <p className="text-xs text-slate-400 font-medium">{formatUsername(user?.username)}</p>
             </div>
           </div>
           <div className="text-right">

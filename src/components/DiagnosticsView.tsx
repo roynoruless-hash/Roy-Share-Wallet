@@ -369,10 +369,132 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ config }) => {
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-emerald-400" />
             <span>
-              Diagnostic run complete. Green items indicate system components ready for Step 2.
+              Diagnostic run complete. Green items indicate system components ready for operational use.
             </span>
           </div>
           <span className="text-slate-500">Last executed: {lastDiagnosticTime}</span>
+        </div>
+      )}
+
+      {/* User Registration Diagnostic Lookup */}
+      <UserDiagnosticLookup />
+    </div>
+  );
+};
+
+const UserDiagnosticLookup: React.FC = () => {
+  const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleLookup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!query.trim()) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const res = await fetch('/api/admin/diagnostic-lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: query.trim() }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setResult(data);
+      } else {
+        setError(data.error || 'Lookup failed');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Server network error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-6 rounded-2xl bg-slate-900/90 border border-slate-800/80 shadow-xl space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+          <Users className="w-5 h-5" />
+        </div>
+        <div>
+          <h3 className="text-sm font-bold text-white">User Diagnostic & Registration Lookup</h3>
+          <p className="text-xs text-slate-400">
+            Search by Telegram ID, App UID, Mobile Number, or Username to inspect active registration state and identity details.
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={handleLookup} className="flex gap-2">
+        <input
+          type="text"
+          placeholder="Enter Telegram ID, App UID, Mobile, or @username..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="flex-1 bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-4 text-xs font-bold text-white outline-none"
+        />
+        <button
+          type="submit"
+          disabled={loading || !query.trim()}
+          className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs uppercase tracking-wider flex items-center gap-2 transition disabled:opacity-50 shrink-0"
+        >
+          {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <span>Inspect Account</span>}
+        </button>
+      </form>
+
+      {error && (
+        <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-bold">
+          ❌ {error}
+        </div>
+      )}
+
+      {result && (
+        <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-3">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+            <span className="font-bold text-white">Query Target: {result.query}</span>
+            <span className={`px-2.5 py-0.5 rounded-full font-bold uppercase ${
+              result.registrationState === 'ACTIVE'
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                : result.registrationState === 'UNREGISTERED'
+                ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+            }`}>
+              State: {result.registrationState}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-slate-300">
+            <div><b>Telegram ID:</b> {result.telegramId || 'Not found'}</div>
+            <div><b>App UID:</b> {result.appUid || 'None'}</div>
+            <div><b>Username:</b> {(!result.username || result.username === 'N/A' || result.username === '@N/A') ? 'Not set' : result.username}</div>
+            <div><b>Account Status:</b> {result.isRegistered ? '✅ Registered' : '❌ Unregistered'}</div>
+          </div>
+
+          {result.pendingSession && (
+            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 space-y-1">
+              <div className="font-bold text-amber-400">Pending Registration Session</div>
+              <div><b>Full Name:</b> {result.pendingSession.fullName}</div>
+              <div><b>Mobile:</b> {result.pendingSession.mobile}</div>
+              <div><b>Gmail:</b> {result.pendingSession.gmail}</div>
+              <div><b>Contact Shared:</b> {result.pendingSession.contactVerified ? 'YES' : 'NO'}</div>
+              <div><b>OTP Sent:</b> {result.pendingSession.otpSent ? 'YES' : 'NO'}</div>
+            </div>
+          )}
+
+          {result.userDoc && (
+            <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+              <div className="font-bold text-emerald-400">Active Firestore User Profile</div>
+              <div><b>Name:</b> {result.userDoc.userName || result.userDoc.fullName}</div>
+              <div><b>Mobile:</b> {result.userDoc.mobile}</div>
+              <div><b>Gmail:</b> {result.userDoc.gmail}</div>
+              <div><b>Wallet Balance:</b> ₹{result.userDoc.walletBalance || result.userDoc.balance || 0}</div>
+              <div><b>Coins:</b> {result.userDoc.coinsBalance || 0}</div>
+              <div><b>Joined Date:</b> {result.userDoc.createdAt}</div>
+            </div>
+          )}
         </div>
       )}
     </div>

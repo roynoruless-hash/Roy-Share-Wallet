@@ -1525,7 +1525,7 @@ Final Payout: ₹${payoutAmount}`);
   // Enforce Required Join check for all messages except when completing the onboarding registration steps
   const session = userSessions.get(chatId);
   const isOnboardingMessage = session && 
-    (session.step === 'WAITING_NAME' || session.step === 'WAITING_MOBILE' || session.step === 'WAITING_CONTACT' || session.step === 'WAITING_OTP') &&
+    ((session.step as any) === 'WAITING_NAME' || (session.step as any) === 'WAITING_MOBILE' || (session.step as any) === 'WAITING_CONTACT' || (session.step as any) === 'WAITING_OTP') &&
     !text.startsWith('/') &&
     !['👛 Wallet', '💸 Withdraw', '🎁 Refer & Earn', '☎ Contact Us', '🏆 Contests', '⚔️ Giveaway War', '👥 Open Waiting Lobby'].includes(text);
 

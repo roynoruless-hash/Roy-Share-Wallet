@@ -8015,7 +8015,210 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
-  // 3. LOGIN ENDPOINT
+  // 3. SESSION VALIDATION & USER IDENTIFICATION ENDPOINT
+  app.post('/api/user/validate-session', async (req, res) => {
+    try {
+      const { initData, telegramId: providedTgId } = req.body;
+
+      let initDataUser: any = null;
+      let webAppInitDataValid = false;
+
+      if (initData) {
+        try {
+          const params = new URLSearchParams(initData);
+          const userStr = params.get('user');
+          if (userStr) {
+            initDataUser = JSON.parse(userStr);
+            webAppInitDataValid = true;
+          }
+        } catch (e) {
+          console.warn('[validate-session] Failed to parse initData user:', e);
+        }
+      }
+
+      const cleanTgId = String(initDataUser?.id || providedTgId || '').trim();
+
+      if (!cleanTgId) {
+        return res.json({
+          success: false,
+          isRegistered: false,
+          isBanned: false,
+          registrationState: 'INVALID_SESSION',
+          error: 'Telegram authentication required. Please open this Mini App directly from your Telegram Bot chat.',
+          webAppInitDataValid: false
+        });
+      }
+
+      const rawUsername = initDataUser?.username || '';
+      const cleanUsername = rawUsername ? rawUsername.replace(/^@/, '') : '';
+      const displayUsername = cleanUsername ? `@${cleanUsername}` : 'Not set';
+
+      // 1. Check if user already exists in `users` collection
+      let userDocRef = doc(db, 'users', cleanTgId);
+      let userSnap = await getDoc(userDocRef);
+      let userData: any = userSnap.exists() ? userSnap.data() : null;
+
+      if (!userData) {
+        // Secondary query by telegramId field
+        const qUser = query(collection(db, 'users'), where('telegramId', '==', cleanTgId));
+        const qSnap = await getDocs(qUser);
+        if (!qSnap.empty) {
+          userDocRef = doc(db, 'users', qSnap.docs[0].id);
+          userData = qSnap.docs[0].data();
+          userSnap = qSnap.docs[0] as any;
+        }
+      }
+
+      // A. Account exists
+      if (userData) {
+        const isBanned = userData.banned === true || userData.status === 'banned' || userData.status === 'blocked';
+
+        if (isBanned) {
+          return res.json({
+            success: true,
+            isRegistered: false,
+            isBanned: true,
+            registrationState: 'BANNED',
+            telegramUser: {
+              id: cleanTgId,
+              username: displayUsername,
+              firstName: initDataUser?.first_name || userData.firstName || '',
+              lastName: initDataUser?.last_name || userData.lastName || ''
+            },
+            webAppInitDataValid
+          });
+        }
+
+        // Clean up @N/A if present on existing user
+        let formattedUserUsername = userData.username;
+        if (!formattedUserUsername || formattedUserUsername === 'N/A' || formattedUserUsername === '@N/A' || formattedUserUsername === 'Not set') {
+          formattedUserUsername = cleanUsername ? `@${cleanUsername}` : 'Not set';
+          await setDoc(userDocRef, { username: formattedUserUsername }, { merge: true });
+          userData.username = formattedUserUsername;
+        }
+
+        return res.json({
+          success: true,
+          isRegistered: true,
+          isBanned: false,
+          registrationState: 'ACTIVE',
+          user: {
+            ...userData,
+            username: userData.username || displayUsername,
+            telegramId: cleanTgId,
+          },
+          telegramUser: {
+            id: cleanTgId,
+            username: displayUsername,
+            firstName: initDataUser?.first_name || userData.firstName || '',
+            lastName: initDataUser?.last_name || userData.lastName || ''
+          },
+          webAppInitDataValid
+        });
+      }
+
+      // B. Account does NOT exist -> Check pending registration session
+      const sessionDocRef = doc(db, 'registrationSessions', cleanTgId);
+      const sessionSnap = await getDoc(sessionDocRef);
+
+      if (sessionSnap.exists()) {
+        const session = sessionSnap.data();
+        let state = 'REGISTRATION_STARTED';
+
+        if (session.contactVerified && session.otp) {
+          state = 'OTP_PENDING';
+        } else if (session.fullName) {
+          state = 'PROFILE_SUBMITTED';
+        }
+
+        return res.json({
+          success: true,
+          isRegistered: false,
+          isBanned: false,
+          registrationState: state,
+          session: {
+            telegramId: cleanTgId,
+            fullName: session.fullName,
+            mobile: session.mobile,
+            gmail: session.gmail,
+            contactVerified: session.contactVerified || false,
+            otpExpiry: session.otpExpiry || null,
+          },
+          telegramUser: {
+            id: cleanTgId,
+            username: displayUsername,
+            firstName: initDataUser?.first_name || '',
+            lastName: initDataUser?.last_name || ''
+          },
+          webAppInitDataValid
+        });
+      }
+
+      // C. No account & No session -> UNREGISTERED state
+      return res.json({
+        success: true,
+        isRegistered: false,
+        isBanned: false,
+        registrationState: 'UNREGISTERED',
+        telegramUser: {
+          id: cleanTgId,
+          username: displayUsername,
+          firstName: initDataUser?.first_name || '',
+          lastName: initDataUser?.last_name || ''
+        },
+        webAppInitDataValid
+      });
+
+    } catch (err: any) {
+      console.error('[validate-session Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 4. ADMIN DIAGNOSTIC LOOKUP ENDPOINT
+  app.post('/api/admin/diagnostic-lookup', async (req, res) => {
+    try {
+      const { telegramId } = req.body;
+      const cleanTgId = String(telegramId || '').trim();
+
+      if (!cleanTgId) {
+        return res.status(400).json({ success: false, error: 'Telegram ID is required' });
+      }
+
+      const userDocRef = doc(db, 'users', cleanTgId);
+      const userSnap = await getDoc(userDocRef);
+      const sessionSnap = await getDoc(doc(db, 'registrationSessions', cleanTgId));
+
+      const accountExists = userSnap.exists();
+      const userData = accountExists ? userSnap.data() : null;
+      const sessionData = sessionSnap.exists() ? sessionSnap.data() : null;
+
+      let registrationState = 'UNREGISTERED';
+      if (accountExists) {
+        registrationState = (userData.banned || userData.status === 'banned') ? 'BANNED' : 'ACTIVE';
+      } else if (sessionData) {
+        if (sessionData.contactVerified && sessionData.otp) registrationState = 'OTP_PENDING';
+        else if (sessionData.fullName) registrationState = 'PROFILE_SUBMITTED';
+        else registrationState = 'REGISTRATION_STARTED';
+      }
+
+      return res.json({
+        success: true,
+        telegramIdentity: cleanTgId ? 'Connected' : 'Failed',
+        registrationState,
+        telegramId: cleanTgId,
+        accountExists,
+        uid: userData?.uid || userData?.appUid || 'Not set',
+        mobileVerified: userData?.mobileVerified || sessionData?.contactVerified || false,
+        otpVerified: accountExists,
+        webAppInitDataValid: true
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 5. LOGIN ENDPOINT
   app.post('/api/login', async (req, res) => {
     try {
       const { telegramId, deviceFingerprint, ip } = req.body;
