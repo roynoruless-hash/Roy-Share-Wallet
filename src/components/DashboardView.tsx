@@ -52,148 +52,312 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
   const [chartData, setChartData] = useState<any[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Firestore Real-Time Stream Listeners
+  // Progressive diagnostics for Step 5
+  const [diag5A, setDiag5A] = useState<{
+    status: 'idle' | 'loading' | 'success' | 'failed';
+    error?: string;
+    count?: number;
+    latency?: number;
+  }>({ status: 'idle' });
+
+  const [diag5B, setDiag5B] = useState<{
+    status: 'idle' | 'loading' | 'success' | 'failed';
+    error?: string;
+    count?: number;
+    latency?: number;
+  }>({ status: 'idle' });
+
+  const [diag5C, setDiag5C] = useState<{
+    status: 'idle' | 'loading' | 'success' | 'failed';
+    error?: string;
+    count?: number;
+    latency?: number;
+  }>({ status: 'idle' });
+
+  // Firestore Real-Time Stream Listeners with progressive loading and robust error handling
   useEffect(() => {
+    let active = true;
     setLoading(true);
 
-    // 1. Listen to users
+    // Helper to safely compute latency
+    const startTime5A = Date.now();
+    setDiag5A({ status: 'loading' });
+
+    // 1. [STEP 5A] Listen to users
     const usersQuery = collection(db, 'users');
     const unsubscribeUsers = onSnapshot(usersQuery, (snapshot) => {
-      let totalBal = 0;
-      let totalCoins = 0;
-      let countToday = 0;
-      let countOnline = 0;
-      const now = new Date();
-      const startOfToday = new Date();
-      startOfToday.setHours(0, 0, 0, 0);
+      if (!active) return;
+      const latency = Date.now() - startTime5A;
+      try {
+        let totalBal = 0;
+        let totalCoins = 0;
+        let countToday = 0;
+        let countOnline = 0;
+        const now = new Date();
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
 
-      const registrationsByDay: Record<string, number> = {};
+        const registrationsByDay: Record<string, number> = {};
 
-      snapshot.docs.forEach((doc) => {
-        const data = doc.data();
-        totalBal += Number(data.walletBalance) || Number(data.balance) || 0;
-        totalCoins += Number(data.coinsBalance) || 0;
+        const docs = snapshot?.docs || [];
+        docs.forEach((doc) => {
+          const data = doc.data() || {};
+          totalBal += Number(data.walletBalance) || Number(data.balance) || 0;
+          totalCoins += Number(data.coinsBalance) || 0;
 
-        // Joined today calculation
-        if (data.createdAt) {
-          const createdDate = new Date(data.createdAt);
-          if (createdDate >= startOfToday) {
-            countToday++;
+          // Joined today calculation with guard
+          if (data.createdAt) {
+            const createdDate = new Date(data.createdAt);
+            if (!isNaN(createdDate.getTime())) {
+              if (createdDate >= startOfToday) {
+                countToday++;
+              }
+
+              // Aggregating for chart (last 7 days)
+              const dateStr = createdDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+              registrationsByDay[dateStr] = (registrationsByDay[dateStr] || 0) + 1;
+            }
           }
 
-          // Aggregating for chart (last 7 days)
-          const dateStr = createdDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-          registrationsByDay[dateStr] = (registrationsByDay[dateStr] || 0) + 1;
-        }
+          // Online estimate with guard
+          const activeTime = data.lastActiveTime || data.lastVerificationTime;
+          if (activeTime) {
+            const lastActive = new Date(activeTime);
+            if (!isNaN(lastActive.getTime())) {
+              const minutesDiff = (now.getTime() - lastActive.getTime()) / (1000 * 60);
+              if (minutesDiff <= 15) {
+                countOnline++;
+              }
+            }
+          }
+        });
 
-        // Online estimate (activity in last 15 mins)
-        if (data.lastActiveTime || data.lastVerificationTime) {
-          const lastActive = new Date(data.lastActiveTime || data.lastVerificationTime);
-          const minutesDiff = (now.getTime() - lastActive.getTime()) / (1000 * 60);
-          if (minutesDiff <= 15) {
-            countOnline++;
+        // Format registration chart data safely
+        const sortedChartDays = Object.entries(registrationsByDay)
+          .map(([day, count]) => ({ name: day, Users: count }))
+          .slice(-7);
+
+        if (sortedChartDays.length === 0) {
+          // Fallback chart points if no users exist
+          for (let i = 6; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            sortedChartDays.push({ name: label, Users: i === 6 ? 1 : Math.floor(Math.random() * 4) + 1 });
           }
         }
-      });
 
-      // Format registration chart data
-      const sortedChartDays = Object.entries(registrationsByDay)
-        .map(([day, count]) => ({ name: day, Users: count }))
-        .slice(-7);
+        setChartData(sortedChartDays);
 
-      if (sortedChartDays.length === 0) {
-        // Fallback chart points if no users exist with createdAt
-        for (let i = 6; i >= 0; i--) {
-          const d = new Date();
-          d.setDate(d.getDate() - i);
-          const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-          sortedChartDays.push({ name: label, Users: i === 6 ? 1 : Math.floor(Math.random() * 4) + 1 });
-        }
+        setRealtimeStats((prev) => ({
+          ...prev,
+          totalUsers: snapshot ? snapshot.size : 0,
+          todayUsers: countToday,
+          onlineEstimate: Math.max(1, countOnline),
+          walletBalance: totalBal,
+          coinsDistributed: totalCoins,
+        }));
+
+        setDiag5A({
+          status: 'success',
+          count: snapshot ? snapshot.size : 0,
+          latency
+        });
+      } catch (err: any) {
+        console.error('[STEP 5A ERROR] Error processing users list:', err);
+        setDiag5A({
+          status: 'failed',
+          error: err?.message || String(err),
+          latency
+        });
+      } finally {
+        setLoading(false);
       }
-
-      setChartData(sortedChartDays);
-
-      setRealtimeStats((prev) => ({
-        ...prev,
-        totalUsers: snapshot.size,
-        todayUsers: countToday,
-        onlineEstimate: Math.max(1, countOnline),
-        walletBalance: totalBal,
-        coinsDistributed: totalCoins,
-      }));
-      setLoading(false);
     }, (err) => {
+      if (!active) return;
       console.warn('Error listening to users:', err);
+      setDiag5A({
+        status: 'failed',
+        error: err?.message || 'Permission denied or network failure',
+        latency: Date.now() - startTime5A
+      });
       setLoading(false);
     });
 
-    // 2. Listen to withdrawals
+    // 2. [STEP 5B] Listen to withdrawals
+    const startTime5B = Date.now();
+    setDiag5B({ status: 'loading' });
     const withdrawalsQuery = collection(db, 'withdrawals');
     const unsubscribeWithdrawals = onSnapshot(withdrawalsQuery, (snapshot) => {
-      let pendingVal = 0;
-      let pendingCount = 0;
-      let completedVal = 0;
-      let completedCount = 0;
-      let totalRevenueCollected = 0;
+      if (!active) return;
+      const latency = Date.now() - startTime5B;
+      try {
+        let pendingVal = 0;
+        let pendingCount = 0;
+        let completedVal = 0;
+        let completedCount = 0;
+        let totalRevenueCollected = 0;
 
-      snapshot.docs.forEach((doc) => {
-        const data = doc.data();
-        const amt = Number(data.amount) || Number(data.requestedAmount) || 0;
-        const fee = Number(data.platformFee) || 0;
+        const docs = snapshot?.docs || [];
+        docs.forEach((doc) => {
+          const data = doc.data() || {};
+          const amt = Number(data.amount) || Number(data.requestedAmount) || 0;
+          const fee = Number(data.platformFee) || 0;
 
-        const st = String(data.status || '').toLowerCase();
-        if (st === 'pending') {
-          pendingVal += amt;
-          pendingCount++;
-        } else if (st === 'completed' || st === 'approved') {
-          completedVal += amt;
-          completedCount++;
-          totalRevenueCollected += fee;
-        }
+          // Safe lowecase conversion
+          const st = String(data.status || '').toLowerCase();
+          if (st === 'pending') {
+            pendingVal += amt;
+            pendingCount++;
+          } else if (st === 'completed' || st === 'approved') {
+            completedVal += amt;
+            completedCount++;
+            totalRevenueCollected += fee;
+          }
+        });
+
+        setRealtimeStats((prev) => ({
+          ...prev,
+          pendingWithdrawVal: pendingVal,
+          pendingWithdrawCount: pendingCount,
+          completedWithdrawVal: completedVal,
+          completedWithdrawCount: completedCount,
+          revenue: totalRevenueCollected || (completedVal * 0.06),
+        }));
+
+        setDiag5B({
+          status: 'success',
+          count: snapshot ? snapshot.size : 0,
+          latency
+        });
+      } catch (err: any) {
+        console.error('[STEP 5B ERROR] Error parsing withdrawals:', err);
+        setDiag5B({
+          status: 'failed',
+          error: err?.message || String(err),
+          latency
+        });
+      }
+    }, (err) => {
+      if (!active) return;
+      console.warn('Error listening to withdrawals:', err);
+      setDiag5B({
+        status: 'failed',
+        error: err?.message || 'Permission denied or network failure',
+        latency: Date.now() - startTime5B
       });
-
-      setRealtimeStats((prev) => ({
-        ...prev,
-        pendingWithdrawVal: pendingVal,
-        pendingWithdrawCount: pendingCount,
-        completedWithdrawVal: completedVal,
-        completedWithdrawCount: completedCount,
-        revenue: totalRevenueCollected || (completedVal * 0.06), // fallback to 6%
-      }));
     });
 
-    // 3. Listen to Active Giveaways
+    // 3. [STEP 5C] Listen to Active Giveaways and Logs
+    const startTime5C = Date.now();
+    setDiag5C({ status: 'loading' });
     const giveawayQuery = collection(db, 'giveaways');
     const unsubscribeGiveaway = onSnapshot(giveawayQuery, (snapshot) => {
-      const activeGiveaway = snapshot.docs.find(doc => doc.id === 'active' || doc.data().status === 'active');
-      if (activeGiveaway) {
-        setRealtimeStats((prev) => ({
-          ...prev,
-          runningGiveawayTitle: activeGiveaway.data().title || 'Lucky Number Drop',
-        }));
-      } else {
-        setRealtimeStats((prev) => ({
-          ...prev,
-          runningGiveawayTitle: 'None Active',
-        }));
+      if (!active) return;
+      try {
+        const docs = snapshot?.docs || [];
+        const activeGiveaway = docs.find(doc => doc.id === 'active' || (doc.data() && String(doc.data().status).toLowerCase() === 'active'));
+        if (activeGiveaway) {
+          const data = activeGiveaway.data() || {};
+          setRealtimeStats((prev) => ({
+            ...prev,
+            runningGiveawayTitle: data.title || 'Lucky Number Drop',
+          }));
+        } else {
+          setRealtimeStats((prev) => ({
+            ...prev,
+            runningGiveawayTitle: 'None Active',
+          }));
+        }
+      } catch (err) {
+        console.warn('Error parsing active giveaway:', err);
       }
+    }, (err) => {
+      console.warn('Error listening to giveaways:', err);
     });
 
-    // 4. Listen to recent activities
-    const logsQuery = query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(5));
+    // 4. [STEP 5C] Listen to logs
+    let logsQuery;
+    try {
+      logsQuery = query(collection(db, 'logs'), orderBy('timestamp', 'desc'), limit(5));
+    } catch (e) {
+      logsQuery = query(collection(db, 'logs'), limit(5));
+    }
+
     const unsubscribeLogs = onSnapshot(logsQuery, (snapshot) => {
-      const logs = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-      setActivities(logs);
-      setRealtimeStats((prev) => ({
-        ...prev,
-        tasksCompleted: snapshot.size * 3 + 8, // estimate tasks completed if dedicated count not tracked
-      }));
+      if (!active) return;
+      const latency = Date.now() - startTime5C;
+      try {
+        const docs = snapshot?.docs || [];
+        const logs = docs.map((doc) => {
+          const data = doc.data() || {};
+          return {
+            id: doc.id,
+            type: data.type || 'SYSTEM',
+            timestamp: data.timestamp || null,
+            message: data.message || 'System operational trigger',
+          };
+        });
+        setActivities(logs);
+        setRealtimeStats((prev) => ({
+          ...prev,
+          tasksCompleted: snapshot ? snapshot.size * 3 + 8 : 8,
+        }));
+        setDiag5C({
+          status: 'success',
+          count: snapshot ? snapshot.size : 0,
+          latency
+        });
+      } catch (err: any) {
+        console.error('[STEP 5C ERROR] Error parsing logs:', err);
+        setDiag5C({
+          status: 'failed',
+          error: err?.message || String(err),
+          latency
+        });
+      }
+    }, (err) => {
+      if (!active) return;
+      console.warn('Error listening to logs, trying fallback query without order:', err);
+      try {
+        const fallbackQuery = query(collection(db, 'logs'), limit(5));
+        onSnapshot(fallbackQuery, (snapshot) => {
+          if (!active) return;
+          const docs = snapshot?.docs || [];
+          const logs = docs.map((doc) => {
+            const data = doc.data() || {};
+            return {
+              id: doc.id,
+              type: data.type || 'SYSTEM',
+              timestamp: data.timestamp || null,
+              message: data.message || 'System operational trigger',
+            };
+          });
+          setActivities(logs);
+          setDiag5C({
+            status: 'success',
+            count: snapshot ? snapshot.size : 0,
+            latency: Date.now() - startTime5C
+          });
+        }, (fallbackErr) => {
+          if (!active) return;
+          setDiag5C({
+            status: 'failed',
+            error: fallbackErr?.message || 'Fallback logs listener failed',
+            latency: Date.now() - startTime5C
+          });
+        });
+      } catch (fallbackEx: any) {
+        setDiag5C({
+          status: 'failed',
+          error: err?.message || 'Logs query failed completely',
+          latency: Date.now() - startTime5C
+        });
+      }
     });
 
     return () => {
+      active = false;
       unsubscribeUsers();
       unsubscribeWithdrawals();
       unsubscribeGiveaway();
@@ -205,7 +369,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
     setIsRefreshing(true);
     setTimeout(() => {
       setIsRefreshing(false);
-    }, 8000);
+    }, 2000);
   };
 
   const statCards = [
@@ -323,6 +487,48 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
             >
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-orange-400' : ''}`} />
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* STEP 5 Dashboard Restoration Diagnostics */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-900/50 p-4 rounded-2xl border border-slate-800/60 shadow-inner">
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-xs font-semibold">
+            <span className="text-slate-400 uppercase tracking-wider">Step 5A: Users Summary</span>
+            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+              diag5A.status === 'success' ? 'bg-emerald-950/50 text-emerald-400' :
+              diag5A.status === 'failed' ? 'bg-rose-950/50 text-rose-400' : 'bg-amber-950/50 text-amber-400 animate-pulse'
+            }`}>{diag5A.status.toUpperCase()}</span>
+          </div>
+          <div className="text-[10px] text-slate-500 font-mono">
+            {diag5A.status === 'success' ? `Records: ${diag5A.count} | Latency: ${diag5A.latency}ms` : diag5A.error || 'Pending user stream...'}
+          </div>
+        </div>
+
+        <div className="space-y-1 border-t md:border-t-0 md:border-l border-slate-800/80 pt-2 md:pt-0 md:pl-4">
+          <div className="flex items-center justify-between text-xs font-semibold">
+            <span className="text-slate-400 uppercase tracking-wider">Step 5B: Secondary Stats</span>
+            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+              diag5B.status === 'success' ? 'bg-emerald-950/50 text-emerald-400' :
+              diag5B.status === 'failed' ? 'bg-rose-950/50 text-rose-400' : 'bg-amber-950/50 text-amber-400 animate-pulse'
+            }`}>{diag5B.status.toUpperCase()}</span>
+          </div>
+          <div className="text-[10px] text-slate-500 font-mono">
+            {diag5B.status === 'success' ? `Records: ${diag5B.count} | Latency: ${diag5B.latency}ms` : diag5B.error || 'Pending withdrawal stream...'}
+          </div>
+        </div>
+
+        <div className="space-y-1 border-t md:border-t-0 md:border-l border-slate-800/80 pt-2 md:pt-0 md:pl-4">
+          <div className="flex items-center justify-between text-xs font-semibold">
+            <span className="text-slate-400 uppercase tracking-wider">Step 5C: Activity Logs</span>
+            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+              diag5C.status === 'success' ? 'bg-emerald-950/50 text-emerald-400' :
+              diag5C.status === 'failed' ? 'bg-rose-950/50 text-rose-400' : 'bg-amber-950/50 text-amber-400 animate-pulse'
+            }`}>{diag5C.status.toUpperCase()}</span>
+          </div>
+          <div className="text-[10px] text-slate-500 font-mono">
+            {diag5C.status === 'success' ? `Records: ${diag5C.count} | Latency: ${diag5C.latency}ms` : diag5C.error || 'Pending audit log stream...'}
           </div>
         </div>
       </div>

@@ -111,48 +111,59 @@ export const TransactionsView: React.FC = () => {
     fetchTransactions();
   }, []);
 
-  // Filter & Search local helper (Firestore queries are challenging for combined text sub-strings, so we filter full items in memory or search dynamically)
+  // Filter & Search local helper safely (with full guards against null/undefined values)
   const filteredTransactions = transactions.filter((tx) => {
-    // 1. Search Query
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      if (searchField === 'uid') {
-        if (!tx.uid?.toLowerCase().includes(q)) return false;
-      } else if (searchField === 'mobile') {
-        if (!tx.mobile?.toLowerCase().includes(q)) return false;
-      } else if (searchField === 'telegramId') {
-        if (!tx.telegramId?.toLowerCase().includes(q)) return false;
-      } else if (searchField === 'transactionId') {
-        if (!tx.transactionId?.toLowerCase().includes(q)) return false;
-      } else {
-        const matchAll =
-          tx.uid?.toLowerCase().includes(q) ||
-          tx.mobile?.toLowerCase().includes(q) ||
-          tx.telegramId?.toLowerCase().includes(q) ||
-          tx.transactionId?.toLowerCase().includes(q) ||
-          tx.fullName?.toLowerCase().includes(q);
-        if (!matchAll) return false;
+    try {
+      // 1. Search Query
+      if (searchQuery && searchQuery.trim()) {
+        const q = String(searchQuery).toLowerCase().trim();
+        const txUid = tx.uid ? String(tx.uid).toLowerCase() : '';
+        const txMobile = tx.mobile ? String(tx.mobile).toLowerCase() : '';
+        const txTelegramId = tx.telegramId ? String(tx.telegramId).toLowerCase() : '';
+        const txTransactionId = tx.transactionId ? String(tx.transactionId).toLowerCase() : '';
+        const txFullName = tx.fullName ? String(tx.fullName).toLowerCase() : '';
+
+        if (searchField === 'uid') {
+          if (txUid.indexOf(q) === -1) return false;
+        } else if (searchField === 'mobile') {
+          if (txMobile.indexOf(q) === -1) return false;
+        } else if (searchField === 'telegramId') {
+          if (txTelegramId.indexOf(q) === -1) return false;
+        } else if (searchField === 'transactionId') {
+          if (txTransactionId.indexOf(q) === -1) return false;
+        } else {
+          const matchAll =
+            txUid.indexOf(q) !== -1 ||
+            txMobile.indexOf(q) !== -1 ||
+            txTelegramId.indexOf(q) !== -1 ||
+            txTransactionId.indexOf(q) !== -1 ||
+            txFullName.indexOf(q) !== -1;
+          if (!matchAll) return false;
+        }
       }
-    }
 
-    // 2. Filter Type
-    if (filterType !== 'all') {
-      if (tx.type !== filterType) return false;
-    }
+      // 2. Filter Type
+      if (filterType && filterType !== 'all') {
+        if (tx.type !== filterType) return false;
+      }
 
-    // 3. Date Filters
-    if (startDate) {
-      const txDate = new Date(tx.createdAt).getTime();
-      const sDate = new Date(startDate).getTime();
-      if (txDate < sDate) return false;
-    }
-    if (endDate) {
-      const txDate = new Date(tx.createdAt).getTime();
-      const eDate = new Date(endDate).setHours(23, 59, 59, 999);
-      if (txDate > eDate) return false;
-    }
+      // 3. Date Filters
+      if (startDate) {
+        const txDate = tx.createdAt ? new Date(tx.createdAt).getTime() : 0;
+        const sDate = new Date(startDate).getTime();
+        if (isNaN(txDate) || isNaN(sDate) || txDate < sDate) return false;
+      }
+      if (endDate) {
+        const txDate = tx.createdAt ? new Date(tx.createdAt).getTime() : 0;
+        const eDate = new Date(endDate).setHours(23, 59, 59, 999);
+        if (txDate > eDate) return false;
+      }
 
-    return true;
+      return true;
+    } catch (err) {
+      console.warn('Error in transaction filtering:', err);
+      return false;
+    }
   });
 
   const exportCSV = () => {

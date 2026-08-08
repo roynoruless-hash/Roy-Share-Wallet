@@ -26,7 +26,8 @@ import {
   Square,
   Trash2,
   Lock,
-  Sparkles
+  Sparkles,
+  Activity
 } from 'lucide-react';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../services/firebase';
@@ -511,17 +512,24 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
             <button
               type="button"
               id="enable-all-withdrawals-toggle"
-              onClick={() => updateConfig({
-                allWithdrawalsEnabled: config.allWithdrawalsEnabled !== undefined ? !config.allWithdrawalsEnabled : !config.enableWithdraw,
-                enableWithdraw: config.allWithdrawalsEnabled !== undefined ? !config.allWithdrawalsEnabled : !config.enableWithdraw,
-              })}
+              onClick={() => {
+                const currentVal = config.globalWithdrawalsEnabled !== undefined
+                  ? config.globalWithdrawalsEnabled
+                  : (config.allWithdrawalsEnabled !== false && config.enableWithdraw !== false);
+                const newVal = !currentVal;
+                updateConfig({
+                  globalWithdrawalsEnabled: newVal,
+                  allWithdrawalsEnabled: newVal,
+                  enableWithdraw: newVal,
+                });
+              }}
               className={`p-1 rounded-lg transition flex items-center gap-1.5 px-3 py-1 text-xs font-black uppercase rounded-xl border ${
-                (config.allWithdrawalsEnabled !== false && config.enableWithdraw !== false)
+                (config.globalWithdrawalsEnabled !== false && config.allWithdrawalsEnabled !== false && config.enableWithdraw !== false)
                   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
                   : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
               }`}
             >
-              {(config.allWithdrawalsEnabled !== false && config.enableWithdraw !== false) ? (
+              {(config.globalWithdrawalsEnabled !== false && config.allWithdrawalsEnabled !== false && config.enableWithdraw !== false) ? (
                 <>
                   <ToggleRight className="w-5 h-5" />
                   <span>ENABLED</span>
@@ -919,6 +927,64 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
             <Save className="w-4.5 h-4.5" />
             <span>{isSaving ? 'Saving...' : 'Sync All Withdrawal Settings'}</span>
           </button>
+        </div>
+      </div>
+
+      {/* ADMIN DIAGNOSTIC SECTION */}
+      <div className="p-6 rounded-3xl bg-slate-950/40 border border-slate-800/80 shadow-md space-y-4">
+        <div className="flex items-center gap-2 text-slate-300">
+          <Activity className="w-4 h-4 text-amber-500" />
+          <h4 className="text-xs font-black tracking-wider uppercase text-amber-400">Current Withdrawal Config (Admin Diagnostic)</h4>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-center">
+            <span className="text-[10px] text-slate-400 uppercase font-bold">Global Withdrawals</span>
+            <span className={`text-xs font-black mt-1 uppercase ${
+              (config.globalWithdrawalsEnabled !== false && config.allWithdrawalsEnabled !== false && config.enableWithdraw !== false)
+                ? 'text-emerald-400'
+                : 'text-rose-400'
+            }`}>
+              {(config.globalWithdrawalsEnabled !== false && config.allWithdrawalsEnabled !== false && config.enableWithdraw !== false) ? 'ENABLED' : 'DISABLED'}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-center">
+            <span className="text-[10px] text-slate-400 uppercase font-bold">UPI Method</span>
+            <span className={`text-xs font-black mt-1 uppercase ${config.upiEnabled !== false && config.enableUpi !== false ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {config.upiEnabled !== false && config.enableUpi !== false ? 'ENABLED' : 'DISABLED'}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-center">
+            <span className="text-[10px] text-slate-400 uppercase font-bold">QR Code Method</span>
+            <span className={`text-xs font-black mt-1 uppercase ${config.qrEnabled !== false && config.enableQr !== false ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {config.qrEnabled !== false && config.enableQr !== false ? 'ENABLED' : 'DISABLED'}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-center">
+            <span className="text-[10px] text-slate-400 uppercase font-bold">Redeem Method</span>
+            <span className={`text-xs font-black mt-1 uppercase ${config.redeemEnabled !== false && config.enableRedeemCode !== false ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {config.redeemEnabled !== false && config.enableRedeemCode !== false ? 'ENABLED' : 'DISABLED'}
+            </span>
+          </div>
+
+          <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-center">
+            <span className="text-[10px] text-slate-400 uppercase font-bold">Ultra Pay Method</span>
+            <span className={`text-xs font-black mt-1 uppercase ${config.ultraPayEnabled ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {config.ultraPayEnabled ? 'ENABLED' : 'DISABLED'}
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-slate-400 border-t border-slate-900 pt-3">
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span>Config Source: <strong className="text-slate-300">DATABASE (Firestore settings/config)</strong></span>
+          </div>
+          <div>
+            <span>Last Updated: <strong className="text-slate-300 font-mono">{config.updatedAt ? new Date(config.updatedAt).toLocaleString() : 'Never'}</strong></span>
+          </div>
         </div>
       </div>
 

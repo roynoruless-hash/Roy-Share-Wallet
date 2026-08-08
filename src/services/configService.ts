@@ -35,6 +35,8 @@ export const DEFAULT_CONFIG: AdminConfig = {
   uidLength: 6,
 
   // Withdrawal Settings
+  globalWithdrawalsEnabled: true,
+  allWithdrawalsEnabled: true,
   enableWithdraw: true,
   enableUpi: true,
   enableQr: true,

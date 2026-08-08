@@ -1839,7 +1839,11 @@ export async function processTelegramUpdate(token: string, update: any) {
       const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
       const withdrawMiniAppUrl = `${baseUrl}/?action=withdraw&tgId=${chatId}`;
 
-      const allEnabled = adminConfig?.allWithdrawalsEnabled !== false && adminConfig?.enableWithdraw !== false;
+      const allEnabled = adminConfig?.globalWithdrawalsEnabled !== false &&
+                         adminConfig?.allWithdrawalsEnabled !== false &&
+                         adminConfig?.enableWithdraw !== false;
+
+      console.log(`[BOT WITHDRAWAL CHECK] chatId=${chatId}, globalWithdrawalsEnabled=${adminConfig?.globalWithdrawalsEnabled}, allWithdrawalsEnabled=${adminConfig?.allWithdrawalsEnabled}, enableWithdraw=${adminConfig?.enableWithdraw}, allEnabled=${allEnabled}`);
 
       if (!allEnabled) {
         await sendTelegramApi(token, 'sendMessage', {

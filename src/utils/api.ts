@@ -44,34 +44,50 @@ export function setupFetchInterceptor() {
   const originalFetch = window.fetch;
 
   window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const url = typeof input === 'string' ? input : (input instanceof URL ? input.href : input.url);
-
-    // Only intercept requests destined for admin api endpoints
-    if (url.includes('/api/admin/')) {
-      const token = getAdminToken();
-      if (token) {
-        init = init || {};
-        const headers = new Headers(init.headers || {});
-        if (!headers.has('x-admin-session-token')) {
-          headers.set('x-admin-session-token', token);
-        }
-        if (!headers.has('Authorization')) {
-          headers.set('Authorization', `Bearer ${token}`);
-        }
-        init.headers = headers;
-      }
-    }
-
     try {
+      let urlStr = '';
+      if (typeof input === 'string') {
+        urlStr = input;
+      } else if (input instanceof URL) {
+        urlStr = input.href;
+      } else if (input && typeof input === 'object' && 'url' in input) {
+        urlStr = (input as any).url || '';
+      }
+
+      // Only intercept requests destined for admin api endpoints
+      if (urlStr && urlStr.includes('/api/admin/')) {
+        const token = getAdminToken();
+        if (token) {
+          init = init || {};
+          const headers = new Headers(init.headers || {});
+          if (!headers.has('x-admin-session-token')) {
+            headers.set('x-admin-session-token', token);
+          }
+          if (!headers.has('Authorization')) {
+            headers.set('Authorization', `Bearer ${token}`);
+          }
+          init.headers = headers;
+        }
+      }
+
       const response = await originalFetch(input, init);
+
       // Dispatch expired event if receiving 401 on admin endpoints, except the status check itself
-      if (response.status === 401 && url.includes('/api/admin/') && !url.includes('/api/admin/status')) {
-        console.warn(`[API Interceptor] Received 401 on admin API ${url}. Triggering logout.`);
+      if (response.status === 401 && urlStr && urlStr.includes('/api/admin/') && !urlStr.includes('/api/admin/status')) {
+        console.warn(`[API Interceptor] Received 401 on admin API ${urlStr}. Triggering logout.`);
         window.dispatchEvent(new CustomEvent('admin-session-expired'));
       }
       return response;
     } catch (error) {
-      throw error;
+      // If our interceptor logic fails or the fetch fails, make sure we fall back to originalFetch
+      // so we don't break the application's ability to fetch.
+      if (error instanceof TypeError && error.message.includes('failed to fetch')) {
+        // This is a normal network/CORS error from fetch itself, rethrow it
+        throw error;
+      }
+      // If it's an unexpected exception from our interceptor logic, log it and fallback to original fetch
+      console.error('[API Interceptor Error]', error);
+      return originalFetch(input, init);
     }
   };
 }

@@ -9,6 +9,161 @@
     <link rel="manifest" href="/manifest.json" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <title>Roy Share Wallet</title>
+    <script>
+      (function() {
+        window.__checkpoints = [];
+        window.__checkpoint = function(name) {
+          window.__checkpoints.push({ name: name, time: new Date().toLocaleTimeString() });
+          console.log("[CHECKPOINT] " + name);
+          try {
+            sessionStorage.setItem('roy_last_checkpoint', name);
+            sessionStorage.setItem('roy_checkpoints', JSON.stringify(window.__checkpoints));
+          } catch(e) {}
+        };
+        
+        window.__checkpoint('HTML_HEAD_START');
+
+        function showError(type, err, event) {
+          var message = 'Unknown';
+          var stack = 'No stack';
+          var filename = '';
+          var lineno = '';
+          var colno = '';
+          var promiseReason = '';
+
+          if (err) {
+            message = err.message || String(err);
+            stack = err.stack || 'No stack trace';
+          }
+          if (event) {
+            if (event.message) message = event.message;
+            if (event.filename) filename = event.filename;
+            if (event.lineno) lineno = event.lineno;
+            if (event.colno) colno = event.colno;
+            if (event.reason) {
+              promiseReason = String(event.reason);
+              if (event.reason.stack) {
+                stack = event.reason.stack;
+              } else if (event.reason.message) {
+                message = event.reason.message;
+              }
+            }
+          }
+
+          var lowerMessage = String(message).toLowerCase();
+          var lowerStack = String(stack).toLowerCase();
+          var lowerFilename = String(filename).toLowerCase();
+          var lowerReason = String(promiseReason).toLowerCase();
+
+          // 1. Specifically detect and ignore/safely handle Vite HMR / WebSocket / transport/preview internal errors
+          var isViteOrPreviewError = false;
+          if (
+            lowerMessage.indexOf('websocket') !== -1 ||
+            lowerStack.indexOf('websocket') !== -1 ||
+            lowerReason.indexOf('websocket') !== -1 ||
+            lowerMessage.indexOf('vite/client') !== -1 ||
+            lowerStack.indexOf('vite/client') !== -1 ||
+            lowerFilename.indexOf('vite/client') !== -1 ||
+            lowerMessage.indexOf('/vite/client') !== -1 ||
+            lowerStack.indexOf('/vite/client') !== -1 ||
+            lowerFilename.indexOf('/vite/client') !== -1 ||
+            lowerMessage.indexOf('hmr') !== -1 ||
+            lowerStack.indexOf('hmr') !== -1 ||
+            lowerMessage.indexOf('hot-update') !== -1 ||
+            lowerStack.indexOf('hot-update') !== -1 ||
+            lowerMessage.indexOf('transport') !== -1 ||
+            lowerStack.indexOf('transport') !== -1
+          ) {
+            isViteOrPreviewError = true;
+          }
+
+          if (isViteOrPreviewError) {
+            console.warn("[DIAGNOSTIC] Ignored Vite/HMR/WebSocket/Transport internal error:", message);
+            return;
+          }
+
+          // 2. Only classify UNHANDLED_PROMISE_REJECTION as fatal application crash if it clearly originates from the application
+          if (type === 'UNHANDLED_PROMISE_REJECTION') {
+            var isAppError = false;
+            var appFiles = ['src/', 'main.tsx', 'App.tsx', 'DashboardView', 'firebase', 'components/'];
+            for (var i = 0; i < appFiles.length; i++) {
+              if (lowerStack.indexOf(appFiles[i].toLowerCase()) !== -1 || lowerMessage.indexOf(appFiles[i].toLowerCase()) !== -1) {
+                isAppError = true;
+                break;
+              }
+            }
+            if (!isAppError) {
+              console.warn("[DIAGNOSTIC] Ignored non-application background promise rejection:", message);
+              return;
+            }
+          }
+
+          console.error("CRITICAL RUNTIME ERROR CAUGHT:", err, event);
+
+          var errData = {
+            type: type,
+            message: message,
+            stack: stack,
+            filename: filename,
+            lineno: lineno,
+            colno: colno,
+            promiseReason: promiseReason,
+            lastCheckpoint: sessionStorage.getItem('roy_last_checkpoint') || 'None',
+            checkpoints: window.__checkpoints
+          };
+
+          try {
+            localStorage.setItem('roy_startup_error', JSON.stringify(errData));
+            sessionStorage.setItem('roy_startup_error', JSON.stringify(errData));
+          } catch (e) {}
+
+          // Render direct pure DOM diagnostics
+          var container = document.getElementById('root') || document.body;
+          if (container) {
+            var html = '<div style="font-family: -apple-system, BlinkMacSystemFont, monospace; padding: 30px; background: #0f172a; color: #f8fafc; min-height: 100vh; overflow: auto; box-sizing: border-box; line-height: 1.5;">';
+            html += '<h1 style="color: #ef4444; font-size: 24px; margin-top: 0; margin-bottom: 20px; border-bottom: 2px solid #ef4444; padding-bottom: 10px; font-weight: 800;">🚨 ROY SHARE ADMIN - STARTUP CRASH REPORT</h1>';
+            
+            html += '<div style="background: #1e293b; padding: 15px; border-radius: 6px; margin-bottom: 20px; border-left: 4px solid #10b981;">';
+            html += '<strong>LAST SUCCESSFUL CHECKPOINT:</strong> <span style="color: #34d399; font-size: 16px; font-family: monospace;">' + (sessionStorage.getItem('roy_last_checkpoint') || 'None') + '</span>';
+            html += '</div>';
+
+            html += '<div style="margin-bottom: 20px; font-family: monospace; font-size: 14px;">';
+            html += '<div style="margin-bottom: 8px;"><strong>Error Name:</strong> <span style="color: #ef4444;">' + type + '</span></div>';
+            html += '<div style="margin-bottom: 8px;"><strong>Error Message:</strong> <span style="color: #f87171;">' + message + '</span></div>';
+            html += '<div style="margin-bottom: 8px;"><strong>File:</strong> <span style="color: #94a3b8;">' + (filename || 'N/A') + '</span></div>';
+            html += '<div style="margin-bottom: 8px;"><strong>Line:</strong> <span style="color: #94a3b8;">' + (lineno || 'N/A') + '</span> | <strong>Column:</strong> <span style="color: #94a3b8;">' + (colno || 'N/A') + '</span></div>';
+            if (promiseReason) {
+              html += '<div style="margin-bottom: 8px;"><strong>Promise Reason:</strong> <span style="color: #fbbf24;">' + promiseReason + '</span></div>';
+            }
+            html += '</div>';
+
+            html += '<h3 style="margin-bottom: 8px; color: #94a3b8; font-size: 15px;">Stack Trace:</h3>';
+            html += '<pre style="background: #020617; padding: 15px; border-radius: 6px; white-space: pre-wrap; overflow-x: auto; color: #cbd5e1; border: 1px solid #334155; font-size: 12px; font-family: monospace;">' + stack + '</pre>';
+
+            html += '<h3 style="margin-top: 20px; margin-bottom: 8px; color: #94a3b8; font-size: 15px;">Checkpoint History:</h3>';
+            html += '<pre style="background: #020617; padding: 15px; border-radius: 6px; white-space: pre-wrap; color: #34d399; font-size: 12px; font-family: monospace;">';
+            var checkpoints = window.__checkpoints || [];
+            for (var i = 0; i < checkpoints.length; i++) {
+              html += '[' + (i+1) + '] ' + checkpoints[i].name + ' @ ' + checkpoints[i].time + '\n';
+            }
+            html += '</pre>';
+
+            html += '<div style="margin-top: 30px; text-align: center;"><button onclick="location.reload()" style="background: #3b82f6; color: white; border: none; padding: 10px 20px; font-size: 14px; border-radius: 6px; cursor: pointer; font-family: inherit; font-weight: 600;">Reload Page</button></div>';
+            html += '</div>';
+            
+            container.innerHTML = html;
+          }
+        }
+
+        window.addEventListener('error', function(e) {
+          showError('UNCATCHED_EXCEPTION', e.error || new Error(e.message), e);
+        });
+
+        window.addEventListener('unhandledrejection', function(e) {
+          showError('UNHANDLED_PROMISE_REJECTION', e.reason instanceof Error ? e.reason : new Error(String(e.reason)), e);
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

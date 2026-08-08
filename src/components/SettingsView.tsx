@@ -21,7 +21,7 @@ import { SecurityView } from './SecurityView';
 
 interface SettingsViewProps {
   config: AdminConfig;
-  updateConfig: (key: keyof AdminConfig, value: any) => void;
+  updateConfig: (fields: Partial<AdminConfig>) => void;
   onSave: () => void;
   isSaving: boolean;
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;

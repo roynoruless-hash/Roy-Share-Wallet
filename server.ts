@@ -4727,8 +4727,15 @@ Claim now and don't forget to share your screenshot!`;
   // Helper to extract V2 withdrawal settings
   function getV2WithdrawalSettings(c: any) {
     const data = c || {};
+    const globalWithdrawalsEnabled = data.globalWithdrawalsEnabled !== undefined
+      ? Boolean(data.globalWithdrawalsEnabled)
+      : (data.allWithdrawalsEnabled !== undefined
+          ? Boolean(data.allWithdrawalsEnabled)
+          : (data.enableWithdraw !== undefined ? Boolean(data.enableWithdraw) : true));
+
     return {
-      allWithdrawalsEnabled: data.allWithdrawalsEnabled !== undefined ? Boolean(data.allWithdrawalsEnabled) : (data.enableWithdraw !== undefined ? Boolean(data.enableWithdraw) : true),
+      globalWithdrawalsEnabled,
+      allWithdrawalsEnabled: globalWithdrawalsEnabled,
       calculationModel: data.calculationModel === 'OPTION_B' ? 'OPTION_B' : 'OPTION_A',
       dailyWithdrawalLimit: Number(data.dailyWithdrawalLimit) || 0,
       weeklyWithdrawalLimit: Number(data.weeklyWithdrawalLimit) || 0,
@@ -5507,10 +5514,17 @@ Claim now and don't forget to share your screenshot!`;
         return res.status(400).json({ success: false, error: 'Settings object is required.' });
       }
 
+      const masterVal = settings.globalWithdrawalsEnabled !== undefined
+        ? Boolean(settings.globalWithdrawalsEnabled)
+        : (settings.allWithdrawalsEnabled !== undefined
+            ? Boolean(settings.allWithdrawalsEnabled)
+            : (settings.enableWithdraw !== undefined ? Boolean(settings.enableWithdraw) : true));
+
       const configRef = doc(db, 'settings', 'config');
       await setDoc(configRef, {
-        allWithdrawalsEnabled: Boolean(settings.allWithdrawalsEnabled),
-        enableWithdraw: Boolean(settings.allWithdrawalsEnabled),
+        globalWithdrawalsEnabled: masterVal,
+        allWithdrawalsEnabled: masterVal,
+        enableWithdraw: masterVal,
 
         upiEnabled: Boolean(settings.upiEnabled),
         upiMin: Number(settings.upiMin) || 50,

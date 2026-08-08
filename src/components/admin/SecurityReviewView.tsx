@@ -196,16 +196,25 @@ export const SecurityReviewView: React.FC<SecurityReviewViewProps> = ({ showToas
   };
 
   const filteredReviews = reviews.filter((r) => {
+    if (!r) return false;
     const matchesStatus = statusFilter === 'ALL' || r.status === statusFilter;
     const q = searchTerm.toLowerCase();
+    
+    const telegramIdStr = String(r.telegramId || '');
+    const fullNameStr = String(r.fullName || '');
+    const usernameStr = String(r.username || '');
+    const mobileStr = String(r.mobile || '');
+    const gmailStr = String(r.gmail || '');
+    const deviceFingerprintStr = String(r.deviceFingerprint || '');
+
     const matchesSearch =
       !q ||
-      r.telegramId.toLowerCase().includes(q) ||
-      r.fullName.toLowerCase().includes(q) ||
-      (r.username && r.username.toLowerCase().includes(q)) ||
-      r.mobile.includes(q) ||
-      r.gmail.toLowerCase().includes(q) ||
-      (r.deviceFingerprint && r.deviceFingerprint.toLowerCase().includes(q));
+      telegramIdStr.toLowerCase().includes(q) ||
+      fullNameStr.toLowerCase().includes(q) ||
+      usernameStr.toLowerCase().includes(q) ||
+      mobileStr.includes(q) ||
+      gmailStr.toLowerCase().includes(q) ||
+      deviceFingerprintStr.toLowerCase().includes(q);
 
     return matchesStatus && matchesSearch;
   });
@@ -337,12 +346,12 @@ export const SecurityReviewView: React.FC<SecurityReviewViewProps> = ({ showToas
               <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-cyan-400">
-                    {rev.fullName.charAt(0).toUpperCase()}
+                    {(rev.fullName || 'U').charAt(0).toUpperCase()}
                   </div>
                   <div>
                     <h3 className="text-base font-bold text-white flex items-center gap-2">
-                      {rev.fullName}
-                      {rev.username && <span className="text-xs font-normal text-slate-400">@{rev.username.replace('@', '')}</span>}
+                      {rev.fullName || 'Unknown User'}
+                      {rev.username && <span className="text-xs font-normal text-slate-400">@{String(rev.username).replace('@', '')}</span>}
                     </h3>
                     <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
                       <span className="flex items-center gap-1 font-mono text-cyan-400">

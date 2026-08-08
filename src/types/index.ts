@@ -46,6 +46,7 @@ export interface AdminConfig {
   // Withdrawal Settings V2
   enableWithdraw: boolean;
   allWithdrawalsEnabled?: boolean;
+  globalWithdrawalsEnabled?: boolean;
   enableUpi: boolean;
   upiEnabled?: boolean;
   upiMin?: number;

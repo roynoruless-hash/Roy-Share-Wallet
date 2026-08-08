@@ -43,6 +43,8 @@ import { ComingSoonView } from './components/ComingSoonView';
 import { Toast, ToastMessage } from './components/Toast';
 import { Loader2 } from 'lucide-react';
 import { DebugView } from './components/DebugView';
+import { db } from './services/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 const SESSION_STORAGE_KEY = 'royshare_admin_session';
 
@@ -103,7 +105,7 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
   const [config, setConfig] = useState<AdminConfig>(DEFAULT_CONFIG);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -144,35 +146,232 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Load configuration from Firestore on mount
+  const [configDiagnostic, setConfigDiagnostic] = useState<{
+    status: 'idle' | 'loading' | 'success' | 'failed';
+    collection: string;
+    documentId: string;
+    exists: boolean | null;
+    fields: string[];
+    error?: string;
+    errorCode?: string;
+    latency?: number;
+    requestStartedAt?: string;
+    requestFinishedAt?: string;
+  }>({
+    status: 'idle',
+    collection: 'settings',
+    documentId: 'config',
+    exists: null,
+    fields: []
+  });
+
+  const [apiDiagnostic, setApiDiagnostic] = useState<{
+    status: 'idle' | 'loading' | 'success' | 'failed' | 'skipped';
+    endpoint: string;
+    method: string;
+    httpStatus: number | null;
+    fields: string[];
+    error?: string;
+    latency?: number;
+  }>({
+    status: 'idle',
+    endpoint: '/api/admin/config',
+    method: 'GET',
+    httpStatus: null,
+    fields: []
+  });
+
+  // Load configuration from API/Firestore on mount
   useEffect(() => {
+    let active = true;
     async function initConfig() {
       setIsLoading(true);
-      try {
-        const res = await loadAdminConfig();
-        // Automatically populate every input field with fetched/cached data
-        setConfig(res.config);
+      const startTime = Date.now();
+      
+      // Get session token if present
+      const rawSession = localStorage.getItem(SESSION_STORAGE_KEY);
+      let sessionToken = '';
+      if (rawSession) {
+        try {
+          sessionToken = JSON.parse(rawSession).sessionToken || '';
+        } catch (e) {}
+      }
 
-        if (res.isError) {
-          showToast(`Firestore unavailable: ${res.errorMessage}. Existing values preserved.`, 'error');
-        } else if (res.config.botToken && res.config.botToken.trim()) {
-          // Check webhook status on initial load; if missing, auto-register
-          getWebhookInfo(res.config.botToken).then((whInfo) => {
-            if (whInfo.success && !whInfo.url) {
-              registerWebhook(res.config.botToken).catch((err) =>
-                console.warn('Auto webhook registration on load failed:', err)
-              );
+      let loadedConfig: Partial<AdminConfig> | null = null;
+      let apiSucceeded = false;
+      let apiStatus: number | null = null;
+      let apiLatency = 0;
+      let apiFields: string[] = [];
+      let apiErrorMsg = '';
+
+      if (sessionToken) {
+        console.log('[ADMIN_CONFIG_API_TEST] Requesting /api/admin/config GET');
+        setApiDiagnostic((prev) => ({ ...prev, status: 'loading' }));
+        const apiStartTime = Date.now();
+        
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+          const res = await fetch('/api/admin/config', {
+            method: 'GET',
+            headers: {
+              'x-admin-session-token': sessionToken,
+              'Authorization': `Bearer ${sessionToken}`
+            },
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          
+          apiStatus = res.status;
+          apiLatency = Date.now() - apiStartTime;
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.success && data.config) {
+              loadedConfig = data.config;
+              apiFields = Object.keys(data.config).map(k => k); // sanitized keys only
+              apiSucceeded = true;
+              console.log('[ADMIN_CONFIG_API_TEST] Successfully fetched admin config from API.');
+            } else {
+              apiErrorMsg = data?.error || 'API returned success=false';
             }
+          } else {
+            apiErrorMsg = `HTTP Error ${res.status}: ${res.statusText}`;
+            if (res.status === 401 || res.status === 403) {
+              console.warn('[ADMIN_CONFIG_API_TEST] Unauthorized config fetch, dispatching admin-session-expired');
+              window.dispatchEvent(new CustomEvent('admin-session-expired'));
+            }
+          }
+        } catch (err: any) {
+          apiLatency = Date.now() - apiStartTime;
+          apiErrorMsg = err?.message || String(err);
+          console.warn('[ADMIN_CONFIG_API_TEST] Failed to fetch config via API:', err);
+        }
+
+        if (active) {
+          setApiDiagnostic({
+            status: apiSucceeded ? 'success' : 'failed',
+            endpoint: '/api/admin/config',
+            method: 'GET',
+            httpStatus: apiStatus,
+            fields: apiFields,
+            error: apiErrorMsg,
+            latency: apiLatency
           });
         }
+      } else {
+        if (active) {
+          setApiDiagnostic((prev) => ({ ...prev, status: 'skipped', error: 'No session token found' }));
+        }
+      }
+
+      // If API succeeded, we use it. Otherwise, we try the Firestore fallback.
+      if (apiSucceeded && loadedConfig) {
+        if (active) {
+          const merged: AdminConfig = {
+            ...DEFAULT_CONFIG,
+            ...loadedConfig,
+          };
+          setConfig(merged);
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      // --- Firestore Fallback ---
+      console.log('[FIRESTORE_CONFIG_FALLBACK] Attempting Firestore read on path: settings/config');
+      setConfigDiagnostic((prev) => ({
+        ...prev,
+        status: 'loading',
+        requestStartedAt: new Date().toISOString()
+      }));
+
+      const configDocRef = doc(db, 'settings', 'config');
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Firestore operation timed out (5000ms)')), 5000)
+      );
+
+      try {
+        const docSnap = await Promise.race([
+          getDoc(configDocRef),
+          timeoutPromise
+        ]);
+
+        const endTime = Date.now();
+        const latency = endTime - startTime;
+
+        if (!active) return;
+
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const fields = Object.keys(data || {});
+          
+          console.log('[FIRESTORE_CONFIG_FALLBACK] Success! Document exists. Fields:', fields);
+
+          setConfigDiagnostic({
+            status: 'success',
+            collection: 'settings',
+            documentId: 'config',
+            exists: true,
+            fields,
+            latency,
+            requestStartedAt: new Date(startTime).toISOString(),
+            requestFinishedAt: new Date(endTime).toISOString()
+          });
+
+          const merged: AdminConfig = {
+            ...DEFAULT_CONFIG,
+            ...data,
+          };
+          setConfig(merged);
+        } else {
+          console.log('[FIRESTORE_CONFIG_FALLBACK] Document settings/config does not exist.');
+          setConfigDiagnostic({
+            status: 'success',
+            collection: 'settings',
+            documentId: 'config',
+            exists: false,
+            fields: [],
+            latency,
+            requestStartedAt: new Date(startTime).toISOString(),
+            requestFinishedAt: new Date(endTime).toISOString()
+          });
+          setConfig(DEFAULT_CONFIG);
+        }
       } catch (err: any) {
-        console.error('Failed to load initial config:', err);
-        showToast('Firestore connection error. Retaining existing values.', 'error');
+        const endTime = Date.now();
+        const latency = endTime - startTime;
+        console.error('[FIRESTORE_CONFIG_FALLBACK] Failed to read Firestore:', err);
+
+        if (active) {
+          setConfigDiagnostic({
+            status: 'failed',
+            collection: 'settings',
+            documentId: 'config',
+            exists: null,
+            fields: [],
+            error: err?.message || String(err),
+            errorCode: err?.code || 'UNKNOWN_ERROR',
+            latency,
+            requestStartedAt: new Date(startTime).toISOString(),
+            requestFinishedAt: new Date(endTime).toISOString()
+          });
+          setConfig(DEFAULT_CONFIG);
+          showToast(`Firestore fallback error: ${err?.message || 'Check connection details'}`, 'error');
+        }
       } finally {
-        setIsLoading(false);
+        if (active) {
+          setIsLoading(false);
+        }
       }
     }
+
     initConfig();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const [sessionTimeLeft, setSessionTimeLeft] = useState<number>(3 * 3600);
@@ -502,20 +701,8 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (isTelegramWebLoaded) return;
-    const interval = setInterval(() => {
-      const tg = (window as any).Telegram?.WebApp;
-      if (tg?.initData || tg?.initDataUnsafe?.user?.id) {
-        console.log('[WEBAPP_DETECTED] Telegram WebApp loaded asynchronously!');
-        setIsTelegramWebLoaded(true);
-        clearInterval(interval);
-      }
-    }, 50);
-    const timeout = setTimeout(() => clearInterval(interval), 2500);
-    return () => {
-      clearInterval(interval);
-      clearTimeout(timeout);
-    };
+    // Disabled for Phase 2A isolation testing
+    return;
   }, [isTelegramWebLoaded]);
 
   // Telegram WebApp Detection and Zero-Click Authentication
@@ -544,56 +731,8 @@ export default function App() {
     Boolean(liveEventIdParam);
 
   useEffect(() => {
-    // Print exact runtime URL and routing details for Telegram diagnostics
-    console.log('--- TELEGRAM MINI APP RUNTIME URL DIAGNOSTICS (App.tsx) ---');
-    console.log('1. Sent/Received TG Startapp URL Parameter:', startAppParam || 'None');
-    console.log('2. window.location.href:', window.location.href);
-    console.log('3. window.location.origin:', window.location.origin);
-    console.log('4. window.location.pathname:', window.location.pathname);
-    console.log('5. isTelegramWebApp:', isTelegramWebApp);
-    console.log('6. isTelegramWebLoaded:', isTelegramWebLoaded);
-    console.log('7. isTelegramContext:', isTelegramContext);
-    console.log('8. startAppParam:', startAppParam);
-    console.log('9. liveEventIdParam:', liveEventIdParam);
-    console.log('------------------------------------------------------------');
-
-    if (isTelegramContext) {
-      console.log(`[WEBAPP_AUTH] Telegram WebApp environment detected. initData present: ${Boolean(tgWebApp?.initData)}`);
-      const tgUser = tgWebApp?.initDataUnsafe?.user;
-      const tgId = tgUser?.id ? String(tgUser.id) : (localStorage.getItem('roy_user_id') || '');
-      const tgUserName = tgUser?.first_name ? `${tgUser.first_name} ${tgUser.last_name || ''}`.trim() : (tgUser?.username ? `@${tgUser.username}` : `User #${tgId}`);
-
-      console.log(`[TELEGRAM_USER] User info for Firestore auto-registration:`, {
-        telegramId: tgId,
-        userName: tgUserName,
-        startParam: startAppParam,
-      });
-
-      if (tgId) {
-        fetch('/api/webapp-auth', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            telegramId: tgId,
-            username: tgUser?.username || '',
-            firstName: tgUser?.first_name || '',
-            lastName: tgUser?.last_name || '',
-            initData: tgWebApp?.initData || '',
-          }),
-        })
-          .then((res) => res.json())
-          .then((data) => {
-            if (data.success) {
-              console.log(`[AUTO_LOGIN_SUCCESS] Zero-click Telegram authentication successful in Firestore for Telegram ID: ${tgId}`);
-            }
-          })
-          .catch((err) => console.error('[WEBAPP_AUTH] Error executing zero-click auth fetch:', err));
-      }
-
-      if (isLiveEventPayload || startAppParam === 'live_event') {
-        console.log(`[ROUTE_WAITING_LOBBY] Immediately routing user to Waiting Lobby for startapp: ${startAppParam || 'live_event'}`);
-      }
-    }
+    // Disabled for Phase 2A isolation testing
+    return;
   }, [isTelegramContext, startAppParam, isLiveEventPayload, isTelegramWebApp, isTelegramWebLoaded]);
 
   // Check if URL is for the unauthenticated Runtime Debug Page
@@ -901,10 +1040,6 @@ export default function App() {
                   onSave={handleSaveConfiguration}
                   isSaving={isSaving}
                 />
-              )}
-
-              {activeTab === 'security_review' && (
-                <SecurityReviewView showToast={showToast} />
               )}
 
               {activeTab === 'security_review' && (
