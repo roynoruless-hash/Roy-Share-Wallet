@@ -903,6 +903,7 @@ export interface EarningBot {
   botFirstName: string;
   botName: string;
   adminChatId: string;
+  miniAppUrl?: string;
   referralReward: number;
   registrationBonus: number;
   minWithdrawal: number;

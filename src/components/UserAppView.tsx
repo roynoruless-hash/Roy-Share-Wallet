@@ -57,6 +57,36 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   const [pastGiveaways, setPastGiveaways] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
 
+  // Earning Bot Scoping & Config State
+  const [earningBotId, setEarningBotId] = useState<string | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tgWebApp = (window as any).Telegram?.WebApp;
+    const tgStartParam = tgWebApp?.initDataUnsafe?.start_param || '';
+    const startAppParam = params.get('startapp') || params.get('tgWebAppStartParam') || params.get('start') || tgStartParam || '';
+    const botIdFromUrl = params.get('botId') || '';
+
+    if (botIdFromUrl) return botIdFromUrl;
+    if (startAppParam.startsWith('earning_')) {
+      const parts = startAppParam.split('_');
+      return parts[1] || null;
+    }
+    return null;
+  });
+
+  const [earningBotConfig, setEarningBotConfig] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (!earningBotId) return;
+    fetch(`/api/earning-bots/config/${earningBotId}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.config) {
+          setEarningBotConfig(data.config);
+        }
+      })
+      .catch((err) => console.error('Error fetching Earning Bot Config:', err));
+  }, [earningBotId]);
+
   // Form State for Withdrawals
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawMethod, setWithdrawMethod] = useState<'upi' | 'qr' | 'redeem_code' | 'ultra_pay'>('upi');
@@ -804,7 +834,10 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     try {
       const tgId = getTelegramUserId();
       if (!tgId) return;
-      const res = await fetch(`/api/user/withdrawals/config?telegramId=${encodeURIComponent(tgId)}`);
+      const url = earningBotId
+        ? `/api/user/withdrawals/config?telegramId=${encodeURIComponent(tgId)}&botId=${encodeURIComponent(earningBotId)}`
+        : `/api/user/withdrawals/config?telegramId=${encodeURIComponent(tgId)}`;
+      const res = await fetch(url);
       const data = await res.json();
       if (data.success && data.settings) {
         setWithdrawalSettings(data.settings);
@@ -830,52 +863,96 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
     let unsubscribeUser = () => {};
     if (tgId) {
-      // 1. Listen to active User Document in real-time
-      const qUser = query(collection(db, 'users'), where('telegramId', '==', tgId));
-      unsubscribeUser = onSnapshot(qUser, (snapshot) => {
-        if (!snapshot.empty) {
-          const userDoc = snapshot.docs[0];
-          const data = userDoc.data();
-          if (data.banned || data.status === 'banned') {
-            setRegistrationState('BANNED');
+      if (earningBotId) {
+        // Scoped to Earning Bot User Account (${earningBotId}_${tgId})
+        const botUserRef = doc(db, 'users', `${earningBotId}_${tgId}`);
+        unsubscribeUser = onSnapshot(botUserRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            if (data.banned || data.status === 'banned' || data.status === 'BANNED') {
+              setRegistrationState('BANNED');
+              setIsRegistered(false);
+              setUser(null);
+              return;
+            }
+            setUser((prev: any) => ({
+              ...prev,
+              ...data,
+              id: docSnap.id,
+              telegramId: tgId,
+              botId: earningBotId,
+              appUid: data.uid || `${earningBotId}_${tgId}`,
+              uid: data.uid || `${earningBotId}_${tgId}`,
+              userName: data.firstName || data.username || `User #${tgId}`,
+              avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
+              walletBalance: Number(data.walletBalance) || 0,
+              referralCount: Number(data.totalReferrals || data.referralCount) || 0,
+              joinedDate: data.createdAt || new Date().toISOString(),
+              securityBadge: 'TRUSTED',
+              securityScore: 98,
+              completedTasks: data.completedTasks || [],
+              milestoneProgress: data.milestoneProgress || {},
+            }));
+            setIsRegistered(true);
+            setRegistrationState('ACTIVE');
+          } else {
             setIsRegistered(false);
             setUser(null);
-            return;
+            setRegistrationState('UNREGISTERED');
+            setRegStep('DETAILS');
           }
-          const rawAppUid = data.appUid ? String(data.appUid).trim() : '';
-          const rawUid = data.uid ? String(data.uid).trim() : '';
-          const cleanUid = (rawAppUid && rawAppUid !== tgId) ? rawAppUid : ((rawUid && rawUid !== tgId) ? rawUid : '');
+        }, (err) => {
+          console.error('Error listening to earning bot user doc:', err);
+        });
+      } else {
+        // Main Roy Share Wallet query
+        const qUser = query(collection(db, 'users'), where('telegramId', '==', tgId));
+        unsubscribeUser = onSnapshot(qUser, (snapshot) => {
+          if (!snapshot.empty) {
+            // Find user doc that is NOT associated with an earning bot or matches default
+            const userDoc = snapshot.docs.find(d => !d.data().botId) || snapshot.docs[0];
+            const data = userDoc.data();
+            if (data.banned || data.status === 'banned') {
+              setRegistrationState('BANNED');
+              setIsRegistered(false);
+              setUser(null);
+              return;
+            }
+            const rawAppUid = data.appUid ? String(data.appUid).trim() : '';
+            const rawUid = data.uid ? String(data.uid).trim() : '';
+            const cleanUid = (rawAppUid && rawAppUid !== tgId) ? rawAppUid : ((rawUid && rawUid !== tgId) ? rawUid : '');
 
-          setUser((prev: any) => ({
-            ...prev,
-            ...data,
-            id: userDoc.id,
-            telegramId: tgId,
-            appUid: cleanUid || data.appUid || data.uid || '',
-            uid: cleanUid || data.uid || data.appUid || '',
-            userName: data.userName || data.fullName || data.name || data.firstName || `User #${tgId}`,
-            avatar: data.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
-            walletBalance: Number(data.walletBalance) || Number(data.balance) || 0,
-            coinsBalance: Number(data.coinsBalance) || 0,
-            bonusBalance: Number(data.bonusBalance) || 0,
-            referralCount: Number(data.referralsCount) || 0,
-            joinedDate: data.createdAt || '2026-08-01',
-            securityBadge: 'TRUSTED',
-            securityScore: 98,
-            completedTasks: data.completedTasks || [],
-            milestoneProgress: data.milestoneProgress || {},
-          }));
-          setIsRegistered(true);
-          setRegistrationState('ACTIVE');
-        } else {
-          setIsRegistered(false);
-          setUser(null);
-          setRegistrationState('UNREGISTERED');
-          setRegStep('DETAILS');
-        }
-      }, (err) => {
-        console.error('Error listening to user doc:', err);
-      });
+            setUser((prev: any) => ({
+              ...prev,
+              ...data,
+              id: userDoc.id,
+              telegramId: tgId,
+              appUid: cleanUid || data.appUid || data.uid || '',
+              uid: cleanUid || data.uid || data.appUid || '',
+              userName: data.userName || data.fullName || data.name || data.firstName || `User #${tgId}`,
+              avatar: data.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
+              walletBalance: Number(data.walletBalance) || Number(data.balance) || 0,
+              coinsBalance: Number(data.coinsBalance) || 0,
+              bonusBalance: Number(data.bonusBalance) || 0,
+              referralCount: Number(data.referralsCount) || 0,
+              joinedDate: data.createdAt || '2026-08-01',
+              securityBadge: 'TRUSTED',
+              securityScore: 98,
+              completedTasks: data.completedTasks || [],
+              milestoneProgress: data.milestoneProgress || {},
+            }));
+            setIsRegistered(true);
+            setRegistrationState('ACTIVE');
+          } else {
+            setIsRegistered(false);
+            setUser(null);
+            setRegistrationState('UNREGISTERED');
+            setRegStep('DETAILS');
+          }
+        }, (err) => {
+          console.error('Error listening to user doc:', err);
+        });
+      }
     }
 
     // 2. Listen to dynamic Milestones
@@ -956,7 +1033,10 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
   const handleCopyLink = () => {
     const tgId = getTelegramUserId();
-    const link = `https://t.me/${botUsername || 'Roy_wallett_bot'}?start=ref_${tgId}`;
+    const activeUsername = earningBotConfig?.botUsername || botUsername || 'Roy_wallett_bot';
+    const link = earningBotId
+      ? `https://t.me/${activeUsername}?start=ref_${user?.uid || tgId}`
+      : `https://t.me/${activeUsername}?start=ref_${tgId}`;
     navigator.clipboard.writeText(link);
     setCopied(true);
     showToast('📋 Referral Link copied to clipboard!', 'success');

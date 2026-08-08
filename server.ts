@@ -4987,24 +4987,60 @@ Respond with a JSON object containing two properties:
   app.get('/api/user/withdrawals/config', async (req, res) => {
     try {
       const tgId = (req.query.telegramId as string) || (req.headers['x-telegram-id'] as string);
+      const botId = (req.query.botId as string) || (req.headers['x-bot-id'] as string) || '';
       const cleanTgId = tgId ? String(tgId).trim() : '';
 
       const configData = await getDecryptedConfig();
       const settings = getV2WithdrawalSettings(configData);
+
+      // Earning Bot Settings Override
+      if (botId) {
+        try {
+          const botSnap = await getDoc(doc(db, 'earningBots', String(botId).trim()));
+          if (botSnap.exists()) {
+            const b = botSnap.data();
+            const min = Number(b.minWithdrawal) || 100;
+            const tax = Number(b.withdrawalTax) || 0;
+            const methods = Array.isArray(b.withdrawalMethods) ? b.withdrawalMethods : ['UPI'];
+
+            settings.upi.min = min;
+            settings.upi.tax = tax;
+            settings.upi.enabled = methods.includes('UPI');
+
+            settings.qr.min = min;
+            settings.qr.tax = tax;
+            settings.qr.enabled = methods.includes('UPI');
+
+            settings.redeem.min = min;
+            settings.redeem.tax = tax;
+            settings.redeem.enabled = methods.includes('REDEEM_CODE');
+
+            settings.ultraPay.min = min;
+            settings.ultraPay.tax = tax;
+            settings.ultraPay.enabled = methods.includes('ULTRA_PAY');
+          }
+        } catch (e) {
+          console.warn('Could not override bot-specific withdrawal settings:', e);
+        }
+      }
 
       let walletBalance = 0;
       let lockedBalance = 0;
       let userStatus = { isRegistered: false, status: 'UNREGISTERED', mobileVerified: false };
 
       if (cleanTgId) {
-        const userSnap = await getDoc(doc(db, 'users', cleanTgId));
+        const userDocId = botId ? `${botId}_${cleanTgId}` : cleanTgId;
+        let userSnap = await getDoc(doc(db, 'users', userDocId));
+        if (!userSnap.exists() && botId) {
+          userSnap = await getDoc(doc(db, 'users', cleanTgId));
+        }
         if (userSnap.exists()) {
           const u = userSnap.data();
           walletBalance = Number(u.walletBalance) || 0;
           lockedBalance = Number(u.lockedBalance) || 0;
           userStatus = {
             isRegistered: true,
-            status: u.status || 'active',
+            status: u.status || 'ACTIVE',
             mobileVerified: u.mobileVerified === true || Boolean(u.mobile),
           };
         }
@@ -5076,9 +5112,16 @@ Respond with a JSON object containing two properties:
         });
       }
 
+      const botId = req.body.botId || '';
+      const targetUserDocId = req.body.userDocId || (botId ? `${botId}_${cleanTgId}` : cleanTgId);
+
       // Verify Account Eligibility
-      const userRef = doc(db, 'users', cleanTgId);
-      const userSnap = await getDoc(userRef);
+      let userRef = doc(db, 'users', targetUserDocId);
+      let userSnap = await getDoc(userRef);
+      if (!userSnap.exists() && botId) {
+        userRef = doc(db, 'users', cleanTgId);
+        userSnap = await getDoc(userRef);
+      }
       if (!userSnap.exists()) {
         return res.status(400).json({ success: false, error: 'User account not found.' });
       }
@@ -8739,6 +8782,7 @@ Respond with a JSON object containing two properties:
         botFirstName,
         botName,
         adminChatId: String(adminChatId || '').trim(),
+        miniAppUrl: String(req.body.miniAppUrl || '').trim(),
         referralReward: Number(referralReward) || 0,
         registrationBonus: Number(registrationBonus) || 0,
         minWithdrawal: Number(minWithdrawal) || 0,
@@ -8773,6 +8817,7 @@ Respond with a JSON object containing two properties:
       const { id } = req.params;
       const {
         adminChatId,
+        miniAppUrl,
         referralReward,
         registrationBonus,
         minWithdrawal,
@@ -8792,6 +8837,7 @@ Respond with a JSON object containing two properties:
 
       const updates: any = {
         adminChatId: String(adminChatId || '').trim(),
+        miniAppUrl: String(miniAppUrl || '').trim(),
         referralReward: Number(referralReward) || 0,
         registrationBonus: Number(registrationBonus) || 0,
         minWithdrawal: Number(minWithdrawal) || 0,
@@ -8972,6 +9018,83 @@ Respond with a JSON object containing two properties:
     }
   });
 
+  // 6b. TOGGLE CHANNEL / GROUP
+  app.post('/api/admin/earning-bots/:id/toggle-channel-group', requireAdminSession, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { type, chatId } = req.body;
+
+      const botRef = doc(db, 'earningBots', id);
+      const botSnap = await getDoc(botRef);
+
+      if (!botSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Bot not found' });
+      }
+
+      const botData = botSnap.data();
+      if (type === 'group') {
+        const updated = (botData.groups || []).map((g: any) =>
+          g.chatId === chatId ? { ...g, enabled: g.enabled === false ? true : false } : g
+        );
+        await updateDoc(botRef, { groups: updated, updatedAt: new Date().toISOString() });
+      } else {
+        const updated = (botData.channels || []).map((c: any) =>
+          c.chatId === chatId ? { ...c, enabled: c.enabled === false ? true : false } : c
+        );
+        await updateDoc(botRef, { channels: updated, updatedAt: new Date().toISOString() });
+      }
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 6c. GET BOT USERS & REFERRALS TRACKING
+  app.get('/api/admin/earning-bots/:id/referrals', requireAdminSession, async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Users Query
+      const usersSnap = await getDocs(query(collection(db, 'users'), where('botId', '==', id)));
+      const usersList: any[] = [];
+      usersSnap.forEach(d => {
+        const u = d.data();
+        usersList.push({
+          id: d.id,
+          uid: u.uid || d.id,
+          telegramId: u.telegramId,
+          userName: u.firstName || u.userName || u.name || `User #${u.telegramId}`,
+          username: u.username ? `@${u.username}` : '-',
+          referredBy: u.referrerUid || u.referredBy || 'Direct',
+          joinedAt: u.createdAt || '-',
+          isVerified: Boolean(u.channelVerified && u.groupVerified),
+          contactVerified: Boolean(u.mobile),
+          walletBalance: Number(u.walletBalance) || 0,
+          registrationBonus: Number(u.walletBalance) || 0,
+          totalReferralEarnings: Number(u.totalReferralEarnings) || 0,
+          totalEarned: (Number(u.walletBalance) || 0) + (Number(u.totalWithdrawn) || 0),
+          status: u.status || 'ACTIVE',
+        });
+      });
+
+      // Referrals Query
+      const refSnap = await getDocs(query(collection(db, 'botReferrals'), where('botId', '==', id)));
+      const referralsList: any[] = [];
+      refSnap.forEach(d => {
+        referralsList.push({ id: d.id, ...d.data() });
+      });
+
+      return res.json({
+        success: true,
+        users: usersList,
+        referrals: referralsList,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // 7. PUBLIC BOT CONFIGURATION
   app.get('/api/earning-bots/config/:botId', async (req, res) => {
     try {
@@ -8988,13 +9111,16 @@ Respond with a JSON object containing two properties:
           botUsername: b.botUsername,
           botFirstName: b.botFirstName,
           botName: b.botName,
+          miniAppUrl: b.miniAppUrl || '',
           referralReward: b.referralReward,
           registrationBonus: b.registrationBonus,
           minWithdrawal: b.minWithdrawal,
           withdrawalTax: b.withdrawalTax,
-          withdrawalMethods: b.withdrawalMethods,
+          withdrawalMethods: b.withdrawalMethods || ['UPI'],
           dailyReferralLimit: b.dailyReferralLimit,
           referralEarningCap: b.referralEarningCap,
+          channels: b.channels || [],
+          groups: b.groups || [],
           status: b.status,
         }
       });

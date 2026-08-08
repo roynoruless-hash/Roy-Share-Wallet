@@ -335,8 +335,25 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
     updatedAt: new Date().toISOString(),
   }, { merge: true });
 
-  const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
-  const miniAppUrl = `${baseUrl}/?action=register&botId=${bot.botId}&tgId=${userId}`;
+  let miniAppUrl = '';
+  if (bot.miniAppUrl && String(bot.miniAppUrl).trim()) {
+    const custom = String(bot.miniAppUrl).trim();
+    if (custom.startsWith('https://t.me/')) {
+      const sep = custom.includes('?') ? '&' : '?';
+      miniAppUrl = `${custom}${sep}startapp=earning_${bot.botId}`;
+    } else {
+      const sep = custom.includes('?') ? '&' : '?';
+      miniAppUrl = `${custom}${sep}botId=${bot.botId}&tgId=${userId}&startapp=earning_${bot.botId}`;
+    }
+  } else {
+    const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || '').replace(/\/$/, '') || 'https://' + (process.env.HOST || 'localhost:3000');
+    miniAppUrl = `${baseUrl}/?botId=${bot.botId}&tgId=${userId}&startapp=earning_${bot.botId}`;
+  }
+
+  const isTgDeepLink = miniAppUrl.startsWith('https://t.me/');
+  const miniAppBtn: any = isTgDeepLink
+    ? { text: '🚀 OPEN MINI APP', url: miniAppUrl }
+    : { text: '🚀 OPEN MINI APP', web_app: { url: miniAppUrl } };
 
   await sendTelegramApi(bot.token, 'sendMessage', {
     chat_id: chatId,
@@ -344,10 +361,7 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
     parse_mode: 'HTML',
     reply_markup: {
       inline_keyboard: [
-        [{
-          text: '🚀 OPEN MINI APP',
-          web_app: { url: miniAppUrl },
-        }]
+        [miniAppBtn]
       ]
     }
   });
@@ -498,9 +512,10 @@ async function handleShowReferEarn(bot: any, userId: string) {
  */
 async function handleShowSupport(bot: any, userId: string) {
   const supportText = `☎ <b>Contact Support</b>\n\n` +
-    `For any queries or issues regarding <b>@${bot.botUsername}</b>, please contact our support team:\n\n` +
-    `• <b>Telegram Admin:</b> @Roy_Support_Agent\n` +
-    `• <b>Email:</b> support@roysharewallet.com\n\n` +
+    `For any queries or issues regarding <b>${bot.botName || '@' + bot.botUsername}</b>, please contact our support team:\n\n` +
+    `• <b>Bot Username:</b> @${bot.botUsername}\n` +
+    `• <b>Telegram Support:</b> @${bot.botUsername}_support\n` +
+    `• <b>Support Contact:</b> Available in-app support chat\n\n` +
     `We are available 24/7 to help you!`;
 
   await sendTelegramApi(bot.token, 'sendMessage', {
