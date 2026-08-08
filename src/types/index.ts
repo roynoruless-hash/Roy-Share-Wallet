@@ -176,8 +176,8 @@ export type TabType =
   | 'diagnostics'
   | 'feedback_campaigns'
   | 'feedback_reviews'
-  | 'giveaway_war'
   | 'enterprise_ops'
+  | 'earning_bots'
   | 'ai_revenue_automation';
 
 export interface FraudReport {
@@ -336,7 +336,6 @@ export interface SystemAnnouncement {
 
 export interface FeatureFlags {
   redeem: boolean;
-  giveaway: boolean;
   vote: boolean;
   flashMode: boolean;
   aiAssistant: boolean;
@@ -775,286 +774,8 @@ export interface ContestLog {
 }
 
 // ============================================
-// ⚔️ GIVEAWAY WAR SYSTEM TYPES
+// Redeem Claim Modes
 // ============================================
-
-export interface WarTeam {
-  id: string;
-  name: string;
-  logoUrl?: string;
-  color?: string;
-  score: number;
-  membersCount: number;
-  maxMembers?: number; // Team capacity (0 or undefined = unlimited)
-  totalReferrals?: number;
-  totalVerifiedVotes?: number;
-  totalFeedbacks?: number;
-  teamWalletBalance?: number; // Shared Team Wallet Balance
-  // Team Leader System
-  leaderTelegramId?: string;
-  leaderName?: string;
-  leaderUsername?: string;
-  leaderInviteLink?: string;
-  leaderPoints?: number;
-}
-
-export interface WarPointRules {
-  registrationPoints: number;
-  registrationEnabled: boolean;
-  referralPoints: number;
-  referralEnabled: boolean;
-  verifiedVotePoints: number;
-  verifiedVoteEnabled: boolean;
-  feedbackPoints: number;
-  feedbackEnabled: boolean;
-  dailyLoginPoints: number;
-  dailyLoginEnabled: boolean;
-  walletTaskPoints: number;
-  walletTaskEnabled: boolean;
-  // Team Wallet Bonus Contributions
-  teamWalletRegistrationBonus?: number;
-  teamWalletReferralBonus?: number;
-  teamWalletVoteBonus?: number;
-  teamWalletFeedbackBonus?: number;
-}
-
-export interface WarMission {
-  id: string;
-  title: string;
-  targetType: 'referrals' | 'votes' | 'feedbacks' | 'activities';
-  targetCount: number;
-  rewardAmount: number;
-  isCompleted: boolean;
-  completedAt?: string;
-}
-
-export interface WarMilestone {
-  id: string;
-  pointThreshold: number; // 1000, 5000, 10000 etc.
-  rewardAmount: number;
-  luckyMemberReward: number;
-  isUnlocked: boolean;
-  unlockedAt?: string;
-  luckyWinnerTelegramId?: string;
-  luckyWinnerName?: string;
-}
-
-export interface WarPointBooster {
-  isActive: boolean;
-  multiplier: number; // Default 2x
-  boostReferrals: boolean;
-  boostVotes: boolean;
-  boostFeedbacks: boolean;
-  expiresAt?: string; // ISO timestamp
-}
-
-export interface WarRewardConfig {
-  winningTeamReward: number; // Reward amount for winning team members
-  topContributorReward: number; // Cash or wallet prize for #1 top contributor
-  mvpReward: number; // Special prize for MVP
-  dailyMvpReward?: number; // Daily MVP cash/points reward
-  runnerUpReward?: number; // Prize for runner-up team members/leaders
-  rewardType: 'wallet' | 'cash';
-}
-
-export interface DailyMvpRecord {
-  date: string; // YYYY-MM-DD
-  telegramId: string;
-  name: string;
-  points: number;
-  teamName: string;
-  rewardAmount: number;
-  awardedAt: string;
-}
-
-export interface WarChallenge {
-  id: string;
-  title: string;
-  targetType: 'referrals' | 'votes' | 'feedbacks' | 'points';
-  targetCount: number;
-  bonusPoints: number;
-  isCompleted: boolean;
-  winningTeamId?: string;
-  winningTeamName?: string;
-  completedAt?: string;
-}
-
-export interface WarSecretMission {
-  id: string;
-  title: string;
-  description: string;
-  targetType: 'referrals' | 'votes' | 'feedbacks' | 'points';
-  targetCount: number;
-  rewardAmount: number; // Wallet or points reward
-  rewardType: 'points' | 'wallet';
-  isCompleted: boolean;
-  unlockedByTelegramId?: string;
-  unlockedByName?: string;
-  completedAt?: string;
-}
-
-export interface WarAirdrop {
-  id: string;
-  warId: string;
-  amount: number;
-  rewardType: 'points' | 'wallet';
-  recipientsCount: number;
-  recipients: {
-    telegramId: string;
-    name: string;
-    teamName: string;
-    amount: number;
-  }[];
-  createdAt: string;
-}
-
-export interface WarTimelineEvent {
-  id: string;
-  timestamp: string;
-  eventType: 'war_start' | 'lead_change' | 'milestone_unlocked' | 'challenge_won' | 'booster_activated' | 'airdrop' | 'mvp_awarded' | 'war_ended';
-  title: string;
-  description: string;
-  teamId?: string;
-  teamName?: string;
-  badge?: string;
-}
-
-export interface WarPendingReward {
-  id: string;
-  warId: string;
-  warTitle: string;
-  telegramId: string;
-  rewardType: 'points' | 'wallet';
-  amount: number;
-  title: string;
-  description: string;
-  isClaimed: boolean;
-  claimedAt?: string;
-  createdAt: string;
-}
-
-export interface GiveawayWar {
-  id: string;
-  title: string;
-  bannerUrl?: string;
-  description: string;
-  rules: string;
-  totalTeams: number; // default 2
-  teams: WarTeam[];
-  prizePool: number;
-  status: 'draft' | 'registration_open' | 'live' | 'paused' | 'ended';
-  pointRules: WarPointRules;
-  rewards: WarRewardConfig;
-  startDate?: string;
-  endDate?: string;
-  totalPoints: number;
-  totalParticipants: number;
-  winnerTeamId?: string;
-  mvpUserId?: string;
-  mvpUserName?: string;
-  mvpUserPoints?: number;
-  topContributors?: {
-    userId: string;
-    telegramId?: string;
-    name: string;
-    points: number;
-    teamId: string;
-    rewardAmount?: number;
-  }[];
-  dailyMvpHistory?: DailyMvpRecord[];
-  // Phase 3 Extensions
-  season?: number; // e.g. Season 1
-  seasonName?: string; // e.g. "Season 1 - August 2026"
-  missions?: WarMission[];
-  milestones?: WarMilestone[];
-  booster?: WarPointBooster;
-  // Phase 4 Extensions
-  challenges?: WarChallenge[];
-  secretMissions?: WarSecretMission[];
-  airdrops?: WarAirdrop[];
-  timelineEvents?: WarTimelineEvent[];
-  teamGallery?: {
-    bannerUrl?: string;
-    winnerPosterUrl?: string;
-    mvpPosterUrl?: string;
-    resultPosterUrl?: string;
-  };
-  createdAt: string;
-  updatedAt?: string;
-}
-
-export interface WarMember {
-  id: string; // doc ID e.g. `${warId}_${telegramId}`
-  warId: string;
-  telegramId: string;
-  username?: string;
-  name: string;
-  teamId: string;
-  teamName: string;
-  points: number;
-  invitedByTelegramId?: string;
-  isTeamLeader?: boolean;
-  leaderPoints?: number;
-  deviceFingerprint?: string;
-  ipHash?: string;
-  joinedAt: string;
-  lastActivityAt?: string;
-  activityBreakdown?: {
-    registration?: number;
-    referral?: number;
-    verifiedVote?: number;
-    feedback?: number;
-    dailyLogin?: number;
-    walletTask?: number;
-  };
-  // Phase 4 Extensions
-  fairPlayScore?: number; // e.g. 100, 95, 80, 40
-  achievements?: string[]; // e.g. ['FIRST_REFERRAL', '100_POINTS', 'MVP', 'TEAM_WINNER', 'LEGEND']
-  lastSpinDate?: string; // YYYY-MM-DD
-  dailyComboTracker?: {
-    date: string;
-    referralsCount: number;
-    votesCount: number;
-    feedbacksCount: number;
-    claimedCombos: string[]; // e.g. ['5_REF_COMBO', '10_VOTE_COMBO']
-  };
-  pendingRewards?: WarPendingReward[];
-  // Active Member Validation & Fraud Control
-  status?: 'ACTIVE' | 'PENDING' | 'REJECTED';
-  activationDetails?: {
-    isRegistered?: boolean;
-    isTelegramVerified?: boolean;
-    isChannelJoined?: boolean;
-    isBotVerified?: boolean;
-    isNotBanned?: boolean;
-    activatedAt?: string;
-  };
-  rejectionReason?: string;
-}
-
-export interface WarActivityLog {
-  id: string;
-  warId: string;
-  telegramId: string;
-  teamId: string;
-  activityType:
-    | 'registration'
-    | 'referral'
-    | 'verified_vote'
-    | 'feedback'
-    | 'daily_login'
-    | 'wallet_task'
-    | 'user_joined'
-    | 'admin_action'
-    | 'reward_credited';
-  pointsEarned: number;
-  description: string;
-  ipHash?: string;
-  deviceFingerprint?: string;
-  isValid: boolean;
-  rejectReason?: string;
-  createdAt: string;
-}
 
 export type RedeemClaimMode = 'FCFS' | 'RANDOM_DRAW' | 'HYBRID';
 
@@ -1163,5 +884,78 @@ export interface TaskCompletionRecord {
   status: 'pending' | 'completed' | 'rejected';
   createdAt: string;
   verifiedAt?: string;
+}
+
+export interface EarningBotChannel {
+  chatId: string;
+  link: string;
+  name?: string;
+  username?: string;
+  type?: 'channel' | 'group';
+  verified?: boolean;
+}
+
+export interface EarningBot {
+  id: string;
+  token: string;
+  botId: string;
+  botUsername: string;
+  botFirstName: string;
+  botName: string;
+  adminChatId: string;
+  referralReward: number;
+  registrationBonus: number;
+  minWithdrawal: number;
+  withdrawalTax: number;
+  withdrawalMethods: ('UPI' | 'REDEEM_CODE' | 'ULTRA_PAY')[];
+  status: 'active' | 'paused' | 'archived';
+  channels: EarningBotChannel[];
+  groups: EarningBotChannel[];
+  dailyReferralLimit: number;
+  referralEarningCap: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EarningBotUser {
+  id: string;
+  uid: string;
+  botId: string;
+  telegramId: string;
+  username: string;
+  firstName: string;
+  mobile: string;
+  walletBalance: number;
+  channelVerified: boolean;
+  groupVerified: boolean;
+  referrerUid: string;
+  referredBy: string;
+  referralRewardReceived: boolean;
+  totalReferrals: number;
+  successfulReferrals: number;
+  totalReferralEarnings: number;
+  status: 'ACTIVE' | 'BANNED' | 'PENDING';
+  createdAt: string;
+  lastActive: string;
+  riskScore?: number;
+  riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH';
+  riskSignals?: string[];
+  gmail?: string;
+  deviceFingerprint?: string;
+}
+
+export interface EarningBotReferral {
+  id: string;
+  botId: string;
+  referrerTelegramId: string;
+  referredTelegramId: string;
+  status: 'PENDING' | 'VALID' | 'REJECTED' | 'FRAUD_REVIEW';
+  rewardAmount: number;
+  transactionId?: string;
+  createdAt: string;
+  validatedAt?: string;
+  riskScore?: number;
+  riskLevel?: 'LOW' | 'MEDIUM' | 'HIGH';
+  riskSignals?: string[];
 }
 

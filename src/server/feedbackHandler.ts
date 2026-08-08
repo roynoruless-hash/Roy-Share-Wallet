@@ -1,7 +1,6 @@
 import { collection, query, where, getDocs, doc, runTransaction, addDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
-import { addWarPointsForActivity } from '../services/giveawayWarService';
 
 async function sendTelegramMessage(token: string, chatId: string, text: string) {
   try {
@@ -82,20 +81,6 @@ export async function approveFeedbackReview(botToken: string, reviewDocId: strin
       });
     } catch (e) {
       console.warn('Transaction feedback log warning:', e);
-    }
-
-    // Automatically award Giveaway War feedback points if active war exists
-    try {
-      const userTgId = String(rData.telegramId || '');
-      if (userTgId) {
-        await addWarPointsForActivity({
-          telegramId: userTgId,
-          activityType: 'feedback',
-          description: `Approved Feedback: ${campaignName}`,
-        });
-      }
-    } catch (warErr) {
-      console.warn('Error adding Giveaway War feedback points:', warErr);
     }
 
     return { success: true, message: 'Feedback approved and reward credited successfully!' };

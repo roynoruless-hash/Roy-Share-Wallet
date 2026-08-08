@@ -17,7 +17,6 @@ import { db } from './firebase';
 import { Contest, Contestant, VoteLog, BotUser } from '../types';
 import { uploadImageWithFallback, uploadImageToStorage } from './storageService';
 import { loadAdminConfig } from './configService';
-import { addWarPointsForActivity } from './giveawayWarService';
 
 /**
  * Fetch all contests from Firestore
@@ -648,21 +647,6 @@ export async function submitVote(params: {
         }
       }
     });
-
-    // Automatically award Giveaway War verified vote points if active war exists
-    try {
-      if (voterTelegramId) {
-        await addWarPointsForActivity({
-          telegramId: String(voterTelegramId),
-          activityType: 'verified_vote',
-          description: `Verified Vote cast in Contest #${contestId}`,
-          ipHash,
-          deviceFingerprint,
-        });
-      }
-    } catch (warErr) {
-      console.warn('Error adding Giveaway War vote points:', warErr);
-    }
 
     // Notify contestant instantly via Telegram (Requirement 11)
     if (contestant.telegramId && botToken) {

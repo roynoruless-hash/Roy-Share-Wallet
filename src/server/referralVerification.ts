@@ -13,7 +13,6 @@ import {
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
-import { addWarPointsForActivity } from '../services/giveawayWarService';
 
 async function sendTelegramMessage(token: string, chatId: string | number, text: string) {
   if (!token || !chatId) return;
@@ -462,21 +461,6 @@ export async function processReferralVerification(params: VerifyReferralParams) 
         });
       } catch (txErr) {
         console.warn('Error recording transaction:', txErr);
-      }
-
-      // Automatically award Giveaway War referral points if active war exists
-      try {
-        if (referrerTelegramId) {
-          await addWarPointsForActivity({
-            telegramId: String(referrerTelegramId),
-            activityType: 'referral',
-            description: `Verified Referral Reward for Friend UID #${referredUid}`,
-            deviceFingerprint,
-            referralTargetTgId: String(referredTelegramId || ''),
-          });
-        }
-      } catch (warErr) {
-        console.warn('Error adding Giveaway War referral points:', warErr);
       }
 
       // Update Device Fingerprint Registry

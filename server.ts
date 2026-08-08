@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { processTelegramUpdate } from './src/server/botHandler';
+import { processTelegramUpdate, sendTelegramApi } from './src/server/botHandler';
 import { getReferralTokenInfo, processReferralVerification } from './src/server/referralVerification';
 import { getMilestoneTokenInfo, processMilestoneClaim } from './src/server/milestoneVerification';
 import { approveWithdrawal, rejectWithdrawal } from './src/server/withdrawalHandler';
@@ -539,42 +539,6 @@ async function startServer() {
       }
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message || 'Internal server error' });
-    }
-  });
-
-  // 5B. GIVEAWAY WAR TELEGRAM NOTIFICATIONS ENDPOINT
-  app.post('/api/telegram/war-notify', async (req, res) => {
-    try {
-      const { type, payload } = req.body;
-      console.log(`[War Notification] Event: ${type}`, JSON.stringify(payload));
-
-      // Fetch Bot Token & Main Channel/Group from admin config in Firestore
-      const adminConfig = await getDecryptedConfig();
-      const botToken = adminConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
-      const targetChat = adminConfig?.mainChannelUsername || adminConfig?.mainGroupUsername || adminConfig?.adminTelegramId || adminConfig?.adminChatId;
-
-      if (!botToken || !targetChat) {
-        return res.json({ success: false, reason: 'No bot token or target chat configured for broadcasting' });
-      }
-
-      let text = '';
-      if (type === 'TEAM_JOINED') {
-        text = `⚔️ <b>New Warrior Joined!</b>\n\n👤 <b>${payload.userName}</b> has joined <b>${payload.teamName}</b> in <i>${payload.warTitle}</i>!\n\nJoin your team now to claim the prize pool!`;
-      } else if (type === 'DAILY_MVP') {
-        text = `👑 <b>DAILY MVP ANNOUNCEMENT!</b>\n\n⭐ <b>${payload.mvpName}</b> (${payload.teamName}) is today's top contributor with <b>${payload.points} Points</b>!\n🎁 Rewarded: <b>₹${payload.rewardAmount}</b>!`;
-      } else if (type === 'WINNER_ANNOUNCEMENT') {
-        text = `🏆 <b>GIVEAWAY WAR ENDED - WINNER DECLARED!</b>\n\n🥇 <b>Winning Team:</b> ${payload.winningTeamName} (${payload.winningTeamScore} Pts)\n👑 <b>War MVP:</b> ${payload.mvpName} (${payload.mvpPoints} Pts)\n💰 <b>Total Rewards Credited:</b> ₹${payload.totalRewardsCredited} across ${payload.creditedCount} warriors!`;
-      } else if (type === 'WAR_STARTED') {
-        text = `🔥 <b>GIVEAWAY WAR IS NOW LIVE!</b>\n\n⚔️ <b>${payload.title}</b>\n💰 Prize Pool: <b>₹${payload.prizePool}</b>\n\nChoose your team and start completing daily tasks now!`;
-      } else {
-        text = `⚔️ <b>Giveaway War Update:</b> ${type}`;
-      }
-
-      await sendTelegramMessage(botToken, targetChat, text);
-      return res.json({ success: true });
-    } catch (err: any) {
-      console.error('Error in /api/telegram/war-notify:', err);
-      return res.status(500).json({ success: false, error: err.message });
     }
   });
 
@@ -7031,7 +6995,7 @@ Respond with a JSON object containing two properties:
         collectionsToPurge.push('transactions', 'walletTransactions', 'ledger');
       }
       if (options.giveaways) {
-        collectionsToPurge.push('giveaways', 'contestants', 'entries', 'voteLogs', 'voteLinks', 'claimLogs', 'wars', 'contestRegistrations', 'contests');
+        collectionsToPurge.push('giveaways', 'contestants', 'entries', 'voteLogs', 'voteLinks', 'claimLogs', 'contestRegistrations', 'contests');
       }
       if (options.referrals) {
         collectionsToPurge.push('referralTokens', 'referralLogs', 'milestoneTokens', 'milestoneClaimRecords');
@@ -7265,80 +7229,6 @@ Respond with a JSON object containing two properties:
         return res.status(500).json({ success: false, error: `Telegram Bot API Error: ${resJson.description || 'Unknown'}` });
       }
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
-    }
-  });
-
-  // Giveaway War Telegram Notification Endpoint
-  app.post('/api/telegram/war-notify', async (req, res) => {
-    try {
-      const { type, payload } = req.body;
-      const config = await getDecryptedConfig();
-      if (!config || !config.botToken) {
-        return res.status(400).json({ success: false, error: 'Bot token not configured' });
-      }
-
-      const botToken = config.botToken;
-      const adminChatId = config.adminTelegramId || config.adminChatId;
-
-      let messageText = '';
-      let targetChatId = payload?.telegramId || adminChatId;
-
-      switch (type) {
-        case 'WAR_STARTED':
-          messageText =
-            `⚔️ <b>GIVEAWAY WAR IS LIVE!</b> ⚔️\n\n` +
-            `🏆 <b>${payload?.title || 'Giveaway War'}</b>\n` +
-            `📝 ${payload?.description || 'Join a team and complete tasks to lead your team to victory!'}\n\n` +
-            `💰 <b>Prize Pool:</b> ₹${payload?.prizePool || 0}\n\n` +
-            `🔴 🔵 Pick your team now in the app to start earning points!`;
-          break;
-
-        case 'TEAM_JOINED':
-          messageText =
-            `⚔️ <b>GIVEAWAY WAR UPDATE</b>\n\n` +
-            `👤 <b>${payload?.userName}</b> has joined <b>${payload?.teamName}</b> in "<i>${payload?.warTitle}</i>"!\n\n` +
-            `🔥 Complete daily activities, referrals, and votes to power your team score!`;
-          break;
-
-        case 'POINTS_EARNED':
-          messageText =
-            `🎉 <b>GIVEAWAY WAR POINTS EARNED!</b>\n\n` +
-            `👤 <b>${payload?.userName}</b> earned <b>+${payload?.pointsEarned} Points</b> for <i>${payload?.activityType}</i>!\n` +
-            `🛡️ <b>Team:</b> ${payload?.teamName}\n` +
-            `⭐ <b>Total Contribution:</b> ${payload?.newTotalPoints} Points`;
-          break;
-
-        case 'WINNER_ANNOUNCEMENT':
-          messageText =
-            `🏆 <b>GIVEAWAY WAR WINNERS ANNOUNCEMENT!</b> 🏆\n\n` +
-            `👑 <b>Winning Team:</b> ${payload?.winningTeamName} (Score: ${payload?.winningTeamScore})\n` +
-            `🥈 <b>Runner Up:</b> ${payload?.runnerUpTeamName}\n\n` +
-            `🌟 <b>MVP Contributor:</b> ${payload?.mvpName} (${payload?.mvpPoints} Pts)\n\n` +
-            `💰 <b>Total Rewards Credited:</b> ₹${payload?.totalRewardsCredited} to ${payload?.creditedCount} winner(s)!\n\n` +
-            `Check the app results page for detailed team rankings and contributor breakdowns.`;
-          break;
-
-        default:
-          messageText = `⚔️ <b>Giveaway War Update:</b> ${JSON.stringify(payload)}`;
-      }
-
-      // Send to user/admin if targetChatId exists
-      if (targetChatId) {
-        await sendTelegramMessage(botToken, targetChatId, messageText);
-      }
-
-      // Optionally notify main channel if configured
-      if (config.mainChannelUsername) {
-        const channelId = config.mainChannelUsername.startsWith('@')
-          ? config.mainChannelUsername
-          : `@${config.mainChannelUsername}`;
-        await sendTelegramMessage(botToken, channelId, messageText);
-      }
-
-      return res.json({ success: true, message: 'Notification sent successfully' });
-    } catch (err: any) {
-      console.error('Error in /api/telegram/war-notify:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -8173,7 +8063,7 @@ Respond with a JSON object containing two properties:
           {
             id: 'ann_welcome',
             title: '⚡ Season 1: Apex Surge Live!',
-            message: 'Compete in speed typing redeem drops & Giveaway Wars to win instant wallet rewards!',
+            message: 'Compete in speed typing redeem drops & voting contests to win instant wallet rewards!',
             priority: 'Info',
             isActive: true,
             createdAt: new Date().toISOString(),
@@ -8603,7 +8493,7 @@ Respond with a JSON object containing two properties:
         bestEventTime: '8:30 PM IST (highest concurrent response rate)',
         revenueTrends: 'Up +18% vs last week (Withdrawal fees & sponsorships)',
         growthSuggestions: [
-          'Host a weekend Giveaway War with ₹1000 prize pool',
+          'Host a weekend Lucky Draw with ₹1000 prize pool',
           'Enable Telegram Channel Auto-Broadcast for instant engagement spikes',
         ],
       };
@@ -8740,6 +8630,642 @@ Respond with a JSON object containing two properties:
       await setDoc(doc(db, 'incidentAlerts', id), { isResolved: true }, { merge: true });
       await recordAuditLog('RESOLVE_INCIDENT', 'SYSTEM', { id }, 'SuperAdmin');
       return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // =========================================================
+  // 🤖 MULTI-BOT EARNING SYSTEM API ENDPOINTS
+  // =========================================================
+
+  // 1. GET ALL CONFIGURABLE BOTS
+  app.get('/api/admin/earning-bots', requireAdminSession, async (req, res) => {
+    try {
+      const snap = await getDocs(collection(db, 'earningBots'));
+      const bots = snap.docs.map(doc => {
+        const d = doc.data();
+        return {
+          id: doc.id,
+          botId: d.botId,
+          botUsername: d.botUsername,
+          botFirstName: d.botFirstName,
+          botName: d.botName,
+          adminChatId: d.adminChatId,
+          referralReward: d.referralReward,
+          registrationBonus: d.registrationBonus,
+          minWithdrawal: d.minWithdrawal,
+          withdrawalTax: d.withdrawalTax,
+          withdrawalMethods: d.withdrawalMethods,
+          status: d.status,
+          dailyReferralLimit: d.dailyReferralLimit || 50,
+          referralEarningCap: d.referralEarningCap || 1000,
+          channels: d.channels || [],
+          groups: d.groups || [],
+          createdAt: d.createdAt,
+          updatedAt: d.updatedAt,
+        };
+      });
+      return res.json({ success: true, bots });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 2. CONNECT AND ADD NEW BOT
+  app.post('/api/admin/earning-bots/connect', requireAdminSession, async (req, res) => {
+    try {
+      const {
+        token,
+        adminChatId,
+        referralReward,
+        registrationBonus,
+        minWithdrawal,
+        withdrawalTax,
+        withdrawalMethods,
+        dailyReferralLimit,
+        referralEarningCap,
+      } = req.body;
+
+      const cleanToken = String(token || '').trim();
+      if (!cleanToken) {
+        return res.status(400).json({ success: false, error: 'Telegram Bot token is required.' });
+      }
+
+      // Verify token via Telegram API
+      const tgRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`);
+      const tgData = await tgRes.json();
+
+      if (!tgData.ok) {
+        return res.status(400).json({ success: false, error: `Invalid Bot Token: ${tgData.description || 'Connection failed'}` });
+      }
+
+      const botUser = tgData.result;
+      const botId = String(botUser.id);
+      const botUsername = botUser.username;
+      const botFirstName = botUser.first_name;
+      const botName = botUser.first_name + (botUser.last_name ? ' ' + botUser.last_name : '');
+
+      // Automatically register Webhook url
+      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
+      const proto = (req.headers['x-forwarded-proto'] as string) || 'https';
+      const defaultDomain = process.env.APP_BASE_URL || process.env.APP_URL || `${proto}://${host}`;
+      const baseDomain = defaultDomain.replace(/\/$/, '');
+      const webhookUrl = `${baseDomain}/api/telegram/webhook/${cleanToken}`;
+
+      console.log(`Setting dynamic webhook for Earning Bot: ${webhookUrl}`);
+
+      const hookRes = await fetch(`https://api.telegram.org/bot${cleanToken}/setWebhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: webhookUrl,
+          allowed_updates: ['message', 'callback_query', 'channel_post', 'chat_member'],
+        }),
+      });
+      const hookData = await hookRes.json();
+      if (!hookData.ok) {
+        console.warn(`Failed to set Telegram Webhook for bot @${botUsername}: ${hookData.description}`);
+      }
+
+      const docId = botId;
+      const nowIso = new Date().toISOString();
+
+      const newBot = {
+        id: docId,
+        botId,
+        token: cleanToken,
+        botUsername,
+        botFirstName,
+        botName,
+        adminChatId: String(adminChatId || '').trim(),
+        referralReward: Number(referralReward) || 0,
+        registrationBonus: Number(registrationBonus) || 0,
+        minWithdrawal: Number(minWithdrawal) || 0,
+        withdrawalTax: Number(withdrawalTax) || 0,
+        withdrawalMethods: Array.isArray(withdrawalMethods) ? withdrawalMethods : ['UPI'],
+        dailyReferralLimit: Number(dailyReferralLimit) || 50,
+        referralEarningCap: Number(referralEarningCap) || 1000,
+        status: 'active',
+        channels: [],
+        groups: [],
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      await setDoc(doc(db, 'earningBots', docId), newBot);
+      await recordAuditLog('CONNECT_EARNING_BOT', 'SYSTEM', { botUsername }, 'SuperAdmin');
+
+      return res.json({ success: true, bot: newBot });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 3. UPDATE BOT FIELDS
+  app.post('/api/admin/earning-bots/:id/update', requireAdminSession, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const {
+        adminChatId,
+        referralReward,
+        registrationBonus,
+        minWithdrawal,
+        withdrawalTax,
+        withdrawalMethods,
+        status,
+        dailyReferralLimit,
+        referralEarningCap,
+      } = req.body;
+
+      const botRef = doc(db, 'earningBots', id);
+      const botSnap = await getDoc(botRef);
+
+      if (!botSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Bot configuration not found' });
+      }
+
+      const updates: any = {
+        adminChatId: String(adminChatId || '').trim(),
+        referralReward: Number(referralReward) || 0,
+        registrationBonus: Number(registrationBonus) || 0,
+        minWithdrawal: Number(minWithdrawal) || 0,
+        withdrawalTax: Number(withdrawalTax) || 0,
+        withdrawalMethods: Array.isArray(withdrawalMethods) ? withdrawalMethods : ['UPI'],
+        status: status || 'active',
+        dailyReferralLimit: Number(dailyReferralLimit) || 50,
+        referralEarningCap: Number(referralEarningCap) || 1000,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await updateDoc(botRef, updates);
+      return res.json({ success: true, message: 'Bot configuration updated successfully' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 4. VERIFY AND ADD CHANNEL / GROUP
+  app.post('/api/admin/earning-bots/:id/add-channel-group', requireAdminSession, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { type, link, chatId } = req.body;
+
+      const cleanChatId = String(chatId || '').trim();
+      const cleanLink = String(link || '').trim();
+
+      if (!cleanChatId) {
+        return res.status(400).json({ success: false, error: 'Chat ID is required' });
+      }
+
+      const botRef = doc(db, 'earningBots', id);
+      const botSnap = await getDoc(botRef);
+
+      if (!botSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Bot not found' });
+      }
+
+      const botData = botSnap.data();
+      const token = botData.token;
+
+      // Verify bot can access Chat via Telegram API
+      const tgRes = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: cleanChatId }),
+      });
+      const tgData = await tgRes.json();
+
+      if (!tgData.ok) {
+        return res.status(400).json({ success: false, error: `Verification Failed: Make sure Bot is added as Administrator to the ${type}. Detail: ${tgData.description || 'API Error'}` });
+      }
+
+      const chatResult = tgData.result;
+      const title = chatResult.title || chatResult.first_name || 'Channel';
+      const username = chatResult.username ? `@${chatResult.username}` : '';
+
+      const newItem = {
+        chatId: cleanChatId,
+        link: cleanLink,
+        name: title,
+        username,
+        type: type === 'group' ? 'group' : 'channel',
+        verified: true,
+      };
+
+      const currentChannels = botData.channels || [];
+      const currentGroups = botData.groups || [];
+
+      if (type === 'group') {
+        const filtered = currentGroups.filter((g: any) => g.chatId !== cleanChatId);
+        filtered.push(newItem);
+        await updateDoc(botRef, { groups: filtered, updatedAt: new Date().toISOString() });
+      } else {
+        const filtered = currentChannels.filter((c: any) => c.chatId !== cleanChatId);
+        filtered.push(newItem);
+        await updateDoc(botRef, { channels: filtered, updatedAt: new Date().toISOString() });
+      }
+
+      return res.json({ success: true, item: newItem });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 5. DELETE CHANNEL / GROUP
+  app.post('/api/admin/earning-bots/:id/delete-channel-group', requireAdminSession, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { type, chatId } = req.body;
+
+      const botRef = doc(db, 'earningBots', id);
+      const botSnap = await getDoc(botRef);
+
+      if (!botSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Bot not found' });
+      }
+
+      const botData = botSnap.data();
+      if (type === 'group') {
+        const filtered = (botData.groups || []).filter((g: any) => g.chatId !== chatId);
+        await updateDoc(botRef, { groups: filtered, updatedAt: new Date().toISOString() });
+      } else {
+        const filtered = (botData.channels || []).filter((c: any) => c.chatId !== chatId);
+        await updateDoc(botRef, { channels: filtered, updatedAt: new Date().toISOString() });
+      }
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 6. ANALYTICS
+  app.get('/api/admin/earning-bots/:id/analytics', requireAdminSession, async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Users Query
+      const usersSnap = await getDocs(query(collection(db, 'users'), where('botId', '==', id)));
+      const totalUsers = usersSnap.size;
+
+      let todaysUsers = 0;
+      const todayStr = new Date().toISOString().substring(0, 10);
+      usersSnap.forEach(d => {
+        const cDate = d.data().createdAt;
+        if (cDate && cDate.startsWith(todayStr)) {
+          todaysUsers++;
+        }
+      });
+
+      // Referrals Query
+      const refSnap = await getDocs(query(collection(db, 'botReferrals'), where('botId', '==', id)));
+      let totalReferrals = 0;
+      let validReferrals = 0;
+      let totalRewardAmount = 0;
+
+      refSnap.forEach(d => {
+        totalReferrals++;
+        const r = d.data();
+        if (r.status === 'VALID') {
+          validReferrals++;
+          totalRewardAmount += r.rewardAmount || 0;
+        }
+      });
+
+      // Withdrawals Query
+      const wdSnap = await getDocs(query(collection(db, 'withdrawals'), where('botId', '==', id)));
+      let totalWithdrawnAmount = 0;
+      let pendingWithdrawals = 0;
+      let totalWithdrawals = 0;
+
+      wdSnap.forEach(d => {
+        totalWithdrawals++;
+        const w = d.data();
+        if (w.status === 'PAID' || w.status === 'APPROVED') {
+          totalWithdrawnAmount += w.amount || 0;
+        } else if (w.status === 'PENDING') {
+          pendingWithdrawals++;
+        }
+      });
+
+      return res.json({
+        success: true,
+        analytics: {
+          totalUsers,
+          todaysUsers,
+          totalReferrals,
+          validReferrals,
+          totalRewardAmount,
+          totalWithdrawnAmount,
+          pendingWithdrawals,
+          totalWithdrawals,
+        }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 7. PUBLIC BOT CONFIGURATION
+  app.get('/api/earning-bots/config/:botId', async (req, res) => {
+    try {
+      const { botId } = req.params;
+      const botSnap = await getDoc(doc(db, 'earningBots', botId));
+      if (!botSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Earning Bot not found.' });
+      }
+      const b = botSnap.data();
+      return res.json({
+        success: true,
+        config: {
+          botId: b.botId,
+          botUsername: b.botUsername,
+          botFirstName: b.botFirstName,
+          botName: b.botName,
+          referralReward: b.referralReward,
+          registrationBonus: b.registrationBonus,
+          minWithdrawal: b.minWithdrawal,
+          withdrawalTax: b.withdrawalTax,
+          withdrawalMethods: b.withdrawalMethods,
+          dailyReferralLimit: b.dailyReferralLimit,
+          referralEarningCap: b.referralEarningCap,
+          status: b.status,
+        }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 8. MINI APP SECURE USER REGISTRATION / VERIFICATION
+  app.post('/api/earning-bots/register', async (req, res) => {
+    try {
+      const { botId, initData, deviceFingerprint, userAgent } = req.body;
+
+      if (!botId || !initData) {
+        return res.status(400).json({ success: false, error: 'Missing required registration parameters' });
+      }
+
+      // Fetch Bot Config to get Bot Token
+      const botSnap = await getDoc(doc(db, 'earningBots', botId));
+      if (!botSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Earning Bot not found' });
+      }
+
+      const bot = botSnap.data();
+
+      // Verify Telegram WebApp signed initData
+      const params = new URLSearchParams(initData);
+      const hash = params.get('hash');
+      if (!hash) {
+        return res.status(401).json({ success: false, error: 'Unauthorized: missing authentication hash' });
+      }
+
+      const keys = Array.from(params.keys()).filter(k => k !== 'hash').sort();
+      const dataCheckString = keys.map(k => `${k}=${params.get(k)}`).join('\n');
+
+      const secretKey = crypto.createHmac('sha256', 'WebAppData').update(bot.token).digest();
+      const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+      if (calculatedHash !== hash) {
+        return res.status(401).json({ success: false, error: 'Unauthorized: Invalid Telegram authentication signature' });
+      }
+
+      // Extract User Information from initData
+      const userParam = params.get('user');
+      if (!userParam) {
+        return res.status(400).json({ success: false, error: 'Unauthorized: missing user parameter' });
+      }
+
+      const tgUser = JSON.parse(userParam);
+      const tgUserId = String(tgUser.id);
+      const firstName = tgUser.first_name || 'User';
+      const username = tgUser.username || '';
+
+      // Check if User already fully exists in the bot database
+      const userDocId = `${botId}_${tgUserId}`;
+      const userRef = doc(db, 'users', userDocId);
+      const userSnap = await getDoc(userRef);
+
+      if (userSnap.exists() && userSnap.data().status === 'ACTIVE') {
+        return res.json({ success: true, user: userSnap.data(), isNew: false });
+      }
+
+      // Fetch verified details from pending session
+      const pendingSnap = await getDoc(doc(db, 'pendingBotSessions', `${botId}_${tgUserId}`));
+      if (!pendingSnap.exists() || !pendingSnap.data().contactVerified) {
+        return res.status(400).json({ success: false, error: 'Please share your verified mobile number inside the Telegram Bot chat first' });
+      }
+
+      const pData = pendingSnap.data();
+      const verifiedMobile = pData.phone;
+      const referrerUid = pData.referrerUid;
+
+      // Duplicity and Device fingerprint constraints: ONE account per device/fingerprint
+      const fingerprint = String(deviceFingerprint || '').trim();
+      if (fingerprint) {
+        const fpQuery = query(collection(db, 'users'), where('botId', '==', botId), where('deviceFingerprint', '==', fingerprint));
+        const fpSnap = await getDocs(fpQuery);
+        if (!fpSnap.empty) {
+          return res.status(400).json({ success: false, error: 'Only one account is permitted per device.' });
+        }
+      }
+
+      // Check if mobile number is already registered for this specific bot
+      const mobQuery = query(collection(db, 'users'), where('botId', '==', botId), where('mobile', '==', verifiedMobile));
+      const mobSnap = await getDocs(mobQuery);
+      if (!mobSnap.empty) {
+        return res.status(400).json({ success: false, error: 'This mobile number is already associated with another active wallet.' });
+      }
+
+      // Build and Save User Document
+      const nowIso = new Date().toISOString();
+      const newUser = {
+        id: userDocId,
+        uid: userDocId,
+        botId,
+        telegramId: tgUserId,
+        username,
+        firstName,
+        mobile: verifiedMobile,
+        walletBalance: bot.registrationBonus || 0,
+        lockedBalance: 0,
+        totalWithdrawn: 0,
+        channelVerified: true,
+        groupVerified: true,
+        referrerUid: referrerUid || '',
+        referredBy: referrerUid || '',
+        referralRewardReceived: false,
+        totalReferrals: 0,
+        successfulReferrals: 0,
+        totalReferralEarnings: 0,
+        status: 'ACTIVE',
+        deviceFingerprint: fingerprint,
+        createdAt: nowIso,
+        lastActive: nowIso,
+      };
+
+      await setDoc(userRef, newUser);
+
+      // Log Registration Bonus ledger transaction
+      if (bot.registrationBonus && bot.registrationBonus > 0) {
+        await recordWalletTransaction({
+          uid: userDocId,
+          botId,
+          type: 'REGISTRATION_BONUS',
+          amount: bot.registrationBonus,
+          status: 'completed',
+          description: `Registration Bonus - Welcome!`,
+          transactionId: `REGBONUS_${botId}_${tgUserId}`,
+        });
+      }
+
+      // Referral reward logic
+      if (referrerUid) {
+        try {
+          // Look up Referrer
+          const rQuery = query(collection(db, 'users'), where('botId', '==', botId), where('uid', '==', referrerUid));
+          const rSnap = await getDocs(rQuery);
+
+          if (!rSnap.empty) {
+            const referrerDoc = rSnap.docs[0];
+            const referrerData = referrerDoc.data();
+            const refDocId = referrerDoc.id;
+            const refTgId = referrerData.telegramId;
+
+            // Enforce Daily Referral Limits (e.g. 50 per day)
+            const todayStr = nowIso.substring(0, 10);
+            const referralsTodayQuery = query(
+              collection(db, 'botReferrals'),
+              where('botId', '==', botId),
+              where('referrerTelegramId', '==', refTgId),
+              where('createdAt', '>=', todayStr)
+            );
+            const referralsTodaySnap = await getDocs(referralsTodayQuery);
+
+            if (referralsTodaySnap.size >= bot.dailyReferralLimit) {
+              console.warn(`Referrer ${refTgId} hit daily referral limit of ${bot.dailyReferralLimit}. Referral reward skipped.`);
+            } else {
+              // Enforce Referral Earning Cap (e.g. 1000 per day or overall)
+              const earningsSum = (referrerData.totalReferralEarnings || 0) + bot.referralReward;
+              if (earningsSum > bot.referralEarningCap) {
+                console.warn(`Referrer ${refTgId} hit overall referral earnings cap of ${bot.referralEarningCap}. Referral reward skipped.`);
+              } else {
+                // Generate referral record
+                const refRecordId = `REF_${botId}_${tgUserId}`;
+                const referralRecord = {
+                  id: refRecordId,
+                  botId,
+                  referrerTelegramId: refTgId,
+                  referredTelegramId: tgUserId,
+                  status: 'VALID',
+                  rewardAmount: bot.referralReward,
+                  transactionId: `TXN_REF_${botId}_${tgUserId}`,
+                  createdAt: nowIso,
+                  validatedAt: nowIso,
+                };
+
+                await setDoc(doc(db, 'botReferrals', refRecordId), referralRecord);
+
+                // Credit Referrer
+                await runTransaction(db, async (txn) => {
+                  const refSnap = await txn.get(referrerDoc.ref);
+                  if (refSnap.exists()) {
+                    const freshData = refSnap.data();
+                    txn.update(referrerDoc.ref, {
+                      walletBalance: (freshData.walletBalance || 0) + bot.referralReward,
+                      totalReferrals: (freshData.totalReferrals || 0) + 1,
+                      successfulReferrals: (freshData.successfulReferrals || 0) + 1,
+                      totalReferralEarnings: (freshData.totalReferralEarnings || 0) + bot.referralReward,
+                    });
+                  }
+                });
+
+                // Write referrer transaction log
+                await recordWalletTransaction({
+                  uid: refDocId,
+                  botId,
+                  type: 'REFERRAL_REWARD',
+                  amount: bot.referralReward,
+                  status: 'completed',
+                  description: `Referral Reward for inviting ${firstName}`,
+                  transactionId: `TXN_REF_${botId}_${tgUserId}`,
+                });
+
+                // Send Telegram Notification to Referrer
+                await sendTelegramApi(bot.token, 'sendMessage', {
+                  chat_id: refTgId,
+                  text: `🎉 <b>New Referral Registered!</b>\n\n` +
+                    `User <b>${firstName}</b> completed sign-up.\n` +
+                    `💰 <b>Reward Credit:</b> ₹${bot.referralReward} credited to your wallet balance!`,
+                  parse_mode: 'HTML',
+                });
+              }
+            }
+          }
+        } catch (refErr) {
+          console.error('[Earning Bot Referral Process Failed]:', refErr);
+        }
+      }
+
+      // Notify User of registration success in Chat
+      await sendTelegramApi(bot.token, 'sendMessage', {
+        chat_id: tgUserId,
+        text: `🎉 <b>Account Setup Complete!</b>\n\n` +
+          `💰 <b>Registration Bonus:</b> ₹${bot.registrationBonus || 0} credited to your wallet balance.\n\n` +
+          `Use the keyboard below to manage your account, refer friends and withdraw earnings!`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [{ text: '👤 ACCOUNT' }, { text: '💰 BALANCE' }],
+            [{ text: '🎁 REFER & EARN' }, { text: '💸 WITHDRAW' }],
+            [{ text: '📊 HISTORY' }, { text: '☎ Contact Us' }]
+          ],
+          resize_keyboard: true,
+        },
+      });
+
+      // Clear pending session
+      await deleteDoc(doc(db, 'pendingBotSessions', `${botId}_${tgUserId}`));
+
+      return res.json({ success: true, user: newUser, isNew: true });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 9. RE-GENERATE & SYNC ALL WEBHOOKS ON STARTUP (Security & Reliability helper)
+  app.post('/api/admin/earning-bots/sync-webhooks', requireAdminSession, async (req, res) => {
+    try {
+      const snap = await getDocs(collection(db, 'earningBots'));
+      let count = 0;
+
+      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
+      const proto = (req.headers['x-forwarded-proto'] as string) || 'https';
+      const defaultDomain = process.env.APP_BASE_URL || process.env.APP_URL || `${proto}://${host}`;
+      const baseDomain = defaultDomain.replace(/\/$/, '');
+
+      for (const d of snap.docs) {
+        const bot = d.data();
+        if (bot.token && bot.status === 'active') {
+          const webhookUrl = `${baseDomain}/api/telegram/webhook/${bot.token}`;
+          const r = await fetch(`https://api.telegram.org/bot${bot.token}/setWebhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              url: webhookUrl,
+              allowed_updates: ['message', 'callback_query', 'channel_post', 'chat_member'],
+            }),
+          });
+          const rData = await r.json();
+          if (rData.ok) {
+            count++;
+          }
+        }
+      }
+
+      return res.json({ success: true, message: `Successfully synced webhooks for ${count} active Earning Bots.` });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }

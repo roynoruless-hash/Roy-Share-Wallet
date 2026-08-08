@@ -44,7 +44,7 @@ export const ComingSoonView: React.FC<ComingSoonViewProps> = ({ path, onGoHome }
           </div>
           <div className="flex items-center gap-2 text-slate-400 text-[11px]">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>All existing Giveaway War & Wallet features are 100% active.</span>
+            <span>All existing platform & Wallet features are 100% active.</span>
           </div>
         </div>
 

@@ -3,24 +3,12 @@ import { db } from '../services/firebase';
 
 export interface TransactionInput {
   uid: string;
-  type:
-    | 'Registration Bonus'
-    | 'Referral Bonus'
-    | 'Referral Milestone Reward'
-    | 'Feedback Reward'
-    | 'Admin Credit'
-    | 'Admin Debit'
-    | 'Withdrawal Request'
-    | 'Withdrawal Approved'
-    | 'Withdrawal Rejected'
-    | 'Withdrawal Hold'
-    | 'Withdrawal Paid'
-    | 'Withdrawal Refund'
-    | 'Withdrawal Release';
+  type: string; // Widened to support custom bot transactions like 'REGISTRATION_BONUS', 'REFERRAL_REWARD'
   amount: number; // positive for credit, negative for debit
   status: 'completed' | 'pending' | 'rejected' | 'approved';
   description: string;
   botToken?: string;
+  botId?: string; // Optional botId to isolate transaction lookups
   transactionId?: string; // Deterministic ID, e.g. GIVEAWAY_<giveawayId>_<uid>
 }
 
@@ -50,30 +38,65 @@ export async function recordWalletTransaction(input: TransactionInput) {
   console.log(`[transactionService] Processing ${type} of amount ${amount} for user UID: ${uid}`);
 
   try {
-    // 1. Find user document using appUid, uid, telegramId, or doc ID
+    // 1. Find user document using botId isolation or global lookup
     const searchUid = String(uid).trim();
-    let uSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', searchUid)));
-    if (uSnap.empty) {
-      uSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', searchUid)));
-    }
-    if (uSnap.empty) {
-      uSnap = await getDocs(query(collection(db, 'users'), where('telegramId', '==', searchUid)));
-    }
-    if (uSnap.empty) {
-      const singleDocSnap = await getDoc(doc(db, 'users', searchUid));
-      if (singleDocSnap.exists()) {
-        uSnap = { empty: false, docs: [singleDocSnap] } as any;
+    let userDocRef: any = null;
+    let userData: any = null;
+    let userDocId = '';
+
+    if (input.botId) {
+      // Document ID is botId + "_" + searchUid (telegramId)
+      const exactDocId = `${input.botId}_${searchUid}`;
+      const docRef = doc(db, 'users', exactDocId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        userDocRef = docRef;
+        userData = docSnap.data();
+        userDocId = docSnap.id;
+      } else {
+        // Query users collection with botId filter
+        const q = query(collection(db, 'users'), where('telegramId', '==', searchUid), where('botId', '==', input.botId));
+        const qSnap = await getDocs(q);
+        if (!qSnap.empty) {
+          userDocRef = qSnap.docs[0].ref;
+          userData = qSnap.docs[0].data();
+          userDocId = qSnap.docs[0].id;
+        } else {
+          const qUid = query(collection(db, 'users'), where('uid', '==', searchUid), where('botId', '==', input.botId));
+          const qUidSnap = await getDocs(qUid);
+          if (!qUidSnap.empty) {
+            userDocRef = qUidSnap.docs[0].ref;
+            userData = qUidSnap.docs[0].data();
+            userDocId = qUidSnap.docs[0].id;
+          }
+        }
+      }
+    } else {
+      let uSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', searchUid)));
+      if (uSnap.empty) {
+        uSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', searchUid)));
+      }
+      if (uSnap.empty) {
+        uSnap = await getDocs(query(collection(db, 'users'), where('telegramId', '==', searchUid)));
+      }
+      if (uSnap.empty) {
+        const singleDocSnap = await getDoc(doc(db, 'users', searchUid));
+        if (singleDocSnap.exists()) {
+          uSnap = { empty: false, docs: [singleDocSnap] } as any;
+        }
+      }
+
+      if (uSnap && !uSnap.empty) {
+        userDocRef = uSnap.docs[0].ref;
+        userData = uSnap.docs[0].data();
+        userDocId = uSnap.docs[0].id;
       }
     }
 
-    if (!uSnap || uSnap.empty) {
+    if (!userDocRef) {
       console.error(`[transactionService] User with UID ${uid} not found!`);
       return { success: false, error: `User not found: ${uid}` };
     }
-
-    const userDoc = uSnap.docs[0];
-    const userDocRef = userDoc.ref;
-    const userData = userDoc.data();
 
     let balanceBefore = 0;
     let balanceAfter = 0;
@@ -107,7 +130,7 @@ export async function recordWalletTransaction(input: TransactionInput) {
       if (!uFreshSnap.exists()) {
         throw new Error('User document missing during transaction execution.');
       }
-      const uFreshData = uFreshSnap.data();
+      const uFreshData = uFreshSnap.data() as any;
       balanceBefore = Number(uFreshData.walletBalance) || 0;
       balanceAfter = balanceBefore + amount;
 
@@ -121,10 +144,10 @@ export async function recordWalletTransaction(input: TransactionInput) {
       });
 
       // Write Immutable Transaction Document
-      transaction.set(txRef, {
+      const transactionDoc: any = {
         id: transactionId,
         transactionId: transactionId,
-        userId: userDoc.id,
+        userId: userDocId,
         uid: String(uid).trim(),
         telegramId: String(uFreshData.telegramId || userData.telegramId || ''),
         fullName: String(uFreshData.firstName || userData.firstName || 'User'),
@@ -136,7 +159,12 @@ export async function recordWalletTransaction(input: TransactionInput) {
         status: status,
         description: description,
         createdAt: new Date().toISOString(),
-      });
+      };
+      if (input.botId) {
+        transactionDoc.botId = input.botId;
+      }
+
+      transaction.set(txRef, transactionDoc);
     });
 
     if (isAlreadyProcessed) {

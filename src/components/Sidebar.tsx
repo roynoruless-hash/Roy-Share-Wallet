@@ -65,7 +65,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'Growth & Promo',
       items: [
         { id: 'giveaways' as TabType, label: 'Lucky Giveaway', icon: Gift, badge: 'REALTIME' },
-        { id: 'giveaway_war' as TabType, label: 'Giveaway War', icon: Trophy },
         { id: 'voting_contests' as TabType, label: 'Voting Contests', icon: Trophy },
         { id: 'referral' as TabType, label: 'Referrals', icon: Users },
         { id: 'milestones' as TabType, label: 'Referral Milestones', icon: TrendingUp },
@@ -84,6 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'Configuration',
       items: [
         { id: 'telegram' as TabType, label: 'Telegram Bot', icon: Bot },
+        { id: 'earning_bots' as TabType, label: 'Earning Bots', icon: Bot, badge: 'NEW' },
         { id: 'channel' as TabType, label: 'Channel & Group', icon: ShieldCheck },
         { id: 'settings' as TabType, label: 'System Settings', icon: Settings },
         { id: 'security' as TabType, label: 'Security Hub', icon: ShieldCheck },

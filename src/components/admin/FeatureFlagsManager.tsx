@@ -5,7 +5,6 @@ import { FeatureFlags } from '../../types';
 export const FeatureFlagsManager: React.FC = () => {
   const [flags, setFlags] = useState<FeatureFlags>({
     redeem: true,
-    giveaway: true,
     vote: true,
     flashMode: true,
     aiAssistant: true,
@@ -61,7 +60,6 @@ export const FeatureFlagsManager: React.FC = () => {
 
   const modules = [
     { key: 'redeem', name: 'Live Redeem Drop System', desc: 'Controls user speed typing redeem drops & claims' },
-    { key: 'giveaway', name: 'Giveaway War Engine', desc: 'Controls squad battle registrations & team points' },
     { key: 'vote', name: 'Voting Contests Suite', desc: 'Controls user voting and contestant submissions' },
     { key: 'flashMode', name: 'Flash Speed Mode', desc: 'Ultra-fast 15-second drop mode' },
     { key: 'aiAssistant', name: 'AI Event Assistant', desc: 'Gemini AI copywriting & broadcast suggestions' },

@@ -290,6 +290,53 @@
         "eventsJoined": { "type": "number" }
       },
       "required": ["telegramId", "totalWins"]
+    },
+    "earningBots": {
+      "title": "Earning Bot Configuration",
+      "description": "Configuration for a specific Earning Bot",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "token": { "type": "string" },
+        "botId": { "type": "string" },
+        "botUsername": { "type": "string" },
+        "botFirstName": { "type": "string" },
+        "botName": { "type": "string" },
+        "adminChatId": { "type": "string" },
+        "referralReward": { "type": "number" },
+        "registrationBonus": { "type": "number" },
+        "minWithdrawal": { "type": "number" },
+        "withdrawalTax": { "type": "number" },
+        "withdrawalMethods": { "type": "array" },
+        "status": { "type": "string" },
+        "channels": { "type": "array" },
+        "groups": { "type": "array" },
+        "dailyReferralLimit": { "type": "number" },
+        "referralEarningCap": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "token", "botId", "botUsername", "status", "createdAt"]
+    },
+    "botReferrals": {
+      "title": "Earning Bot Referrals",
+      "description": "Tracks referrals for Earning Bots",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "botId": { "type": "string" },
+        "referrerTelegramId": { "type": "string" },
+        "referredTelegramId": { "type": "string" },
+        "status": { "type": "string" },
+        "rewardAmount": { "type": "number" },
+        "transactionId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "validatedAt": { "type": "string" },
+        "riskScore": { "type": "number" },
+        "riskLevel": { "type": "string" },
+        "riskSignals": { "type": "array" }
+      },
+      "required": ["id", "botId", "referrerTelegramId", "referredTelegramId", "status", "rewardAmount", "createdAt"]
     }
   },
   "firestore": {
@@ -356,6 +403,14 @@
     "/withdrawals/{withdrawalId}": {
       "schema": "withdrawals",
       "description": "User withdrawal requests and payout audit records"
+    },
+    "/earningBots/{botId}": {
+      "schema": "earningBots",
+      "description": "Configuration for Bot Earning"
+    },
+    "/botReferrals/{refId}": {
+      "schema": "botReferrals",
+      "description": "Tracks deep link referral logs"
     }
   }
 }

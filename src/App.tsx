@@ -6,6 +6,7 @@ import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
 import { TelegramConfigView } from './components/TelegramConfigView';
+import { EarningBotsView } from './components/EarningBotsView';
 import { ChannelGroupView } from './components/ChannelGroupView';
 import { WalletSettingsView } from './components/WalletSettingsView';
 import { WithdrawalSettingsView } from './components/WithdrawalSettingsView';
@@ -25,12 +26,10 @@ import { ReferralVerifyView } from './components/ReferralVerifyView';
 import { ClaimRewardView } from './components/ClaimRewardView';
 import { AdminLoginView } from './components/AdminLoginView';
 import { VotingContestsView } from './components/VotingContestsView';
-import { GiveawayWarView } from './components/GiveawayWarView';
 import { AIBroadcastView } from './components/AIBroadcastView';
 import { LuckyGiveawaysView } from './components/admin/LuckyGiveawaysView';
 import { EnterpriseOperationsView } from './components/admin/EnterpriseOperationsView';
 import { AIRevenueAutomationView } from './components/admin/AIRevenueAutomationView';
-import { GiveawayWarPublicView } from './components/GiveawayWarPublicView';
 import { ContestRegistrationView } from './components/ContestRegistrationView';
 import { UserAppView } from './components/UserAppView';
 import { BroadcastHistoryView } from './components/BroadcastHistoryView';
@@ -55,7 +54,6 @@ function resolveTabFromPath(pathname: string): { tab: TabType; isUnknown: boolea
   if (p.startsWith('/history') || p.startsWith('/broadcast-history')) return { tab: 'history', isUnknown: false };
   if (p.startsWith('/advanced') || p.startsWith('/pro')) return { tab: 'advanced', isUnknown: false };
   if (p.startsWith('/settings')) return { tab: 'settings', isUnknown: false };
-  if (p.startsWith('/giveaway-war') || p.startsWith('/giveaway_war') || p.startsWith('/war') || p.startsWith('/lucky-spin') || p.startsWith('/claim-rewards') || p.startsWith('/event-replay') || p.startsWith('/new-war')) return { tab: 'giveaway_war', isUnknown: false };
   if (p.startsWith('/ai-broadcast') || p.startsWith('/ai_broadcast') || p.startsWith('/broadcast')) return { tab: 'ai_broadcast', isUnknown: false };
   if (p.startsWith('/enterprise') || p.startsWith('/enterprise_ops') || p.startsWith('/enterprise-ops')) return { tab: 'enterprise_ops', isUnknown: false };
   if (p.startsWith('/ai-revenue') || p.startsWith('/ai_revenue') || p.startsWith('/automation') || p.startsWith('/revenue')) return { tab: 'ai_revenue_automation', isUnknown: false };
@@ -679,8 +677,6 @@ export default function App() {
         return '⭐ Feedback Campaigns';
       case 'feedback_reviews':
         return 'Feedback Reviews';
-      case 'giveaway_war':
-        return '⚔️ Giveaway War';
       case 'support':
         return 'Support Settings';
       case 'security':
@@ -750,7 +746,6 @@ export default function App() {
     (new URLSearchParams(window.location.search).has('token') && !isClaimRewardRoute);
   const isFeedbackRoute = window.location.pathname.startsWith('/feedback');
   const isContestRegistrationRoute = window.location.pathname.startsWith('/register-contest');
-  const isWarPublicRoute = window.location.pathname.startsWith('/war/') || window.location.pathname.startsWith('/war');
 
   const isUserAppRoute =
     isTelegramContext ||
@@ -793,11 +788,6 @@ export default function App() {
     const rContestId = pathParts[2] || '';
     console.log('[ROUTING_DECISION] Rendering ContestRegistrationView. ContestId:', rContestId);
     return <ContestRegistrationView contestId={rContestId} botUsername={config.botUsername || 'RoyShareWalletBot'} />;
-  }
-
-  if (isWarPublicRoute) {
-    console.log('[ROUTING_DECISION] Rendering GiveawayWarPublicView.');
-    return <GiveawayWarPublicView botUsername={config.botUsername || 'Roy_wallett_bot'} />;
   }
 
   if (isLoading) {
@@ -921,6 +911,10 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'earning_bots' && (
+                <EarningBotsView showToast={showToast} />
+              )}
+
               {activeTab === 'channel' && (
                 <ChannelGroupView
                   config={config}
@@ -997,13 +991,6 @@ export default function App() {
 
               {activeTab === 'giveaways' && (
                 <LuckyGiveawaysView
-                  config={config}
-                  showToast={showToast}
-                />
-              )}
-
-              {activeTab === 'giveaway_war' && (
-                <GiveawayWarView
                   config={config}
                   showToast={showToast}
                 />

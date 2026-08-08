@@ -79,13 +79,8 @@ service cloud.firestore {
       allow write: if true;
     }
 
-    // Giveaways & Wars
+    // Giveaways
     match /giveaways/{giveawayId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    match /giveawayWars/{warId} {
       allow read: if true;
       allow write: if true;
     }
@@ -122,6 +117,14 @@ service cloud.firestore {
     match /deviceFingerprints/{fpId} {
       allow read: if true;
       allow write: if true;
+    }
+
+    match /earningBots/{botId} {
+      allow read, write: if true;
+    }
+
+    match /botReferrals/{refId} {
+      allow read, write: if true;
     }
 
     // Default catch-all
