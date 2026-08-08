@@ -9,7 +9,7 @@ import { approveFeedbackReview, rejectFeedbackReview } from './src/server/feedba
 import { recordWalletTransaction } from './src/server/transactionService';
 import { doc, setDoc, collection, query, where, getDocs, getDoc, addDoc, deleteDoc, orderBy, limit, updateDoc, runTransaction, writeBatch } from 'firebase/firestore';
 import { db } from './src/services/firebase';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import crypto from 'crypto';
 import { encrypt, decrypt } from './src/utils/encryption';
 import { execSync } from 'child_process';
@@ -2411,6 +2411,8 @@ Claim now and don't forget to share your screenshot!`;
     try {
       const {
         title,
+        description,
+        bannerUrl,
         prizeAmount,
         walletReward,
         numberRange,
@@ -2419,7 +2421,15 @@ Claim now and don't forget to share your screenshot!`;
         winnerCount,
         startMode,
         winnerMode,
-        manualWinningNumber
+        manualWinningNumber,
+        entryType,
+        entryFee,
+        startTime,
+        endTime,
+        registrationDeadline,
+        maxEntriesPerAccount,
+        autoSelectWinners,
+        autoCreditPrize
       } = req.body;
 
       if (!title || !prizeAmount || !numberRange || !maxPlayers || !entryTimer || !winnerCount) {
@@ -2428,29 +2438,55 @@ Claim now and don't forget to share your screenshot!`;
 
       const giveawayId = `giveaway_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
       
-      const parsedTimer = Number(entryTimer) || 2; // default 2 mins
+      const parsedTimer = Number(entryTimer) || 5; 
       const durationSeconds = parsedTimer * 60;
       const createdAt = Date.now();
-      const expiresAt = createdAt + (durationSeconds * 1000);
+      
+      // Handle schedule times
+      const schedStartTime = startTime ? new Date(startTime).getTime() : null;
+      const schedEndTime = endTime ? new Date(endTime).getTime() : (createdAt + durationSeconds * 1000);
+      const schedDeadline = registrationDeadline ? new Date(registrationDeadline).getTime() : (createdAt + durationSeconds * 1000);
+
+      let status = 'draft';
+      let startedAt: number | null = null;
+      let expiresAt: number | null = null;
+
+      if (startMode === 'auto') {
+        status = 'active';
+        startedAt = createdAt;
+        expiresAt = schedEndTime || (createdAt + durationSeconds * 1000);
+      } else if (startMode === 'scheduled') {
+        status = 'scheduled';
+      }
 
       const giveawayObj = {
         id: giveawayId,
         title,
+        description: description || '',
+        bannerUrl: bannerUrl || '',
         prizeAmount: Number(prizeAmount),
-        walletReward: Number(walletReward || 0),
-        numberRange, // e.g. "1-24"
+        walletReward: Number(walletReward || prizeAmount),
+        numberRange, 
         maxPlayers: Number(maxPlayers),
         entryTimer: parsedTimer,
         durationSeconds,
         winnerCount: Number(winnerCount),
-        startMode, // "auto" | "manual"
-        winnerMode, // "fair" | "manual"
-        manualWinningNumber: manualWinningNumber ? Number(manualWinningNumber) : null,
-        status: startMode === 'auto' ? 'active' : 'draft', // Draft if manual start
+        startMode, // "auto" | "manual" | "scheduled"
+        winnerMode, // "fair" | "manual" | "ai"
+        manualWinningNumber: manualWinningNumber ? String(manualWinningNumber) : null,
+        entryType: entryType || 'free',
+        entryFee: Number(entryFee || 0),
+        startTime: schedStartTime,
+        endTime: schedEndTime,
+        registrationDeadline: schedDeadline,
+        maxEntriesPerAccount: Number(maxEntriesPerAccount || 1),
+        autoSelectWinners: autoSelectWinners !== undefined ? !!autoSelectWinners : true,
+        autoCreditPrize: autoCreditPrize !== undefined ? !!autoCreditPrize : true,
+        status,
         totalPlayers: 0,
         createdAt,
-        expiresAt: startMode === 'auto' ? expiresAt : null,
-        startedAt: startMode === 'auto' ? createdAt : null,
+        expiresAt: expiresAt || schedEndTime,
+        startedAt,
         winners: null,
         winningNumbers: null,
       };
@@ -2458,8 +2494,12 @@ Claim now and don't forget to share your screenshot!`;
       await setDoc(doc(db, 'giveaways', giveawayId), giveawayObj);
       await setDoc(doc(db, 'giveaways', 'active'), giveawayObj);
 
-      // Auto start bot notification if auto
-      if (startMode === 'auto') {
+      // Audit Log Action
+      const adminUid = (req as any).adminUid || 'super_admin';
+      await logAdminAction(adminUid, 'Create Giveaway', { giveawayId, title, prizeAmount, startMode });
+
+      // Auto start bot notification if active
+      if (status === 'active') {
         await notifyGiveawayStarted(giveawayObj);
       }
 
@@ -2469,6 +2509,22 @@ Claim now and don't forget to share your screenshot!`;
       return res.status(500).json({ success: false, error: err.message });
     }
   });
+
+  // Helper to log admin actions in central audit ledger
+  async function logAdminAction(adminUsername: string, action: string, details: any) {
+    try {
+      const logId = `audit_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      await setDoc(doc(db, 'audit_logs', logId), {
+        id: logId,
+        adminUsername,
+        action,
+        details,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error('Failed to log admin action:', e);
+    }
+  }
 
   // Helper to notify via Bot when giveaway starts
   async function notifyGiveawayStarted(giveaway: any) {
@@ -2547,15 +2603,19 @@ Claim now and don't forget to share your screenshot!`;
       const now = Date.now();
       let updateObj: any = {};
 
+      const adminUid = (req as any).adminUid || 'super_admin';
+
       if (action === 'start') {
-        if (giveaway.status !== 'draft') {
-          return res.status(400).json({ success: false, error: 'Giveaway is not in draft status' });
+        if (giveaway.status !== 'draft' && giveaway.status !== 'scheduled') {
+          return res.status(400).json({ success: false, error: 'Giveaway is not in draft or scheduled status' });
         }
         const expiresAt = now + (giveaway.durationSeconds * 1000);
         updateObj = {
           status: 'active',
           startedAt: now,
           expiresAt,
+          endTime: expiresAt,
+          registrationDeadline: expiresAt,
         };
         await notifyGiveawayStarted({ ...giveaway, ...updateObj });
       } else if (action === 'pause') {
@@ -2576,11 +2636,14 @@ Claim now and don't forget to share your screenshot!`;
         updateObj = {
           status: 'active',
           expiresAt,
+          endTime: expiresAt,
+          registrationDeadline: expiresAt,
         };
       } else if (action === 'cancel') {
         updateObj = { status: 'cancelled', endedAt: now };
       } else if (action === 'draw') {
         await runGiveawayDrawing(giveawayId);
+        await logAdminAction(adminUid, 'Draw Now / Complete Giveaway', { giveawayId });
         return res.json({ success: true, message: 'Drawing completed successfully' });
       } else if (action === 'restart') {
         const expiresAt = now + (giveaway.durationSeconds * 1000);
@@ -2588,6 +2651,8 @@ Claim now and don't forget to share your screenshot!`;
           status: 'active',
           startedAt: now,
           expiresAt,
+          endTime: expiresAt,
+          registrationDeadline: expiresAt,
           totalPlayers: 0,
           winners: null,
           winningNumbers: null,
@@ -2600,6 +2665,8 @@ Claim now and don't forget to share your screenshot!`;
       } else {
         return res.status(400).json({ success: false, error: 'Invalid action' });
       }
+
+      await logAdminAction(adminUid, action.charAt(0).toUpperCase() + action.slice(1) + ' Giveaway', { giveawayId });
 
       await setDoc(giveRef, updateObj, { merge: true });
       await setDoc(activeRef, updateObj, { merge: true });
@@ -2624,6 +2691,32 @@ Claim now and don't forget to share your screenshot!`;
       const activeGiveaway = snap.docs[0].data();
       const giveawayId = activeGiveaway.id;
 
+      // Handle scheduled automatic start
+      if (activeGiveaway.status === 'scheduled' && activeGiveaway.startTime && Date.now() >= activeGiveaway.startTime) {
+        console.log(`[Scheduled Start] Automatically starting giveaway ${giveawayId}...`);
+        const duration = (activeGiveaway.entryTimer || 5) * 60;
+        const expiresAt = Date.now() + duration * 1000;
+        const updateObj = {
+          status: 'active',
+          startedAt: Date.now(),
+          expiresAt,
+          endTime: expiresAt,
+          registrationDeadline: expiresAt,
+        };
+        const giveRef = doc(db, 'giveaways', giveawayId);
+        const activeRef = doc(db, 'giveaways', 'active');
+        await setDoc(giveRef, updateObj, { merge: true });
+        await setDoc(activeRef, updateObj, { merge: true });
+        
+        await notifyGiveawayStarted({ ...activeGiveaway, ...updateObj });
+        
+        activeGiveaway.status = 'active';
+        activeGiveaway.startedAt = updateObj.startedAt;
+        activeGiveaway.expiresAt = updateObj.expiresAt;
+        activeGiveaway.endTime = updateObj.endTime;
+        activeGiveaway.registrationDeadline = updateObj.registrationDeadline;
+      }
+
       // Auto-complete if stuck in 'drawing' state past its scheduled time
       if (activeGiveaway.status === 'drawing' && activeGiveaway.drawCompletedAt && Date.now() >= activeGiveaway.drawCompletedAt + 10000) {
         console.log(`[Active Check] Giveaway ${giveawayId} stuck in drawing. Finalizing...`);
@@ -2638,7 +2731,17 @@ Claim now and don't forget to share your screenshot!`;
       }
 
       if (activeGiveaway.status === 'active' && activeGiveaway.expiresAt && Date.now() >= activeGiveaway.expiresAt) {
-        await runGiveawayDrawing(giveawayId);
+        if (activeGiveaway.autoSelectWinners !== false) {
+          await runGiveawayDrawing(giveawayId);
+        } else {
+          console.log(`[Active End] Registration ended, status changed to closed for ${giveawayId}...`);
+          const updateObj = { status: 'closed', endedAt: Date.now() };
+          const giveRef = doc(db, 'giveaways', giveawayId);
+          const activeRef = doc(db, 'giveaways', 'active');
+          await setDoc(giveRef, updateObj, { merge: true });
+          await setDoc(activeRef, updateObj, { merge: true });
+          activeGiveaway.status = 'closed';
+        }
         const updatedSnap = await getDoc(doc(db, 'giveaways', giveawayId));
         return res.json({
           success: true,
@@ -2673,20 +2776,39 @@ Claim now and don't forget to share your screenshot!`;
         return res.status(400).json({ success: false, error: 'giveawayId, telegramId, and selectedNumber are required' });
       }
 
+      // Check request headers for IP and User-Agent
+      const ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+      const userAgent = req.headers['user-agent'] || 'unknown';
+
+      // Find user account first to have document ID
+      const usersQ = query(collection(db, 'users'), where('telegramId', '==', String(telegramId).trim()));
+      const userSnap = await getDocs(usersQ);
+      if (userSnap.empty) {
+        return res.status(404).json({ success: false, error: 'User account not found' });
+      }
+      const userDoc = userSnap.docs[0];
+      const userRef = doc(db, 'users', userDoc.id);
+
+      // Perform risk-flagging analysis on IP address
+      const ipQuery = query(
+        collection(db, 'entries'),
+        where('giveawayId', '==', giveawayId),
+        where('ipAddress', '==', String(ipAddress))
+      );
+      const ipSnap = await getDocs(ipQuery);
+      const isMultiAccount = !ipSnap.empty && ipSnap.docs.some(doc => doc.data().telegramId !== String(telegramId));
+
       const giveRef = doc(db, 'giveaways', giveawayId);
       const activeRef = doc(db, 'giveaways', 'active');
-      const userEntryRef = doc(db, 'entries', `${giveawayId}_user_${telegramId}`);
       const numEntryRef = doc(db, 'entries', `${giveawayId}_num_${selectedNumber}`);
 
       const num = Number(selectedNumber);
       let runDraw = false;
 
       await runTransaction(db, async (transaction) => {
-        const [giveSnap, userEntrySnap, numEntrySnap] = await Promise.all([
-          transaction.get(giveRef),
-          transaction.get(userEntryRef),
-          transaction.get(numEntryRef),
-        ]);
+        const giveSnap = await transaction.get(giveRef);
+        const numEntrySnap = await transaction.get(numEntryRef);
+        const userSnapDoc = await transaction.get(userRef);
 
         if (!giveSnap.exists()) {
           throw new Error('Giveaway not found');
@@ -2701,14 +2823,27 @@ Claim now and don't forget to share your screenshot!`;
           throw new Error('Giveaway entries are closed');
         }
 
-        if (userEntrySnap.exists()) {
-          throw new Error('You have already joined this giveaway.');
-        }
-
         if (numEntrySnap.exists()) {
           throw new Error('This number has already been selected.');
         }
 
+        // Validate multiple entries limit
+        const maxEntries = Number(giveaway.maxEntriesPerAccount || 1);
+        const entryRefs: any[] = [];
+        for (let i = 1; i <= maxEntries; i++) {
+          entryRefs.push(transaction.get(doc(db, 'entries', `${giveawayId}_user_${telegramId}_entry_${i}`)));
+        }
+        
+        const entrySnaps = await Promise.all(entryRefs);
+        const existingEntriesCount = entrySnaps.filter(s => s.exists()).length;
+        if (existingEntriesCount >= maxEntries) {
+          throw new Error(`You have reached the limit of ${maxEntries} entries for this giveaway.`);
+        }
+
+        const nextEntryIndex = existingEntriesCount + 1;
+        const targetUserEntryRef = doc(db, 'entries', `${giveawayId}_user_${telegramId}_entry_${nextEntryIndex}`);
+
+        // Validate number range
         const rangeParts = giveaway.numberRange.split('-');
         const min = Number(rangeParts[0]) || 1;
         const max = Number(rangeParts[1]) || 100;
@@ -2720,6 +2855,52 @@ Claim now and don't forget to share your screenshot!`;
           throw new Error('This giveaway is full.');
         }
 
+        // Handle Coin/Balance deductions
+        const userData = userSnapDoc.exists() ? userSnapDoc.data() : { coins: 0, balance: 0 };
+        const fee = Number(giveaway.entryFee || 0);
+
+        if (giveaway.entryType === 'coins' && fee > 0) {
+          const currentCoins = Number(userData.coins || 0);
+          if (currentCoins < fee) {
+            throw new Error(`Insufficient Roy Coins. This giveaway requires ${fee} Coins to join.`);
+          }
+          transaction.update(userRef, { coins: currentCoins - fee });
+
+          // Atomic txn record inside Firestore
+          const txnId = `COIN_ENTRY_${giveawayId}_${telegramId}_${Date.now()}`;
+          const txnRef = doc(db, 'transactions', txnId);
+          transaction.set(txnRef, {
+            id: txnId,
+            uid: userDoc.id,
+            telegramId: String(telegramId),
+            type: 'Coin Deduction',
+            amount: -fee,
+            status: 'completed',
+            description: `Entry ticket for giveaway: ${giveaway.title} (Number: ${num})`,
+            createdAt: new Date().toISOString(),
+          });
+        } else if (giveaway.entryType === 'balance' && fee > 0) {
+          const currentBal = Number(userData.balance || 0);
+          if (currentBal < fee) {
+            throw new Error(`Insufficient balance. This giveaway requires ₹${fee} to join.`);
+          }
+          transaction.update(userRef, { balance: currentBal - fee });
+
+          // Atomic txn record inside Firestore
+          const txnId = `BAL_ENTRY_${giveawayId}_${telegramId}_${Date.now()}`;
+          const txnRef = doc(db, 'transactions', txnId);
+          transaction.set(txnRef, {
+            id: txnId,
+            uid: userDoc.id,
+            telegramId: String(telegramId),
+            type: 'Deduction',
+            amount: -fee,
+            status: 'completed',
+            description: `Entry ticket for giveaway: ${giveaway.title} (Number: ${num})`,
+            createdAt: new Date().toISOString(),
+          });
+        }
+
         const entryObj = {
           giveawayId,
           telegramId: String(telegramId),
@@ -2727,11 +2908,17 @@ Claim now and don't forget to share your screenshot!`;
           firstName: firstName || 'User',
           selectedNumber: num,
           timestamp: new Date().toISOString(),
+          ipAddress: String(ipAddress),
+          userAgent: String(userAgent),
+          riskFlagged: isMultiAccount,
+          riskStatus: isMultiAccount ? 'PENDING_ADMIN_REVIEW' : 'APPROVED',
+          riskIndicators: isMultiAccount ? { sharedIp: true, ipAddress } : null,
+          entryIndex: nextEntryIndex,
         };
 
         const nextTotalPlayers = (giveaway.totalPlayers || 0) + 1;
 
-        transaction.set(userEntryRef, entryObj);
+        transaction.set(targetUserEntryRef, entryObj);
         transaction.set(numEntryRef, { giveawayId, telegramId: String(telegramId), selectedNumber: num });
         transaction.update(giveRef, { totalPlayers: nextTotalPlayers });
         transaction.update(activeRef, { totalPlayers: nextTotalPlayers });
@@ -2748,7 +2935,7 @@ Claim now and don't forget to share your screenshot!`;
         });
       }
 
-      return res.json({ success: true, selectedNumber: num });
+      return res.json({ success: true, selectedNumber: num, riskFlagged: isMultiAccount });
     } catch (err: any) {
       console.warn(`[Number Lock Action] Join rejected: ${err.message}`);
       if (err.message === 'This number has already been selected.') {
@@ -2830,21 +3017,75 @@ Claim now and don't forget to share your screenshot!`;
       const winnerCount = Number(giveaway.winnerCount) || 1;
 
       const winningNumbers: number[] = [];
+      let aiReasoning = '';
+
+      if (giveaway.winnerMode === 'ai') {
+        try {
+          const config = await getDecryptedConfig() || {};
+          const geminiKey = config.geminiApiKey || process.env.GEMINI_API_KEY || '';
+          if (geminiKey) {
+            console.log('[AI Mode Draw] Querying Gemini for winning numbers...');
+            const ai = new GoogleGenAI({
+              apiKey: geminiKey,
+              httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+            });
+            const response = await ai.models.generateContent({
+              model: 'gemini-3.6-flash',
+              contents: `Please select exactly ${winnerCount} unique winning numbers in the range ${min} to ${max} (inclusive) for a giveaway.
+The giveaway title is: "${giveaway.title}"
+The description is: "${giveaway.description || ''}"
+Respond with a JSON object containing two properties:
+1. "winningNumbers": an array of integers (exactly ${winnerCount} elements).
+2. "aiAnnouncement": a creative, engaging, short explanation (under 100 words) incorporating the giveaway's theme about why these specific numbers were chosen by the AI.`,
+              config: {
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    winningNumbers: {
+                      type: Type.ARRAY,
+                      items: { type: Type.INTEGER }
+                    },
+                    aiAnnouncement: { type: Type.STRING }
+                  },
+                  required: ['winningNumbers', 'aiAnnouncement']
+                }
+              }
+            });
+
+            if (response && response.text) {
+              const resObj = JSON.parse(response.text);
+              if (Array.isArray(resObj.winningNumbers) && resObj.winningNumbers.length > 0) {
+                for (const num of resObj.winningNumbers) {
+                  const n = Number(num);
+                  if (!isNaN(n) && n >= min && n <= max && !winningNumbers.includes(n)) {
+                    winningNumbers.push(n);
+                  }
+                }
+                aiReasoning = resObj.aiAnnouncement || '';
+                console.log(`[AI Mode Draw] Gemini selected: ${winningNumbers.join(', ')} with reason: ${aiReasoning}`);
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[AI Winner Selection Failed] Falling back to standard draw:', err);
+        }
+      }
 
       if (giveaway.winnerMode === 'manual' && giveaway.manualWinningNumber !== null) {
-        winningNumbers.push(giveaway.manualWinningNumber);
-        while (winningNumbers.length < winnerCount) {
-          const rand = Math.floor(Math.random() * (max - min + 1)) + min;
-          if (!winningNumbers.includes(rand)) {
-            winningNumbers.push(rand);
+        const manualParts = String(giveaway.manualWinningNumber).split(',');
+        for (const part of manualParts) {
+          const num = Number(part.trim());
+          if (!isNaN(num) && num >= min && num <= max && !winningNumbers.includes(num)) {
+            winningNumbers.push(num);
           }
         }
-      } else {
-        while (winningNumbers.length < winnerCount) {
-          const rand = Math.floor(Math.random() * (max - min + 1)) + min;
-          if (!winningNumbers.includes(rand)) {
-            winningNumbers.push(rand);
-          }
+      }
+
+      while (winningNumbers.length < winnerCount) {
+        const rand = Math.floor(Math.random() * (max - min + 1)) + min;
+        if (!winningNumbers.includes(rand)) {
+          winningNumbers.push(rand);
         }
       }
 
@@ -2875,6 +3116,7 @@ Claim now and don't forget to share your screenshot!`;
         drawTimestamp,
         winnerHash,
         drawCompletedAt: Date.now() + 15000, // 15 seconds client rolling countdown animation
+        aiAnnouncement: aiReasoning || null,
       };
 
       await Promise.all([
@@ -3046,6 +3288,7 @@ Claim now and don't forget to share your screenshot!`;
                      `🏆 <b>Giveaway:</b> ${giveaway.title}\n` +
                      `💰 <b>Prize:</b> ₹${giveaway.prizeAmount}\n` +
                      `🔢 <b>Winning Numbers:</b> ${winningNumbers.join(', ')}\n` +
+                     (giveaway.aiAnnouncement ? `🤖 <b>AI Choice Commentary:</b> <i>"${giveaway.aiAnnouncement}"</i>\n\n` : '') +
                      `🌱 <b>Draw Seed:</b> <code>${drawSeed}</code>\n` +
                      `🔑 <b>Winner Hash:</b> <code>${winnerHash}</code>\n\n` +
                      `🎉 <b>Winners Spotlight:</b>\n${winnersText}\n\n` +

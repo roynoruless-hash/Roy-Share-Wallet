@@ -52,15 +52,25 @@ export const LuckyGiveawaysView: React.FC<LuckyGiveawaysViewProps> = ({ config, 
 
   // Form States
   const [title, setTitle] = useState('Lucky Speed Drop');
+  const [description, setDescription] = useState('');
+  const [bannerUrl, setBannerUrl] = useState('');
   const [prizeAmount, setPrizeAmount] = useState('100');
   const [walletReward, setWalletReward] = useState('100');
   const [numberRange, setNumberRange] = useState('1-100');
   const [maxPlayers, setMaxPlayers] = useState('500');
   const [entryTimer, setEntryTimer] = useState('5');
   const [winnerCount, setWinnerCount] = useState('5');
-  const [startMode, setStartMode] = useState<'auto' | 'manual'>('auto');
-  const [winnerMode, setWinnerMode] = useState<'fair' | 'manual'>('fair');
+  const [startMode, setStartMode] = useState<'auto' | 'manual' | 'scheduled'>('auto');
+  const [winnerMode, setWinnerMode] = useState<'fair' | 'manual' | 'ai'>('fair');
   const [manualWinningNumber, setManualWinningNumber] = useState('');
+  const [entryType, setEntryType] = useState<'free' | 'coins' | 'balance'>('free');
+  const [entryFee, setEntryFee] = useState('0');
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [registrationDeadline, setRegistrationDeadline] = useState('');
+  const [maxEntriesPerAccount, setMaxEntriesPerAccount] = useState('1');
+  const [autoSelectWinners, setAutoSelectWinners] = useState(true);
+  const [autoCreditPrize, setAutoCreditPrize] = useState(true);
 
   // Local Countdown Timer State
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
@@ -384,6 +394,8 @@ export const LuckyGiveawaysView: React.FC<LuckyGiveawaysViewProps> = ({ config, 
         },
         body: JSON.stringify({
           title,
+          description,
+          bannerUrl,
           prizeAmount: Number(prizeAmount),
           walletReward: Number(walletReward),
           numberRange,
@@ -392,7 +404,15 @@ export const LuckyGiveawaysView: React.FC<LuckyGiveawaysViewProps> = ({ config, 
           winnerCount: Number(winnerCount),
           startMode,
           winnerMode,
-          manualWinningNumber: winnerMode === 'manual' ? Number(manualWinningNumber) : null,
+          manualWinningNumber: winnerMode === 'manual' ? manualWinningNumber : null,
+          entryType,
+          entryFee: Number(entryFee),
+          startTime: startTime || null,
+          endTime: endTime || null,
+          registrationDeadline: registrationDeadline || null,
+          maxEntriesPerAccount: Number(maxEntriesPerAccount),
+          autoSelectWinners,
+          autoCreditPrize
         }),
       });
 
@@ -525,6 +545,28 @@ export const LuckyGiveawaysView: React.FC<LuckyGiveawaysViewProps> = ({ config, 
               />
             </div>
 
+            <div className="space-y-1">
+              <label className="text-xs text-slate-400 font-bold uppercase">Description</label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Enter description..."
+                rows={2}
+                className="w-full px-4 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-500 font-bold resize-none"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-slate-400 font-bold uppercase">Banner Image URL</label>
+              <input
+                type="text"
+                value={bannerUrl}
+                onChange={(e) => setBannerUrl(e.target.value)}
+                placeholder="https://example.com/banner.jpg"
+                className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <label className="text-xs text-slate-400 font-bold uppercase">Prize Amount (₹)</label>
@@ -602,76 +644,165 @@ export const LuckyGiveawaysView: React.FC<LuckyGiveawaysViewProps> = ({ config, 
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
-                <label className="text-xs text-slate-400 font-bold uppercase">Start Mode</label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setStartMode('auto')}
-                    className={`flex-1 py-2 text-xs font-bold rounded-xl transition border ${
-                      startMode === 'auto'
-                        ? 'bg-amber-500 border-amber-500 text-slate-950'
-                        : 'bg-slate-950 border-slate-800 text-slate-400'
-                    }`}
-                  >
-                    Auto
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStartMode('manual')}
-                    className={`flex-1 py-2 text-xs font-bold rounded-xl transition border ${
-                      startMode === 'manual'
-                        ? 'bg-amber-500 border-amber-500 text-slate-950'
-                        : 'bg-slate-950 border-slate-800 text-slate-400'
-                    }`}
-                  >
-                    Manual
-                  </button>
-                </div>
+                <label className="text-xs text-slate-400 font-bold uppercase">Entry Fee Type</label>
+                <select
+                  value={entryType}
+                  onChange={(e) => setEntryType(e.target.value as any)}
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 focus:outline-none focus:border-amber-500 font-bold"
+                >
+                  <option value="free">Free Entry</option>
+                  <option value="coins">Wallet Coins</option>
+                  <option value="balance">Wallet Balance</option>
+                </select>
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs text-slate-400 font-bold uppercase">Winner Mode</label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setWinnerMode('fair')}
-                    className={`flex-1 py-2 text-xs font-bold rounded-xl transition border ${
-                      winnerMode === 'fair'
-                        ? 'bg-amber-500 border-amber-500 text-slate-950'
-                        : 'bg-slate-950 border-slate-800 text-slate-400'
-                    }`}
-                  >
-                    Fair Random
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWinnerMode('manual')}
-                    className={`flex-1 py-2 text-xs font-bold rounded-xl transition border ${
-                      winnerMode === 'manual'
-                        ? 'bg-amber-500 border-amber-500 text-slate-950'
-                        : 'bg-slate-950 border-slate-800 text-slate-400'
-                    }`}
-                  >
-                    Manual
-                  </button>
+                <label className="text-xs text-slate-400 font-bold uppercase">Entry Fee Amount</label>
+                <input
+                  type="number"
+                  disabled={entryType === 'free'}
+                  value={entryFee}
+                  onChange={(e) => setEntryFee(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-500 font-bold disabled:opacity-40"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-xs text-slate-400 font-bold uppercase">Max Slots Per Player</label>
+                <input
+                  type="number"
+                  value={maxEntriesPerAccount}
+                  onChange={(e) => setMaxEntriesPerAccount(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs text-slate-400 font-bold uppercase">Start Mode</label>
+                <select
+                  value={startMode}
+                  onChange={(e) => setStartMode(e.target.value as any)}
+                  className="w-full px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 focus:outline-none focus:border-amber-500 font-bold"
+                >
+                  <option value="auto">Auto Start</option>
+                  <option value="manual">Manual Start</option>
+                  <option value="scheduled">Scheduled Start</option>
+                </select>
+              </div>
+            </div>
+
+            {startMode === 'scheduled' && (
+              <div className="space-y-3 p-4 bg-slate-950 rounded-2xl border border-slate-800 animate-fade-in">
+                <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">📅 Scheduled Timings</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[9px] text-slate-400 font-bold uppercase">Start Date/Time</label>
+                    <input
+                      type="datetime-local"
+                      value={startTime}
+                      onChange={(e) => setStartTime(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-[10px] text-white focus:outline-none focus:border-amber-500 font-bold"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[9px] text-slate-400 font-bold uppercase">End Date/Time</label>
+                    <input
+                      type="datetime-local"
+                      value={endTime}
+                      onChange={(e) => setEndTime(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-[10px] text-white focus:outline-none focus:border-amber-500 font-bold"
+                    />
+                  </div>
                 </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] text-slate-400 font-bold uppercase">Registration Deadline</label>
+                  <input
+                    type="datetime-local"
+                    value={registrationDeadline}
+                    onChange={(e) => setRegistrationDeadline(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-[10px] text-white focus:outline-none focus:border-amber-500 font-bold"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2 p-4 bg-slate-950 rounded-2xl border border-slate-800">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">⚙️ Draw Control Preferences</span>
+              <div className="flex items-center justify-between py-1">
+                <span className="text-xs text-slate-300 font-medium">Auto Draw Winners</span>
+                <input
+                  type="checkbox"
+                  checked={autoSelectWinners}
+                  onChange={(e) => setAutoSelectWinners(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-800 bg-slate-950 text-amber-500 focus:ring-amber-500"
+                />
+              </div>
+              <div className="flex items-center justify-between py-1">
+                <span className="text-xs text-slate-300 font-medium">Auto Credit Prize Wallets</span>
+                <input
+                  type="checkbox"
+                  checked={autoCreditPrize}
+                  onChange={(e) => setAutoCreditPrize(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-800 bg-slate-950 text-amber-500 focus:ring-amber-500"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-slate-400 font-bold uppercase">Winner Mode</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setWinnerMode('fair')}
+                  className={`flex-1 py-2 text-xs font-bold rounded-xl transition border ${
+                    winnerMode === 'fair'
+                      ? 'bg-amber-500 border-amber-500 text-slate-950'
+                      : 'bg-slate-950 border-slate-800 text-slate-400'
+                  }`}
+                >
+                  Fair Random
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWinnerMode('manual')}
+                  className={`flex-1 py-2 text-xs font-bold rounded-xl transition border ${
+                    winnerMode === 'manual'
+                      ? 'bg-amber-500 border-amber-500 text-slate-950'
+                      : 'bg-slate-950 border-slate-800 text-slate-400'
+                  }`}
+                >
+                  Manual
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWinnerMode('ai')}
+                  className={`flex-1 py-2 text-xs font-bold rounded-xl transition border ${
+                    winnerMode === 'ai'
+                      ? 'bg-amber-500 border-amber-500 text-slate-950 animate-pulse'
+                      : 'bg-slate-950 border-slate-800 text-slate-400'
+                  }`}
+                >
+                  🤖 AI Mode
+                </button>
               </div>
             </div>
 
             {winnerMode === 'manual' && (
               <div className="space-y-1 animate-fade-in bg-amber-500/10 border border-amber-500/20 p-3 rounded-2xl">
                 <label className="text-xs text-amber-300 font-bold uppercase flex items-center gap-1">
-                  <ShieldAlert className="w-3.5 h-3.5" /> Manual Winning Number
+                  <ShieldAlert className="w-3.5 h-3.5" /> Manual Winning Numbers
                 </label>
                 <input
-                  type="number"
+                  type="text"
                   value={manualWinningNumber}
                   onChange={(e) => setManualWinningNumber(e.target.value)}
-                  placeholder="e.g. 17"
+                  placeholder="e.g. 17 or 17,23"
                   className="w-full px-4 py-2.5 mt-1 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-amber-500 font-bold font-mono"
                 />
                 <p className="text-[10px] text-slate-400 mt-1">
-                  The drawn winner will be strictly forced to stop on this specific number.
+                  Enter single or multiple comma-separated winning numbers. The system will force matching slots to win.
                 </p>
               </div>
             )}

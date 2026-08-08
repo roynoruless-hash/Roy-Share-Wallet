@@ -1270,8 +1270,8 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                             {w.redeemCodeDetails || 'N/A'}
                           </span>
                         )}
-                        {(method === 'ultra_pay' || method === 'ultrapay') && (() => {
-                          const payNumber = w.paytoNumber || w.paymentDetails?.paytoNumber;
+                        {(method.includes('ultra') || method === 'ultra_pay' || method === 'ultrapay') && (() => {
+                          const payNumber = w.paytoNumber || w.paymentDetails?.paytoNumber || w.upiId || w.redeemCodeDetails || w.qrData;
                           if (!payNumber) {
                             return <span className="text-slate-500 italic text-[11.5px] font-bold bg-slate-950 p-2 rounded-xl border border-slate-900 block max-w-[200px]">Details unavailable for legacy request</span>;
                           }

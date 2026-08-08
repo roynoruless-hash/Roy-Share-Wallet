@@ -43,6 +43,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   const [joiningGiveaway, setJoiningGiveaway] = useState(false);
   const [chosenNumber, setChosenNumber] = useState<number | null>(null);
   const [userJoinedNumber, setUserJoinedNumber] = useState<number | null>(null);
+  const [userJoinedNumbers, setUserJoinedNumbers] = useState<number[]>([]);
   const [rollingNumber, setRollingNumber] = useState<number | null>(null);
   const [animatingDraw, setAnimatingDraw] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
@@ -485,6 +486,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     if (!activeGiveaway) {
       setGiveawayEntries([]);
       setUserJoinedNumber(null);
+      setUserJoinedNumbers([]);
       return;
     }
 
@@ -501,10 +503,14 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       setGiveawayEntries(allEntries);
 
       const tgId = getTelegramUserId();
-      const myEntry = allEntries.find((e: any) => String(e.telegramId) === tgId);
-      if (myEntry) {
-        setUserJoinedNumber(myEntry.selectedNumber);
-        setChosenNumber(myEntry.selectedNumber);
+      const myEntriesList = allEntries.filter((e: any) => String(e.telegramId) === tgId);
+      const mySelectedNumbers = myEntriesList.map((e: any) => Number(e.selectedNumber));
+      setUserJoinedNumbers(mySelectedNumbers);
+      if (mySelectedNumbers.length > 0) {
+        setUserJoinedNumber(mySelectedNumbers[0]);
+        setChosenNumber(mySelectedNumbers[mySelectedNumbers.length - 1]);
+      } else {
+        setUserJoinedNumber(null);
       }
     }, (err) => {
       console.error('Error syncing live entries:', err);
@@ -651,6 +657,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       const data = await res.json();
       if (data.success) {
         setUserJoinedNumber(chosenNumber);
+        setUserJoinedNumbers(prev => [...prev, chosenNumber]);
         showToast(`🎉 Number ${chosenNumber} locked successfully! Good luck!`, 'success');
         fetchUserData();
       } else {
@@ -1935,6 +1942,36 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                     <p className="text-[10px] text-slate-400 mt-1">
                       Jackpot Pool: <strong className="text-amber-400 font-black">₹{activeGiveaway.prizeAmount}</strong> • Winners: <strong className="text-sky-400 font-bold">{activeGiveaway.winnerCount} Slots</strong>
                     </p>
+                    {activeGiveaway.description && (
+                      <p className="text-[10px] text-slate-400 mt-1.5 bg-slate-950/40 p-2 rounded-xl border border-slate-800/40 font-medium">
+                        {activeGiveaway.description}
+                      </p>
+                    )}
+                    {activeGiveaway.bannerUrl && (
+                      <img
+                        src={activeGiveaway.bannerUrl}
+                        alt="Giveaway Banner"
+                        className="w-full h-24 object-cover rounded-xl mt-2 border border-slate-800"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      <span className="text-[9px] bg-slate-950/80 border border-slate-800/80 px-2 py-1 rounded-lg text-slate-300 font-bold">
+                        🎟️ Cost: <span className="text-amber-400 font-black">
+                          {activeGiveaway.entryType === 'coins' ? `${activeGiveaway.entryFee} Roy Coins` :
+                           activeGiveaway.entryType === 'balance' ? `₹${activeGiveaway.entryFee} Cash` :
+                           'Free Entry'}
+                        </span>
+                      </span>
+                      <span className="text-[9px] bg-slate-950/80 border border-slate-800/80 px-2 py-1 rounded-lg text-slate-300 font-bold">
+                        👥 Limit: <span className="text-sky-400 font-black">Max {activeGiveaway.maxEntriesPerAccount || 1} slots</span>
+                      </span>
+                      {activeGiveaway.winnerMode === 'ai' && (
+                        <span className="text-[9px] bg-purple-500/10 border border-purple-500/20 px-2 py-1 rounded-lg text-purple-400 font-black uppercase tracking-wider animate-pulse flex items-center gap-1">
+                          🤖 AI Super-Select
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* ACTIVE / DRAWING / COMPLETED CONDITIONAL VIEWS */}
@@ -2110,7 +2147,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                           Select Your Lucky Number Slot ({activeGiveaway.numberRange})
                         </span>
                         <p className="text-[9px] text-slate-600 font-medium">
-                          Each number can only be claimed by ONE player. Quick claim before others block it!
+                          Claim up to {activeGiveaway.maxEntriesPerAccount || 1} slots. Each slot is exclusive to one claimant!
                         </p>
                       </div>
 
@@ -2127,13 +2164,13 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                           return numbersList.map((num) => {
                             const claimEntry = giveawayEntries.find((e) => e.selectedNumber === num);
                             const isTaken = claimEntry !== undefined;
-                            const isMySelection = userJoinedNumber === num || chosenNumber === num;
-                            const isMyLockedNumber = userJoinedNumber === num;
+                            const isMySelection = userJoinedNumbers.includes(num) || chosenNumber === num;
+                            const isMyLockedNumber = userJoinedNumbers.includes(num);
 
                             return (
                               <button
                                 key={num}
-                                disabled={isTaken || userJoinedNumber !== null || activeGiveaway.status !== 'active'}
+                                disabled={isTaken || userJoinedNumbers.includes(num) || userJoinedNumbers.length >= (activeGiveaway.maxEntriesPerAccount || 1) || activeGiveaway.status !== 'active'}
                                 onClick={() => setChosenNumber(num)}
                                 className={`h-11 rounded-xl text-xs font-black font-mono transition flex flex-col items-center justify-center border relative ${
                                   isMyLockedNumber
@@ -2158,16 +2195,16 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                       </div>
 
                       <div className="pt-2">
-                        {userJoinedNumber !== null ? (
+                        {userJoinedNumbers.length > 0 && userJoinedNumbers.length >= (activeGiveaway.maxEntriesPerAccount || 1) ? (
                           <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold rounded-xl text-center flex items-center justify-center gap-1.5">
                             <Check className="w-4 h-4" />
-                            <span>Your Lucky Slot: Number {userJoinedNumber} is Locked! Waiting for draw...</span>
+                            <span>Your Lucky Slots: {userJoinedNumbers.join(', ')} are Locked! Waiting for draw...</span>
                           </div>
                         ) : activeGiveaway.totalPlayers >= activeGiveaway.maxPlayers ? (
                           <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-bold rounded-xl text-center">
                             This giveaway is full. Waiting for drawing results!
                           </div>
-                        ) : chosenNumber !== null ? (
+                        ) : chosenNumber !== null && !userJoinedNumbers.includes(chosenNumber) ? (
                           <button
                             onClick={handleJoinGiveaway}
                             disabled={joiningGiveaway}
@@ -2178,13 +2215,18 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                             ) : (
                               <>
                                 <Gift className="w-4 h-4" />
-                                <span>Lock Number {chosenNumber} &amp; Join Giveaway</span>
+                                <span>
+                                  Claim Number {chosenNumber} ({userJoinedNumbers.length + 1}/{activeGiveaway.maxEntriesPerAccount || 1}) 
+                                  {activeGiveaway.entryType === 'coins' ? ` • Pay ${activeGiveaway.entryFee} Coins` :
+                                   activeGiveaway.entryType === 'balance' ? ` • Pay ₹${activeGiveaway.entryFee} Cash` :
+                                   ' • Free'}
+                                </span>
                               </>
                             )}
                           </button>
                         ) : (
                           <div className="p-3 bg-slate-950/60 border border-slate-900 text-slate-500 text-[10px] text-center rounded-xl font-semibold">
-                            👇 Tap any available number above to reserve your slot immediately!
+                            👇 Tap any available number above to reserve your slot {userJoinedNumbers.length > 0 ? `(${userJoinedNumbers.length}/${activeGiveaway.maxEntriesPerAccount || 1} claimed)` : ''} immediately!
                           </div>
                         )}
                       </div>
