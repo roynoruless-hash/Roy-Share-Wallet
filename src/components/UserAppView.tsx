@@ -58,10 +58,11 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
   // Form State for Withdrawals
   const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [withdrawMethod, setWithdrawMethod] = useState<'upi' | 'qr' | 'redeem_code'>('upi');
+  const [withdrawMethod, setWithdrawMethod] = useState<'upi' | 'qr' | 'redeem_code' | 'ultra_pay'>('upi');
   const [withdrawDetails, setWithdrawDetails] = useState('');
   const [withdrawHistory, setWithdrawHistory] = useState<any[]>([]);
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
+  const [withdrawalSettings, setWithdrawalSettings] = useState<any>(null);
 
   // Registration V2 States
   const [isRegistered, setIsRegistered] = useState<boolean>(false);
@@ -792,6 +793,27 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     }
   };
 
+  const fetchWithdrawalConfig = async () => {
+    try {
+      const tgId = getTelegramUserId();
+      if (!tgId) return;
+      const res = await fetch(`/api/user/withdrawals/config?telegramId=${encodeURIComponent(tgId)}`);
+      const data = await res.json();
+      if (data.success && data.settings) {
+        setWithdrawalSettings(data.settings);
+      }
+    } catch (err) {
+      console.error('Failed to fetch withdrawal config:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'withdraw' && isRegistered) {
+      fetchWithdrawalConfig();
+      fetchWithdrawalHistory();
+    }
+  }, [activeTab, isRegistered]);
+
   // Setup Real-time Firestore Sync
   useEffect(() => {
     const tgId = getTelegramUserId();
@@ -934,11 +956,26 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const getMinWithdrawAmount = () => {
+    if (!withdrawalSettings) return 100;
+    if (withdrawMethod === 'upi') return withdrawalSettings.upi?.min ?? 100;
+    if (withdrawMethod === 'qr') return withdrawalSettings.qr?.min ?? 100;
+    if (withdrawMethod === 'redeem_code') return withdrawalSettings.redeem?.min ?? 20;
+    if (withdrawMethod === 'ultra_pay') return withdrawalSettings.ultraPay?.min ?? 10;
+    return 100;
+  };
+
   const handleWithdrawSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = parseFloat(withdrawAmount);
     if (isNaN(amt) || amt <= 0) {
       addToast('⚠️ Please enter a valid positive amount', 'error');
+      return;
+    }
+
+    const minAmt = getMinWithdrawAmount();
+    if (amt < minAmt) {
+      addToast(`⚠️ Minimum withdrawal for this method is ₹${minAmt}`, 'error');
       return;
     }
 
@@ -970,6 +1007,12 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         return;
       }
       paymentDetails.paytoNumber = withdrawDetails.trim();
+    } else if (normMethod === 'REDEEM_CODE') {
+      if (!withdrawDetails.trim()) {
+        addToast('⚠️ Please specify Redeem Code brand and details (e.g. Amazon Gift Card ₹500)', 'error');
+        return;
+      }
+      paymentDetails.redeemCodeDetails = withdrawDetails.trim();
     }
 
     setIsSubmittingWithdrawal(true);
@@ -2250,112 +2293,151 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           </div>
         )}
 
-        {activeTab === 'withdraw' && (
-          <div className="space-y-6">
-            <div className="p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/15 flex items-center justify-between">
-              <div>
-                <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Available Cash</span>
-                <span className="text-lg font-black text-emerald-400">₹{user.walletBalance ?? 0}</span>
-              </div>
-              <span className="text-[10px] text-slate-400 font-semibold bg-slate-900 px-2 py-1 rounded">
-                Min. Withdraw: ₹100
-              </span>
-            </div>
+        {activeTab === 'withdraw' && (() => {
+          const isUpiEnabled = withdrawalSettings ? (withdrawalSettings.upi?.enabled !== false) : true;
+          const isQrEnabled = withdrawalSettings ? (withdrawalSettings.qr?.enabled !== false) : true;
+          const isRedeemEnabled = withdrawalSettings ? (withdrawalSettings.redeem?.enabled !== false) : true;
+          const isUltraPayEnabled = withdrawalSettings ? (withdrawalSettings.ultraPay?.enabled === true) : true;
 
-            <form onSubmit={handleWithdrawSubmit} className="p-5 rounded-3xl bg-slate-900/30 border border-slate-900 space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-400">Withdrawal Method</label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWithdrawMethod('upi');
-                      setWithdrawDetails('');
-                    }}
-                    className={`py-2.5 px-2 rounded-xl text-[10px] font-black uppercase border transition tracking-wider ${
-                      withdrawMethod === 'upi'
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-500'
-                        : 'bg-slate-900 text-slate-400 border-slate-850'
-                    }`}
-                  >
-                    UPI Address
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWithdrawMethod('qr');
-                      setWithdrawDetails('');
-                    }}
-                    className={`py-2.5 px-2 rounded-xl text-[10px] font-black uppercase border transition tracking-wider ${
-                      withdrawMethod === 'qr'
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-500'
-                        : 'bg-slate-900 text-slate-400 border-slate-850'
-                    }`}
-                  >
-                    QR Link / Image
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setWithdrawMethod('redeem_code');
-                      setWithdrawDetails('');
-                    }}
-                    className={`py-2.5 px-2 rounded-xl text-[10px] font-black uppercase border transition tracking-wider ${
-                      withdrawMethod === 'redeem_code'
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-500'
-                        : 'bg-slate-900 text-slate-400 border-slate-850'
-                    }`}
-                  >
-                    Redeem Code
-                  </button>
+          return (
+            <div className="space-y-6">
+              {withdrawalSettings && withdrawalSettings.allWithdrawalsEnabled === false && (
+                <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-xs font-semibold text-rose-400 text-center">
+                  🔧 Withdrawals Temporarily Unavailable
+                  <p className="text-[10px] text-slate-400 mt-1">Withdrawal service is currently under maintenance. Please try again later.</p>
                 </div>
+              )}
+
+              <div className="p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/15 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Available Cash</span>
+                  <span className="text-lg font-black text-emerald-400">₹{user.walletBalance ?? 0}</span>
+                </div>
+                <span className="text-[10px] text-slate-400 font-semibold bg-slate-900 px-2 py-1 rounded">
+                  Min. Withdraw: ₹{getMinWithdrawAmount()}
+                </span>
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-400">Withdraw Amount (₹)</label>
-                <input
-                  type="number"
-                  placeholder="e.g. 500"
-                  value={withdrawAmount}
-                  onChange={(e) => setWithdrawAmount(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl py-3 px-4 text-xs font-bold text-white outline-none"
-                  required
-                />
-              </div>
+              <form onSubmit={handleWithdrawSubmit} className="p-5 rounded-3xl bg-slate-900/30 border border-slate-900 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-400">Withdrawal Method</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {isUpiEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWithdrawMethod('upi');
+                          setWithdrawDetails('');
+                        }}
+                        className={`py-2.5 px-2 rounded-xl text-[10px] font-black uppercase border transition tracking-wider ${
+                          withdrawMethod === 'upi'
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                            : 'bg-slate-900 text-slate-400 border-slate-850'
+                        }`}
+                      >
+                        UPI Address
+                      </button>
+                    )}
+                    {isQrEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWithdrawMethod('qr');
+                          setWithdrawDetails('');
+                        }}
+                        className={`py-2.5 px-2 rounded-xl text-[10px] font-black uppercase border transition tracking-wider ${
+                          withdrawMethod === 'qr'
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                            : 'bg-slate-900 text-slate-400 border-slate-850'
+                        }`}
+                      >
+                        QR Link / Image
+                      </button>
+                    )}
+                    {isRedeemEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWithdrawMethod('redeem_code');
+                          setWithdrawDetails('');
+                        }}
+                        className={`py-2.5 px-2 rounded-xl text-[10px] font-black uppercase border transition tracking-wider ${
+                          withdrawMethod === 'redeem_code'
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                            : 'bg-slate-900 text-slate-400 border-slate-850'
+                        }`}
+                      >
+                        Redeem Code
+                      </button>
+                    )}
+                    {isUltraPayEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWithdrawMethod('ultra_pay');
+                          setWithdrawDetails('');
+                        }}
+                        className={`py-2.5 px-2 rounded-xl text-[10px] font-black uppercase border transition tracking-wider ${
+                          withdrawMethod === 'ultra_pay'
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                            : 'bg-slate-900 text-slate-400 border-slate-850'
+                        }`}
+                      >
+                        Ultra Pay
+                      </button>
+                    )}
+                  </div>
+                </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-400">
-                  {withdrawMethod === 'upi' && 'Your UPI Address / VPA'}
-                  {withdrawMethod === 'qr' && 'Direct Payment QR Image Link'}
-                  {withdrawMethod === 'redeem_code' && 'Specify Redeem Code Brand/Details (e.g. Amazon ₹500)'}
-                </label>
-                <input
-                  type="text"
-                  placeholder={
-                    withdrawMethod === 'upi'
-                      ? 'e.g. pay@upi'
-                      : withdrawMethod === 'qr'
-                      ? 'e.g. https://imgur.com/your-qr'
-                      : 'e.g. Google Play voucher code details'
-                  }
-                  value={withdrawDetails}
-                  onChange={(e) => setWithdrawDetails(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl py-3 px-4 text-xs font-bold text-white outline-none"
-                  required
-                />
-              </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-400">Withdraw Amount (₹)</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 500"
+                    value={withdrawAmount}
+                    onChange={(e) => setWithdrawAmount(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl py-3 px-4 text-xs font-bold text-white outline-none"
+                    required
+                  />
+                </div>
 
-              <button
-                type="submit"
-                disabled={isSubmittingWithdrawal}
-                className="w-full py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg transition"
-              >
-                <Send className="w-4 h-4" />
-                <span>{isSubmittingWithdrawal ? 'Submitting...' : 'Request Payout Now'}</span>
-              </button>
-            </form>
-          </div>
-        )}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-400">
+                    {withdrawMethod === 'upi' && 'Your UPI Address / VPA'}
+                    {withdrawMethod === 'qr' && 'Direct Payment QR Image Link'}
+                    {withdrawMethod === 'redeem_code' && 'Specify Redeem Code Brand/Details (e.g. Amazon ₹500)'}
+                    {withdrawMethod === 'ultra_pay' && 'Ultra Pay Registered Pay/Mobile Number'}
+                  </label>
+                  <input
+                    type="text"
+                    placeholder={
+                      withdrawMethod === 'upi'
+                        ? 'e.g. pay@upi'
+                        : withdrawMethod === 'qr'
+                        ? 'e.g. https://imgur.com/your-qr'
+                        : withdrawMethod === 'redeem_code'
+                        ? 'e.g. Google Play voucher code details'
+                        : 'e.g. 10-digit registered number'
+                    }
+                    value={withdrawDetails}
+                    onChange={(e) => setWithdrawDetails(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl py-3 px-4 text-xs font-bold text-white outline-none"
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmittingWithdrawal || (withdrawalSettings && withdrawalSettings.allWithdrawalsEnabled === false)}
+                  className="w-full py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg transition"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>{isSubmittingWithdrawal ? 'Submitting...' : 'Request Payout Now'}</span>
+                </button>
+              </form>
+            </div>
+          );
+        })()}
 
         {activeTab === 'profile' && (
           <div className="space-y-6">
