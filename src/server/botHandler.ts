@@ -6,13 +6,7 @@ import { sendAdminWithdrawalNotification, handleAdminWithdrawalCallback } from '
 import { getWarStatsForTelegram, joinWarTeam, addWarPointsForActivity, getActiveWarAndTeamByAlias, validateAndActivateMember } from '../services/giveawayWarService';
 
 interface UserSession {
-  step: 'FORCE_JOIN' | 'WAITING_NAME' | 'WAITING_MOBILE' | 'WAITING_CONTACT' | 'WAITING_OTP' | 'WITHDRAW_METHOD_SELECT' | 'WITHDRAW_AMOUNT' | 'WITHDRAW_DETAILS' | 'WITHDRAW_CONFIRM';
-  fullName?: string;
-  mobile?: string;
-  contactVerified?: boolean;
-  channelVerified?: boolean;
-  groupVerified?: boolean;
-  referrerUid?: string;
+  step: 'FORCE_JOIN' | 'WITHDRAW_METHOD_SELECT' | 'WITHDRAW_AMOUNT' | 'WITHDRAW_DETAILS' | 'WITHDRAW_CONFIRM';
   withdrawMethod?: 'upi' | 'qr' | 'redeem_code';
   withdrawAmount?: number;
   withdrawUpi?: string;
@@ -26,6 +20,7 @@ interface UserSession {
   lastJoinMessageSentTime?: number;
   pendingVote?: { contestId: string; contestantId: string };
   pendingWarJoin?: { warId: string; teamId: string; inviterTgId?: string };
+  referrerUid?: string;
 }
 
 // In-memory session state store for onboarding users
@@ -89,6 +84,38 @@ function buildMiniAppButton(label: string, customUrl?: string, eventId?: string,
   console.log(`[TELEGRAM_SEND_URL] Sending to Telegram direct/group: ${webAppHttpsUrl}`);
   console.log(`[BOT_BUTTON_GEN] Target: Direct/Group | Type: WEB_APP | WebApp URL: ${webAppHttpsUrl} | EventID: ${activeEventId} | DocID: liveRedeem/current`);
   return { text: label, web_app: { url: webAppHttpsUrl } };
+}
+
+/**
+ * Helper to display Registration V2 Welcome & Open Mini App button
+ */
+export async function sendCreateAccountPrompt(token: string, chatId: string | number) {
+  const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
+  const miniAppUrl = `${baseUrl}/?action=register&tgId=${chatId}`;
+
+  const welcomeText =
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `👋 <b>Welcome to Roy Share Wallet</b>\n\n` +
+    `Before using Roy Share Wallet you must create your account.\n\n` +
+    `Tap below.\n\n` +
+    `🌐 <b>Create Account</b>\n` +
+    `━━━━━━━━━━━━━━━━━━`;
+
+  await sendTelegramApi(token, 'sendMessage', {
+    chat_id: chatId,
+    text: welcomeText,
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: '🌐 Open Registration Mini App',
+            web_app: { url: miniAppUrl }
+          }
+        ]
+      ]
+    }
+  });
 }
 
 export function buildMainMenuKeyboard(hasActiveLiveEvent: boolean = false) {
@@ -1529,27 +1556,7 @@ Final Payout: ₹${payoutAmount}`);
           await sendContestantVoteCard(token, chatId, contestId, contestantId);
           return;
         } else {
-          const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
-          session.pendingVote = { contestId, contestantId };
-          userSessions.set(chatId, session);
-
-          const verifyRes = await verifyUserSmartJoin(token, chatId, null);
-          if (!verifyRes.verified) {
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text: buildForceJoinText(verifyRes.missingItems, false),
-              parse_mode: 'HTML',
-              reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
-            });
-            return;
-          }
-
-          userSessions.set(chatId, { step: 'WAITING_NAME', pendingVote: { contestId, contestantId } });
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `👋 <b>Welcome to Roy Share Wallet!</b>\n\nTo complete your vote, please enter your details.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
-            parse_mode: 'HTML',
-          });
+          await sendCreateAccountPrompt(token, chatId);
           return;
         }
       }
@@ -1621,31 +1628,7 @@ Final Payout: ₹${payoutAmount}`);
             }
             return;
           } else {
-            console.log('JOIN SUCCESS: pending_registration');
-            logTelegramPayload(startParam, type, warId, chatId, 'Pending Team Join Registration Initiated');
-
-            const pendingWarJoin = { warId, teamId, inviterTgId };
-            const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
-            session.pendingWarJoin = pendingWarJoin;
-            userSessions.set(chatId, session);
-
-            const verifyRes = await verifyUserSmartJoin(token, chatId, null);
-            if (!verifyRes.verified) {
-              await sendTelegramApi(token, 'sendMessage', {
-                chat_id: chatId,
-                text: buildForceJoinText(verifyRes.missingItems, false),
-                parse_mode: 'HTML',
-                reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
-              });
-              return;
-            }
-
-            userSessions.set(chatId, { step: 'WAITING_NAME', pendingWarJoin });
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text: `⚔️ <b>Welcome to Giveaway War!</b>\n\nTo join <b>${teamName}</b> and unlock rewards, please complete a quick registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
-              parse_mode: 'HTML',
-            });
+            await sendCreateAccountPrompt(token, chatId);
             return;
           }
         } else {
@@ -1687,27 +1670,7 @@ Final Payout: ₹${payoutAmount}`);
           }
           return;
         } else {
-          const session: UserSession = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
-          session.referrerUid = String(referrer.uid);
-          userSessions.set(chatId, session);
-
-          const verifyRes = await verifyUserSmartJoin(token, chatId, null);
-          if (!verifyRes.verified) {
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: chatId,
-              text: buildForceJoinText(verifyRes.missingItems, false),
-              parse_mode: 'HTML',
-              reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
-            });
-            return;
-          }
-
-          userSessions.set(chatId, { step: 'WAITING_NAME', referrerUid: String(referrer.uid) });
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
-            parse_mode: 'HTML',
-          });
+          await sendCreateAccountPrompt(token, chatId);
           return;
         }
       }
@@ -1754,27 +1717,7 @@ Final Payout: ₹${payoutAmount}`);
       }
       return;
     } else {
-      const verifyRes = await verifyUserSmartJoin(token, chatId, null);
-      if (!verifyRes.verified) {
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: buildForceJoinText(verifyRes.missingItems, false),
-          parse_mode: 'HTML',
-          reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
-        });
-        return;
-      }
-
-      userSessions.set(chatId, { step: 'WAITING_NAME' });
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
-        parse_mode: 'HTML',
-      });
-
-      if (hasActiveEvent || isLivePayload) {
-        await sendLiveEventInfoMessage(token, chatId, liveEventState, activeData);
-      }
+      await sendCreateAccountPrompt(token, chatId);
       return;
     }
   }
@@ -2247,713 +2190,11 @@ Final Payout: ₹${payoutAmount}`);
     }
   }
 
-  // C. ONBOARDING SESSION FLOW
-
-  // If no session exists and user is not registered, start onboarding (unless entering numeric OTP)
-  if (!session && !existingUser && !/^\d{4,8}$/.test(text.trim())) {
-    const activeItems = await getActiveChannelsAndGroups();
-    userSessions.set(chatId, { step: 'FORCE_JOIN' });
-
-    if (activeItems.length === 0) {
-      userSessions.set(chatId, { step: 'WAITING_NAME' });
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: '👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet\'s complete your registration.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:',
-        parse_mode: 'HTML',
-      });
-      return;
-    }
-
-    await sendTelegramApi(token, 'sendMessage', {
-      chat_id: chatId,
-      text: buildForceJoinText(activeItems),
-      parse_mode: 'HTML',
-      reply_markup: buildForceJoinKeyboard(activeItems),
-    });
+  // C. UNREGISTERED USER FALLBACK
+  if (!existingUser) {
+    await sendCreateAccountPrompt(token, chatId);
     return;
   }
-
-  if (!session && !/^\d{4,8}$/.test(text.trim())) return;
-
-  // STEP 1: FORCE JOIN CHECK
-  if (session.step === 'FORCE_JOIN') {
-    const activeItems = await getActiveChannelsAndGroups();
-
-    await sendTelegramApi(token, 'sendMessage', {
-      chat_id: chatId,
-      text: buildForceJoinText(activeItems),
-      parse_mode: 'HTML',
-      reply_markup: buildForceJoinKeyboard(activeItems),
-    });
-    return;
-  }
-
-  // STEP 2: STEP_WAITING_NAME -> Save Full Name
-  if (session.step === 'WAITING_NAME') {
-    if (!text || text.length < 2) {
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: '❌ Please enter a valid <b>Full Name</b> (at least 2 characters):',
-        parse_mode: 'HTML',
-      });
-      return;
-    }
-
-    session.fullName = text.trim();
-    session.step = 'WAITING_MOBILE';
-
-    await sendTelegramApi(token, 'sendMessage', {
-      chat_id: chatId,
-      text: `👤 <b>Full Name:</b> ${session.fullName}\n\n` +
-        `<b>Step 2/3:</b> Please enter your <b>10-digit Mobile Number</b> (starts with 6, 7, 8, or 9):`,
-      parse_mode: 'HTML',
-    });
-    return;
-  }
-
-  // STEP 3: STEP_WAITING_MOBILE -> Validate Mobile
-  if (session.step === 'WAITING_MOBILE') {
-    const cleanMobile = text.replace(/\D/g, '');
-    const isValidIndianMobile = /^[6-9]\d{9}$/.test(cleanMobile);
-
-    if (!isValidIndianMobile) {
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `❌ <b>Invalid Mobile Number</b>\n\n` +
-          `Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9 (e.g. 9876543210):`,
-        parse_mode: 'HTML',
-      });
-      return;
-    }
-
-    session.mobile = cleanMobile;
-    session.step = 'WAITING_CONTACT';
-
-    await sendTelegramApi(token, 'sendMessage', {
-      chat_id: chatId,
-      text: `📱 <b>Entered Mobile:</b> ${session.mobile}\n\n` +
-        `<b>Step 3/3:</b> To verify your identity, please tap the button below to <b>Share Contact</b>.`,
-      parse_mode: 'HTML',
-      reply_markup: {
-        keyboard: [
-          [{ text: '📱 Share Contact', request_contact: true }],
-        ],
-        resize_keyboard: true,
-        one_time_keyboard: true,
-      },
-    });
-    return;
-  }
-
-  // STEP 4: STEP_WAITING_CONTACT -> Verify Shared Contact vs Entered Mobile
-  if (session.step === 'WAITING_CONTACT') {
-    if (!contact) {
-      const cleanInput = text.replace(/\D/g, '');
-      if (/^[6-9]\d{9}$/.test(cleanInput)) {
-        session.mobile = cleanInput;
-      }
-
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `⚠️ Please tap the <b>📱 Share Contact</b> button below to complete verification:`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          keyboard: [
-            [{ text: '📱 Share Contact', request_contact: true }],
-          ],
-          resize_keyboard: true,
-          one_time_keyboard: true,
-        },
-      });
-      return;
-    }
-
-    const sharedDigits = contact.phone_number ? contact.phone_number.replace(/\D/g, '').slice(-10) : '';
-    const enteredDigits = (session.mobile || '').replace(/\D/g, '').slice(-10);
-
-    // Compare: Entered Number == Shared Contact Number
-    if (!sharedDigits || sharedDigits !== enteredDigits) {
-      session.step = 'WAITING_MOBILE';
-
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `❌ <b>Verification Failed</b>\n\n` +
-          `The shared phone number (<code>${contact.phone_number || 'Unknown'}</code>) does NOT match the entered number (<code>${session.mobile}</code>).\n\n` +
-          `Please re-enter your 10-digit mobile number:`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          remove_keyboard: true,
-        },
-      });
-      return;
-    }
-
-    // CRITICAL: Check duplicate mobile across all users in DB
-    const duplicateMobileQuery = query(collection(db, 'users'), where('mobile', '==', enteredDigits));
-    const duplicateMobileSnap = await getDocs(duplicateMobileQuery);
-    const isDuplicateMobile = duplicateMobileSnap.docs.some(d => d.data().telegramId !== String(chatId) && d.id !== String(chatId));
-
-    if (isDuplicateMobile) {
-      session.step = 'WAITING_MOBILE';
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `❌ <b>This mobile number is already registered.</b>\n\n` +
-          `The mobile number <code>${enteredDigits}</code> is linked to another account. Please re-enter a different 10-digit mobile number:`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          remove_keyboard: true,
-        },
-      });
-      return;
-    }
-
-    // Check if Telegram account is banned
-    const existingUserDoc = await getUserByTelegramId(String(chatId));
-    if (existingUserDoc) {
-      const isBanned = Boolean(existingUserDoc.banned === true || existingUserDoc.status === 'banned' || existingUserDoc.isBanned === true || existingUserDoc.status === 'blocked');
-      if (isBanned) {
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `⛔ <b>This Telegram account is banned.</b>\n\nAccess to Roy Share Wallet Bot has been revoked due to account suspension.`,
-          parse_mode: 'HTML',
-        });
-        userSessions.delete(chatId);
-        return;
-      }
-    }
-
-    // Transition to Mini App OTP Verification
-    session.contactVerified = true;
-    session.step = 'WAITING_OTP';
-
-    const baseUrl = (process.env.APP_BASE_URL || process.env.APP_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
-    const miniAppUrl = `${baseUrl}/?action=otp_verify&tgId=${chatId}`;
-
-    await sendTelegramApi(token, 'sendMessage', {
-      chat_id: chatId,
-      text: `📱 <b>Mobile Number Verified!</b>\n\n` +
-        `🔐 <b>Final Step: Mini App OTP Verification</b>\n\n` +
-        `Please tap the button below to open the <b>Verification Mini App</b>, copy your 6-digit OTP code, and paste it back here to complete registration.`,
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '🌐 Open Verification Mini App', web_app: { url: miniAppUrl } }]
-        ]
-      },
-    });
-    return;
-  }
-
-  // STEP 5: STEP_WAITING_OTP -> Verify OTP entered in chat vs Firestore otps/{chatId}
-  const isOtpNumericInput = /^\d{4,8}$/.test((text || '').trim());
-  const isWaitingOtpStep = session && session.step === 'WAITING_OTP';
-
-  if (isWaitingOtpStep || (!existingUser && isOtpNumericInput)) {
-    const cleanOtp = (text || '').trim();
-    const cleanTgId = String(chatId);
-    const baseUrl = (process.env.APP_BASE_URL || process.env.APP_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
-    const miniAppUrl = `${baseUrl}/?action=otp_verify&tgId=${chatId}`;
-    const nowStr = new Date().toISOString();
-
-    // SERVER LOG: OTP Received
-    console.log(`[OTP_VERIFICATION] OTP Received: '${cleanOtp}' from Telegram ID: ${cleanTgId}`);
-    try {
-      await addDoc(collection(db, 'logs'), {
-        type: 'otp',
-        message: 'OTP Received',
-        timestamp: nowStr,
-        details: { telegramId: cleanTgId, otp: cleanOtp }
-      });
-    } catch (e) {}
-
-    if (!isOtpNumericInput) {
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `🔐 <b>OTP Code Required</b>\n\nPlease enter the 6-digit OTP code generated from the Verification Mini App:`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🌐 Open Verification Mini App', web_app: { url: miniAppUrl } }]
-          ]
-        }
-      });
-      return;
-    }
-
-    // SERVER LOG: OTP Lookup
-    console.log(`[OTP_VERIFICATION] OTP Lookup for Telegram ID: ${cleanTgId}`);
-    try {
-      await addDoc(collection(db, 'logs'), {
-        type: 'otp',
-        message: 'OTP Lookup',
-        timestamp: nowStr,
-        details: { telegramId: cleanTgId }
-      });
-    } catch (e) {}
-
-    const otpDocRef = doc(db, 'otps', cleanTgId);
-    const otpSnap = await getDoc(otpDocRef);
-
-    if (!otpSnap.exists()) {
-      console.log(`[OTP_VERIFICATION] Invalid OTP - No active record found for Telegram ID: ${cleanTgId}`);
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `❌ <b>Invalid OTP</b>\n\nNo active OTP found. Please tap the button below to open the Verification Mini App and generate a new code:`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🌐 Open Verification Mini App', web_app: { url: miniAppUrl } }]
-          ]
-        }
-      });
-      return;
-    }
-
-    const otpData = otpSnap.data();
-
-    // Verify Expiry Time
-    if (nowStr > otpData.expiresAt) {
-      // SERVER LOG: OTP Expired
-      console.log(`[OTP_VERIFICATION] OTP Expired for Telegram ID: ${cleanTgId}`);
-      try {
-        await addDoc(collection(db, 'logs'), {
-          type: 'otp',
-          message: 'OTP Expired',
-          timestamp: nowStr,
-          details: { telegramId: cleanTgId, expiresAt: otpData.expiresAt }
-        });
-        await deleteDoc(otpDocRef);
-      } catch (e) {}
-
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `❌ <b>OTP Expired</b>\n\nYour OTP code has expired. Please tap the button below to open the Verification Mini App to generate a new OTP:`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🌐 Open Verification Mini App', web_app: { url: miniAppUrl } }]
-          ]
-        }
-      });
-      return;
-    }
-
-    // Verify Hash Match
-    const crypto = await import('crypto');
-    const inputHash = crypto.createHash('sha256').update(cleanOtp).digest('hex');
-
-    if (inputHash !== otpData.otpHash) {
-      console.log(`[OTP_VERIFICATION] Invalid OTP - Hash mismatch for Telegram ID: ${cleanTgId}`);
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `❌ <b>Invalid OTP</b>\n\nThe OTP code you entered is incorrect. Please check the 6-digit code in the Verification Mini App and try again:`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🌐 Open Verification Mini App', web_app: { url: miniAppUrl } }]
-          ]
-        }
-      });
-      return;
-    }
-
-    // SERVER LOG: OTP Match
-    console.log(`[OTP_VERIFICATION] OTP Match for Telegram ID: ${cleanTgId}`);
-    try {
-      await addDoc(collection(db, 'logs'), {
-        type: 'otp',
-        message: 'OTP Match',
-        timestamp: nowStr,
-        details: { telegramId: cleanTgId }
-      });
-    } catch (e) {}
-
-    // SERVER LOG: OTP Verified
-    console.log(`[OTP_VERIFICATION] OTP Verified for Telegram ID: ${cleanTgId}`);
-    try {
-      await addDoc(collection(db, 'logs'), {
-        type: 'otp',
-        message: 'OTP Verified',
-        timestamp: nowStr,
-        details: { telegramId: cleanTgId }
-      });
-    } catch (e) {}
-
-    // Mark OTP as used and delete document
-    try {
-      await deleteDoc(otpDocRef);
-    } catch (e) {
-      await setDoc(otpDocRef, { verified: true, verifiedAt: nowStr }, { merge: true });
-    }
-
-    // CREATE OR RETURN USER ACCOUNT
-    const adminConfig = await getAdminConfig();
-    const existingDoc = await getUserByTelegramId(cleanTgId);
-
-    let uid = existingDoc?.appUid || existingDoc?.uid;
-    if (!uid) {
-      uid = await generateUniqueUid();
-    }
-
-    // Requirement 1: Read current Registration Bonus from Firestore Admin Settings (settings/config)
-    const bonus = Number(adminConfig?.registrationBonus) || 0;
-    const enteredDigits = (session?.mobile || otpData?.mobile || '').replace(/\D/g, '').slice(-10);
-
-    // Requirement 10: Log "Registration Bonus Loaded"
-    console.log(`[BONUS_LOG] Registration Bonus Loaded: ₹${bonus}`);
-    try {
-      await addDoc(collection(db, 'logs'), {
-        type: 'bonus',
-        message: 'Registration Bonus Loaded',
-        timestamp: nowStr,
-        details: { telegramId: cleanTgId, bonus }
-      });
-    } catch (e) {}
-
-    let finalWalletBalance = 0;
-    let creditedBonus = 0;
-    let isNewRegistration = false;
-    let txId = '';
-    let bonusSkippedReason = '';
-
-    const userDocRef = doc(db, 'users', cleanTgId);
-
-    // Requirement 3: Atomic Firestore Transaction (Create account -> Credit wallet -> Create transaction -> Commit)
-    try {
-      await runTransaction(db, async (transaction) => {
-        const userSnap = await transaction.get(userDocRef);
-
-        if (userSnap.exists()) {
-          // Requirement 2 & 9: Account already exists - NEVER credit bonus again
-          const exData = userSnap.data();
-          finalWalletBalance = Number(exData.walletBalance) || 0;
-          creditedBonus = 0;
-          isNewRegistration = false;
-          bonusSkippedReason = 'Bonus Skipped (Already Claimed)';
-          return;
-        }
-
-        // NEW USER REGISTRATION
-        isNewRegistration = true;
-
-        if (bonus > 0) {
-          // Requirement 1, 3, 4, 8: Bonus > 0 -> credit bonus atomically & create transaction
-          creditedBonus = bonus;
-          finalWalletBalance = bonus;
-
-          // Requirement 4: Auto Generated Transaction ID
-          const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-          let randStr = '';
-          for (let i = 0; i < 8; i++) {
-            randStr += characters.charAt(Math.floor(Math.random() * characters.length));
-          }
-          txId = `TXN_REG_${randStr}`;
-
-          const txRef = doc(db, 'transactions', txId);
-
-          // Requirement 4: Create Wallet Transaction
-          transaction.set(txRef, {
-            id: txId,
-            transactionId: txId,
-            userId: cleanTgId,
-            uid: uid,
-            telegramId: cleanTgId,
-            fullName: session?.fullName || message.from.first_name || 'User',
-            mobile: enteredDigits,
-            type: 'Registration Bonus',
-            amount: bonus,
-            balanceBefore: 0,
-            balanceAfter: bonus,
-            status: 'completed',
-            description: 'New Account Registration',
-            reason: 'New Account Registration',
-            createdAt: nowStr,
-            timestamp: nowStr,
-          });
-
-          const passbookItem = {
-            id: txId,
-            transactionId: txId,
-            type: 'Registration Bonus',
-            amount: bonus,
-            balanceAfter: bonus,
-            description: 'New Account Registration',
-            timestamp: nowStr,
-          };
-
-          // Requirement 5: Update users.walletBalance, users.totalEarned, users.passbook, etc.
-          const newUserData: Record<string, any> = {
-            appUid: uid,
-            uid: uid,
-            telegramId: cleanTgId,
-            username: message.from.username ? `@${message.from.username.replace('@', '')}` : (existingDoc?.username || ''),
-            firstName: session?.fullName || message.from.first_name || existingDoc?.firstName || 'User',
-            lastName: message.from.last_name || existingDoc?.lastName || '',
-            mobile: enteredDigits,
-            mobileVerified: true,
-            telegramVerified: true,
-            walletBalance: bonus,
-            totalEarned: bonus,
-            bonus: bonus,
-            coins: 0,
-            passbook: [passbookItem],
-            status: 'active',
-            banned: false,
-            securityScore: 98,
-            channelVerified: true,
-            groupVerified: true,
-            createdAt: nowStr,
-            joinDate: nowStr,
-            lastActive: nowStr,
-            lastLogin: nowStr,
-            referrerUid: session?.referrerUid || existingDoc?.referrerUid || null,
-            referredBy: session?.referrerUid || existingDoc?.referredBy || null,
-            referralRewardReceived: false,
-            totalReferrals: 0,
-            successfulReferrals: 0,
-            totalReferralEarnings: 0,
-            verifiedChannels: session?.verifiedChannels || [],
-            verifiedGroups: session?.verifiedGroups || [],
-            verificationVersion: session?.verificationVersion || (adminConfig?.verificationVersion || 1),
-            lastVerificationTime: nowStr,
-          };
-
-          transaction.set(userDocRef, newUserData);
-        } else {
-          // Requirement 8: If Registration Bonus = 0, skip credit, do not create transaction
-          creditedBonus = 0;
-          finalWalletBalance = 0;
-          bonusSkippedReason = 'Bonus Skipped (Bonus is ₹0)';
-
-          const newUserData: Record<string, any> = {
-            appUid: uid,
-            uid: uid,
-            telegramId: cleanTgId,
-            username: message.from.username ? `@${message.from.username.replace('@', '')}` : (existingDoc?.username || ''),
-            firstName: session?.fullName || message.from.first_name || existingDoc?.firstName || 'User',
-            lastName: message.from.last_name || existingDoc?.lastName || '',
-            mobile: enteredDigits,
-            mobileVerified: true,
-            telegramVerified: true,
-            walletBalance: 0,
-            totalEarned: 0,
-            bonus: 0,
-            coins: 0,
-            passbook: [],
-            status: 'active',
-            banned: false,
-            securityScore: 98,
-            channelVerified: true,
-            groupVerified: true,
-            createdAt: nowStr,
-            joinDate: nowStr,
-            lastActive: nowStr,
-            lastLogin: nowStr,
-            referrerUid: session?.referrerUid || existingDoc?.referrerUid || null,
-            referredBy: session?.referrerUid || existingDoc?.referredBy || null,
-            referralRewardReceived: false,
-            totalReferrals: 0,
-            successfulReferrals: 0,
-            totalReferralEarnings: 0,
-            verifiedChannels: session?.verifiedChannels || [],
-            verifiedGroups: session?.verifiedGroups || [],
-            verificationVersion: session?.verificationVersion || (adminConfig?.verificationVersion || 1),
-            lastVerificationTime: nowStr,
-          };
-
-          transaction.set(userDocRef, newUserData);
-        }
-      });
-
-      // SERVER LOG: Account Created
-      console.log(`[OTP_VERIFICATION] Account Created for Telegram ID: ${cleanTgId}, UID: ${uid}`);
-      await addDoc(collection(db, 'logs'), {
-        type: 'registration',
-        message: 'Account Created',
-        timestamp: nowStr,
-        details: { telegramId: cleanTgId, uid, mobile: enteredDigits }
-      });
-    } catch (dbErr) {
-      console.error('Failed to save user account in Firestore:', dbErr);
-    }
-
-    const userFirstName = session?.fullName || message.from.first_name || existingDoc?.firstName || 'User';
-    const userUsername = message.from.username ? `@${message.from.username.replace('@', '')}` : (existingDoc?.username || '');
-
-    // Requirement 10: Add Logs
-    if (isNewRegistration && creditedBonus > 0) {
-      // LOG: Registration Bonus Credited
-      console.log(`[BONUS_LOG] Registration Bonus Credited: ₹${creditedBonus} for Telegram ID: ${cleanTgId}`);
-      try {
-        await addDoc(collection(db, 'logs'), {
-          type: 'bonus',
-          message: 'Registration Bonus Credited',
-          timestamp: nowStr,
-          details: { telegramId: cleanTgId, uid, amount: creditedBonus, transactionId: txId }
-        });
-      } catch (e) {}
-
-      // LOG: Wallet Updated
-      console.log(`[BONUS_LOG] Wallet Updated for Telegram ID: ${cleanTgId}, New Balance: ₹${finalWalletBalance}`);
-      try {
-        await addDoc(collection(db, 'logs'), {
-          type: 'wallet',
-          message: 'Wallet Updated',
-          timestamp: nowStr,
-          details: { telegramId: cleanTgId, uid, walletBalance: finalWalletBalance }
-        });
-      } catch (e) {}
-
-      // LOG: Transaction Created
-      console.log(`[BONUS_LOG] Transaction Created: ${txId}`);
-      try {
-        await addDoc(collection(db, 'logs'), {
-          type: 'transaction',
-          message: 'Transaction Created',
-          timestamp: nowStr,
-          details: { telegramId: cleanTgId, uid, transactionId: txId, amount: creditedBonus }
-        });
-      } catch (e) {}
-    } else {
-      // LOG: Bonus Skipped (Already Claimed) or Bonus Skipped (Bonus is ₹0)
-      const skipLog = bonusSkippedReason || 'Bonus Skipped (Already Claimed)';
-      console.log(`[BONUS_LOG] ${skipLog} for Telegram ID: ${cleanTgId}`);
-      try {
-        await addDoc(collection(db, 'logs'), {
-          type: 'bonus',
-          message: skipLog,
-          timestamp: nowStr,
-          details: { telegramId: cleanTgId, uid, bonus }
-        });
-      } catch (e) {}
-    }
-
-    // Create pending referral token if applicable
-    if (isNewRegistration && !existingDoc && session?.referrerUid && session.referrerUid !== uid) {
-      try {
-        const uniqueToken = 'ref_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
-        await addDoc(collection(db, 'referralTokens'), {
-          token: uniqueToken,
-          referrerUid: String(session.referrerUid),
-          referredUid: String(uid),
-          referredTelegramId: cleanTgId,
-          referredName: userFirstName,
-          status: 'pending',
-          createdAt: nowStr,
-        });
-
-        const verifyUrl = `${baseUrl}/referral-verify?token=${uniqueToken}`;
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `🔗 <b>Referral Device Verification Required</b>\n\n` +
-            `To complete your referral and credit rewards, please verify your device by tapping the link below:\n\n` +
-            `<code>${verifyUrl}</code>\n\n` +
-            `<i>Note: Self-referrals and multiple accounts on the same device are strictly prohibited.</i>`,
-          parse_mode: 'HTML',
-          reply_markup: {
-            inline_keyboard: [[{ text: '🛡️ Verify Referral Device', url: verifyUrl }]],
-          },
-        });
-      } catch (refErr) {
-        console.error('Error creating referral token:', refErr);
-      }
-    }
-
-    const pendingVote = session?.pendingVote;
-    const pendingWarJoin = session?.pendingWarJoin;
-
-    userSessions.delete(chatId);
-
-    const { hasActiveEvent } = await checkLiveEventActive();
-
-    // Requirement 6: SHOW REGISTRATION SUCCESSFUL MESSAGE
-    await sendTelegramApi(token, 'sendMessage', {
-      chat_id: chatId,
-      text: `🎉 <b>Registration Successful!</b>\n\n` +
-        `👤 <b>Name:</b> ${userFirstName}\n` +
-        `🆔 <b>UID:</b> <code>${uid}</code>\n` +
-        `📱 <b>Verified Mobile:</b> <code>${enteredDigits}</code>\n` +
-        `🎁 <b>Registration Bonus:</b> ₹${creditedBonus}\n` +
-        `💰 <b>Wallet Balance:</b> ₹${finalWalletBalance}`,
-      parse_mode: 'HTML',
-      reply_markup: buildMainMenuKeyboard(hasActiveEvent),
-    });
-
-    if (pendingVote) {
-      const voterName = (userFirstName || 'User') + (userUsername ? ' (' + userUsername + ')' : '');
-      const voterUsername = userUsername;
-
-      const voteRes = await submitVote({
-        contestId: pendingVote.contestId,
-        contestantId: pendingVote.contestantId,
-        voterTelegramId: chatId,
-        voterName,
-        voterUsername,
-        botToken: token,
-      });
-
-      if (voteRes.success) {
-        const rewardText =
-          voteRes.rewardEarned && voteRes.rewardEarned > 0
-            ? `\n💰 <b>You earned a ₹${voteRes.rewardEarned} wallet bonus!</b>`
-            : '';
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `✅ <b>Vote Submitted Successfully!</b>${rewardText}\n\nThank you for participating!`,
-          parse_mode: 'HTML',
-        });
-      } else {
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `${voteRes.error || 'Could not record vote.'}`,
-          parse_mode: 'HTML',
-        });
-      }
-    }
-
-    if (pendingWarJoin) {
-      const result = await joinWarTeam(
-        pendingWarJoin.warId,
-        {
-          telegramId: String(chatId),
-          name: userFirstName,
-          username: userUsername,
-        },
-        pendingWarJoin.teamId,
-        { invitedByTelegramId: pendingWarJoin.inviterTgId }
-      );
-
-      if (result.success && result.team) {
-        const botUsername = 'Roy_wallett_bot';
-        const isLeader = result.member?.isTeamLeader || String(result.team.leaderTelegramId) === String(chatId);
-
-        if (isLeader) {
-          const isTeamB = result.team.id.toLowerCase().includes('b') || result.team.name.toLowerCase().includes('b');
-          const leaderLink = result.team.leaderInviteLink || `https://t.me/${botUsername}/roy_share_wallet?startapp=${isTeamB ? 'TEAMB_LEADER' : 'TEAMA_LEADER'}_${pendingWarJoin.warId}_${chatId}`;
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `👑 <b>CONGRATULATIONS! You are the FIRST user to join ${result.team.name}!</b>\n\n` +
-              `You are now automatically assigned as the <b>👑 Official Team Leader</b> for <b>${result.team.name}</b>!\n\n` +
-              `🔗 <b>Your Personal Team Leader Invite Link:</b>\n` +
-              `<code>${leaderLink}</code>\n\n` +
-              `Share this link to recruit warriors directly to your team! Anyone joining through your link earns leadership bonus points for you!`,
-            parse_mode: 'HTML',
-          });
-        } else {
-          const myTeamRefLink = `https://t.me/${botUsername}/roy_share_wallet?startapp=war_${pendingWarJoin.warId}_team_${pendingWarJoin.teamId}_ref_${chatId}`;
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `⚔️ <b>Joined Team ${result.team.name}!</b>\n\n` +
-              `You are now officially registered for <b>${result.team.name}</b> in Giveaway War!\n` +
-              `🔒 <b>Team Choice Locked.</b>\n\n` +
-              `🔗 <b>Your Unique Team Referral Link:</b>\n` +
-              `<code>${myTeamRefLink}</code>\n\n` +
-              `Share your link with friends! Anyone joining through your link automatically joins <b>${result.team.name}</b> and earns points for both you and your Team Leader!`,
-            parse_mode: 'HTML',
-          });
-        }
-      }
-    }
 
     // SHOW MAIN MENU
     const eventCheck = await checkLiveEventActive();
@@ -2967,5 +2208,4 @@ Final Payout: ₹${payoutAmount}`);
     if (eventCheck.hasActiveEvent) {
       await sendLiveEventInfoMessage(token, chatId, eventCheck.liveEventState, eventCheck.activeData);
     }
-  }
 }

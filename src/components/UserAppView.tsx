@@ -19,7 +19,8 @@ import {
   RefreshCw,
   Send,
   Timer,
-  Key
+  Key,
+  ArrowRight
 } from 'lucide-react';
 
 interface UserAppViewProps {
@@ -62,8 +63,167 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   const [withdrawHistory, setWithdrawHistory] = useState<any[]>([]);
   const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
 
-  // Mini App OTP Generator State
-  const [otpCode, setOtpCode] = useState<string | null>(null);
+  // Registration V2 States
+  const [isRegistered, setIsRegistered] = useState<boolean>(true);
+  const [regStep, setRegStep] = useState<'DETAILS' | 'OTP'>('DETAILS');
+  const [fullName, setFullName] = useState<string>('');
+  const [mobile, setMobile] = useState<string>('');
+  const [gmail, setGmail] = useState<string>('');
+  const [otpInput, setOtpInput] = useState<string>('');
+  const [isSubmittingReg, setIsSubmittingReg] = useState<boolean>(false);
+  const [regError, setRegError] = useState<string | null>(null);
+  const [otpSuccessMsg, setOtpSuccessMsg] = useState<string | null>(null);
+
+  const generateDeviceFingerprint = async (): Promise<string> => {
+    try {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const txt = 'RoyShareWallet_Fingerprint_2026';
+      if (ctx) {
+        ctx.textBaseline = 'top';
+        ctx.font = "14px 'Arial'";
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = '#f60';
+        ctx.fillRect(125, 1, 62, 20);
+        ctx.fillStyle = '#069';
+        ctx.fillText(txt, 2, 15);
+        ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+        ctx.fillText(txt, 4, 17);
+      }
+      const canvasData = canvas.toDataURL();
+
+      let glRenderer = '';
+      const glCanvas = document.createElement('canvas');
+      const gl = glCanvas.getContext('webgl') || glCanvas.getContext('experimental-webgl');
+      if (gl) {
+        const debugInfo = (gl as any).getExtension('WEBGL_debug_renderer_info');
+        if (debugInfo) {
+          glRenderer = (gl as any).getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || '';
+        }
+      }
+
+      const rawFP = [
+        navigator.userAgent,
+        navigator.language,
+        navigator.platform,
+        screen.width + 'x' + screen.height + 'x' + screen.colorDepth,
+        new Date().getTimezoneOffset(),
+        canvasData,
+        glRenderer
+      ].join('||');
+
+      const msgUint8 = new TextEncoder().encode(rawFP);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) {
+      return `fp_fallback_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    }
+  };
+
+  const handleInitiateRegistration = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegError(null);
+
+    if (!fullName.trim() || fullName.trim().length < 2) {
+      setRegError('Please enter a valid Full Name (minimum 2 characters).');
+      return;
+    }
+
+    const cleanMobile = mobile.replace(/\D/g, '');
+    if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+      setRegError('Please enter a valid 10-digit Indian mobile number starting with 6-9.');
+      return;
+    }
+
+    const cleanGmail = gmail.trim().toLowerCase();
+    if (!cleanGmail || !/^[^\s@]+@gmail\.com$/i.test(cleanGmail)) {
+      setRegError('Please enter a valid Gmail address (ending in @gmail.com).');
+      return;
+    }
+
+    setIsSubmittingReg(true);
+    try {
+      const tgId = getTelegramUserId();
+      const tgUsername = (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.username || '';
+      const fp = await generateDeviceFingerprint();
+
+      const res = await fetch('/api/register/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telegramId: tgId,
+          username: tgUsername,
+          fullName: fullName.trim(),
+          mobile: cleanMobile,
+          gmail: cleanGmail,
+          deviceFingerprint: fp
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setRegError(data.error || 'Registration failed. Please check your details.');
+        setIsSubmittingReg(false);
+        return;
+      }
+
+      setOtpSuccessMsg('Your 6-digit OTP has been sent to your Telegram Bot chat. Copy it and paste below.');
+      setRegStep('OTP');
+    } catch (err: any) {
+      setRegError(err.message || 'Network error occurred. Please try again.');
+    } finally {
+      setIsSubmittingReg(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRegError(null);
+
+    const cleanOtp = otpInput.trim();
+    if (!/^\d{6}$/.test(cleanOtp)) {
+      setRegError('Please enter a valid 6-digit OTP code.');
+      return;
+    }
+
+    setIsSubmittingReg(true);
+    try {
+      const tgId = getTelegramUserId();
+      const tgUsername = (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.username || '';
+      const fp = await generateDeviceFingerprint();
+
+      const res = await fetch('/api/register/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telegramId: tgId,
+          username: tgUsername,
+          fullName: fullName.trim(),
+          mobile: mobile.replace(/\D/g, ''),
+          gmail: gmail.trim().toLowerCase(),
+          otp: cleanOtp,
+          deviceFingerprint: fp
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setRegError(data.error || 'OTP verification failed. Please try again.');
+        setIsSubmittingReg(false);
+        return;
+      }
+
+      if (data.user) {
+        setUser(data.user);
+        setIsRegistered(true);
+      }
+    } catch (err: any) {
+      setRegError(err.message || 'OTP verification failed.');
+    } finally {
+      setIsSubmittingReg(false);
+    }
+  };
   const [otpExpiryTimer, setOtpExpiryTimer] = useState<number>(0);
   const [isGeneratingOtp, setIsGeneratingOtp] = useState(false);
   const [showOtpCard, setShowOtpCard] = useState(false);
@@ -569,26 +729,9 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           milestoneProgress: data.milestoneProgress || {},
         }));
       } else {
-        // Fallback user structure if doc does not exist yet (or standalone local testing)
-        setUser({
-          id: tgId,
-          telegramId: tgId,
-          uid: '866114',
-          userName: 'Alex Roy',
-          avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
-          levelBadge: '🥈 Pro User',
-          levelTitle: 'PRO',
-          activityScore: 420,
-          walletBalance: 1250,
-          coinsBalance: 480,
-          bonusBalance: 15,
-          referralCount: 4,
-          joinedDate: '2026-08-01',
-          securityBadge: 'TRUSTED',
-          securityScore: 99,
-          completedTasks: [],
-          milestoneProgress: {},
-        });
+        // User not registered yet
+        setUser(null);
+        setIsRegistered(false);
       }
       setLoading(false);
     }, (err) => {
@@ -917,11 +1060,165 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     }
   };
 
-  if (loading || !user) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center space-y-4">
         <RefreshCw className="w-8 h-8 text-amber-500 animate-spin" />
         <p className="text-sm font-semibold text-slate-400">Loading Roy Wallet App...</p>
+      </div>
+    );
+  }
+
+  if (!isRegistered || !user) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white font-sans flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6">
+          {/* Header */}
+          <div className="text-center space-y-2">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-amber-400 flex items-center justify-center text-slate-950 mx-auto shadow-lg">
+              <Wallet className="w-8 h-8" />
+            </div>
+            <h1 className="text-xl font-black tracking-tight text-white">
+              🚀 Create Your Roy Share Account
+            </h1>
+            <p className="text-xs text-slate-400">
+              {regStep === 'DETAILS'
+                ? 'Complete registration in 3 simple steps to access your wallet.'
+                : 'Enter the 6-digit OTP code sent to your Telegram Bot chat.'}
+            </p>
+          </div>
+
+          {/* Error Alert */}
+          {regError && (
+            <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-2">
+              <span className="text-rose-400 text-base">❌</span>
+              <span>{regError}</span>
+            </div>
+          )}
+
+          {/* Step 1: DETAILS */}
+          {regStep === 'DETAILS' && (
+            <form onSubmit={handleInitiateRegistration} className="space-y-4">
+              {/* Step 1: Full Name */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                  Step 1: Enter Full Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Rahul Sharma"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-3 px-4 text-xs font-bold text-white outline-none"
+                  required
+                />
+              </div>
+
+              {/* Step 2: Mobile Number */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                  Step 2: Enter Mobile Number
+                </label>
+                <input
+                  type="tel"
+                  placeholder="10-digit Mobile Number (e.g. 9876543210)"
+                  value={mobile}
+                  onChange={(e) => setMobile(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-3 px-4 text-xs font-bold text-white outline-none"
+                  required
+                />
+                <p className="text-[11px] text-amber-400/90 font-medium bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
+                  Please enter the <b>SAME mobile number</b> that is linked with your Telegram account.
+                </p>
+              </div>
+
+              {/* Step 3: Gmail Address */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                  Step 3: Enter Gmail Address
+                </label>
+                <input
+                  type="email"
+                  placeholder="e.g. yourname@gmail.com"
+                  value={gmail}
+                  onChange={(e) => setGmail(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-3 px-4 text-xs font-bold text-white outline-none"
+                  required
+                />
+                <p className="text-[11px] text-sky-400/90 font-medium bg-sky-500/10 p-2.5 rounded-xl border border-sky-500/20">
+                  Please enter your <b>REAL Gmail address</b>. This Gmail will be used for withdrawals and important account notifications.
+                </p>
+              </div>
+
+              {/* Submit Button */}
+              <button
+                type="submit"
+                disabled={isSubmittingReg}
+                className="w-full py-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl transition disabled:opacity-50"
+              >
+                {isSubmittingReg ? (
+                  <span>Generating Security Check...</span>
+                ) : (
+                  <>
+                    <span>Verify & Continue</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            </form>
+          )}
+
+          {/* Step 2: OTP VERIFICATION */}
+          {regStep === 'OTP' && (
+            <form onSubmit={handleVerifyOtp} className="space-y-4">
+              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-medium space-y-1">
+                <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+                  <Check className="w-4 h-4" />
+                  <span>Security Check Passed</span>
+                </div>
+                <p>{otpSuccessMsg}</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                  Enter 6-Digit OTP Code
+                </label>
+                <input
+                  type="text"
+                  maxLength={6}
+                  placeholder="e.g. 123456"
+                  value={otpInput}
+                  onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ''))}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-3 px-4 text-center text-2xl font-mono font-black text-amber-400 tracking-widest outline-none"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmittingReg || otpInput.length < 6}
+                className="w-full py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl transition disabled:opacity-50"
+              >
+                {isSubmittingReg ? (
+                  <span>Verifying OTP...</span>
+                ) : (
+                  <>
+                    <Key className="w-4 h-4" />
+                    <span>Verify OTP & Create Account</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setRegStep('DETAILS')}
+                className="w-full text-center text-xs text-slate-400 hover:text-white py-2"
+              >
+                ← Back to Details
+              </button>
+            </form>
+          )}
+        </div>
       </div>
     );
   }
