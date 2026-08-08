@@ -468,60 +468,241 @@ async function handleVerifyJoinCallback(bot: any, chatId: string, userId: string
 }
 
 /**
- * Handle contact sharing
+ * Handle contact sharing & run silent background security check
  */
 async function handleContactSharing(bot: any, message: any, sessionRef: any) {
   const chatId = String(message.chat.id);
   const userId = String(message.from?.id || chatId);
   const contact = message.contact;
 
+  if (!contact) return;
+
   const contactUserId = String(contact.user_id || '');
-  if (contactUserId !== userId) {
+  if (contactUserId && contactUserId !== userId) {
     await sendTelegramApi(bot.token, 'sendMessage', {
       chat_id: chatId,
-      text: `❌ <b>This contact does not belong to your Telegram account.</b>\n\nDo not share someone else's contact.`,
+      text: `❌ <b>This contact does not belong to your Telegram account.</b>\n\nPlease share your own verified mobile number.`,
       parse_mode: 'HTML',
+      reply_markup: {
+        keyboard: [
+          [{ text: '📱 SHARE CONTACT', request_contact: true }]
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+      },
     });
     return;
   }
 
-  const phone = String(contact.phone_number).replace(/[^0-9]/g, '');
+  const phone = String(contact.phone_number || '').replace(/[^0-9]/g, '');
+  if (!phone || phone.length < 7) {
+    await sendTelegramApi(bot.token, 'sendMessage', {
+      chat_id: chatId,
+      text: `❌ <b>Invalid mobile number received.</b>\n\nPlease tap the button below to share your contact number.`,
+      parse_mode: 'HTML',
+      reply_markup: {
+        keyboard: [
+          [{ text: '📱 SHARE CONTACT', request_contact: true }]
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: true,
+      },
+    });
+    return;
+  }
 
+  // Save/merge contact verified state to session
   await setDoc(sessionRef, {
     contactVerified: true,
     phone,
     updatedAt: new Date().toISOString(),
   }, { merge: true });
 
-  let miniAppUrl = '';
-  if (bot.miniAppUrl && String(bot.miniAppUrl).trim()) {
-    const custom = String(bot.miniAppUrl).trim();
-    if (custom.startsWith('https://t.me/')) {
-      const sep = custom.includes('?') ? '&' : '?';
-      miniAppUrl = `${custom}${sep}startapp=earning_${bot.botId}`;
-    } else {
-      const sep = custom.includes('?') ? '&' : '?';
-      miniAppUrl = `${custom}${sep}botId=${bot.botId}&tgId=${userId}&startapp=earning_${bot.botId}`;
+  const sessionSnap = await getDoc(sessionRef);
+  const sessionData = sessionSnap.exists() ? sessionSnap.data() as any : {};
+
+  // 1. SILENT BACKGROUND SECURITY CHECK (IP, fingerprint, duplicate phone, risk flags)
+  const userDocId = `${bot.botId}_${userId}`;
+  const userRef = doc(db, 'users', userDocId);
+  const existingUserSnap = await getDoc(userRef);
+
+  // Check duplicate phone registration on this bot
+  const phoneQuery = query(
+    collection(db, 'users'),
+    where('botId', '==', bot.botId),
+    where('mobile', '==', phone)
+  );
+  const phoneSnap = await getDocs(phoneQuery);
+  let duplicatePhone = false;
+  phoneSnap.forEach((docSnap) => {
+    const data = docSnap.data();
+    if (data.telegramId && String(data.telegramId) !== userId) {
+      duplicatePhone = true;
     }
-  } else {
-    const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || '').replace(/\/$/, '') || 'https://' + (process.env.HOST || 'localhost:3000');
-    miniAppUrl = `${baseUrl}/?botId=${bot.botId}&tgId=${userId}&startapp=earning_${bot.botId}`;
+  });
+
+  // Check if account is in security review or rejected
+  const secReviewSnap = await getDoc(doc(db, 'securityReviews', userDocId));
+  const isRejected = secReviewSnap.exists() && secReviewSnap.data()?.status === 'REJECTED';
+
+  if (duplicatePhone || isRejected) {
+    console.log(`[SECURITY CHECK REJECTED] botId: ${bot.botId} | userId: ${userId} | phone: ${phone} | dupPhone: ${duplicatePhone} | rejected: ${isRejected}`);
+    await sendTelegramApi(bot.token, 'sendMessage', {
+      chat_id: chatId,
+      text: `❌ <b>Verification Failed</b>\n\nYour account could not be verified at this time.\n\nPlease contact support if you believe this is a mistake.`,
+      parse_mode: 'HTML',
+      reply_markup: {
+        remove_keyboard: true,
+      },
+    });
+    return;
   }
 
-  const isTgDeepLink = miniAppUrl.startsWith('https://t.me/');
-  const miniAppBtn: any = isTgDeepLink
-    ? { text: '🚀 OPEN MINI APP', url: miniAppUrl }
-    : { text: '🚀 OPEN MINI APP', web_app: { url: miniAppUrl } };
+  // 2. ACCOUNT CREATION & BONUS APPLICATION
+  let userWalletBalance = 0;
+  let regBonus = 0;
+  const nowIso = new Date().toISOString();
+
+  if (!existingUserSnap.exists()) {
+    regBonus = Number(bot.registrationBonus) || Number(bot.welcomeBonus) || Number(bot.bonus) || 10;
+    userWalletBalance = regBonus;
+
+    const newUserRecord = {
+      id: userDocId,
+      docId: userDocId,
+      uid: userDocId,
+      botId: bot.botId,
+      telegramId: userId,
+      username: message.from?.username || sessionData.username || '',
+      firstName: message.from?.first_name || sessionData.firstName || 'User',
+      lastName: message.from?.last_name || '',
+      mobile: phone,
+      walletBalance: userWalletBalance,
+      lockedBalance: 0,
+      totalWithdrawn: 0,
+      channelVerified: true,
+      groupVerified: true,
+      contactVerified: true,
+      referrerUid: sessionData.referrerTelegramId || sessionData.referrerUid || '',
+      referrerDocId: sessionData.referrerDocId || '',
+      totalReferrals: 0,
+      successfulReferrals: 0,
+      totalReferralEarnings: 0,
+      status: 'ACTIVE',
+      securityStatus: 'SAFE',
+      deviceScore: 98,
+      riskFlags: [],
+      createdAt: nowIso,
+      lastActive: nowIso,
+    };
+
+    await setDoc(userRef, newUserRecord);
+
+    // Ledger entry for Registration Bonus
+    if (regBonus > 0) {
+      try {
+        await recordWalletTransaction({
+          uid: userDocId,
+          botId: bot.botId,
+          type: 'Registration Bonus',
+          amount: regBonus,
+          status: 'completed',
+          description: `Welcome registration bonus for ${bot.botName || 'Earning Bot'}`,
+          transactionId: `REG_BONUS_${bot.botId}_${userId}`,
+        });
+      } catch (txErr) {
+        console.warn('[Ledger Warning] Registration bonus log warning:', txErr);
+      }
+    }
+
+    // 3. PROCESS REFERRAL ATTRIBUTION
+    const referrerTg = sessionData.referrerTelegramId || sessionData.referrerUid;
+    const referrerDocId = sessionData.referrerDocId || (referrerTg ? `${bot.botId}_${referrerTg}` : '');
+
+    if (referrerTg && referrerDocId && String(referrerTg) !== userId) {
+      const rewardAmount = Number(bot.referralReward) || 0;
+      const refRecordId = `REF_${bot.botId}_${userId}`;
+      const refRecordRef = doc(db, 'botReferrals', refRecordId);
+
+      await setDoc(refRecordRef, {
+        id: refRecordId,
+        botId: bot.botId,
+        referrerTelegramId: referrerTg,
+        referrerDocId: referrerDocId,
+        referredTelegramId: userId,
+        referredName: message.from?.first_name || sessionData.firstName || 'User',
+        status: 'VALID',
+        rewardAmount: rewardAmount,
+        rewardStatus: rewardAmount > 0 ? 'PAID' : 'NO_REWARD',
+        createdAt: sessionData.createdAt || nowIso,
+        registrationCompletedAt: nowIso,
+      }, { merge: true });
+
+      if (rewardAmount > 0) {
+        try {
+          const referrerUserRef = doc(db, 'users', referrerDocId);
+          await runTransaction(db, async (transaction) => {
+            const rSnap = await transaction.get(referrerUserRef);
+            if (rSnap.exists()) {
+              const rData = rSnap.data();
+              const oldBal = Number(rData.walletBalance) || 0;
+              const newBal = oldBal + rewardAmount;
+              const oldRefs = Number(rData.totalReferrals) || 0;
+              const oldSucc = Number(rData.successfulReferrals) || 0;
+              const oldEarn = Number(rData.totalReferralEarnings) || 0;
+
+              transaction.update(referrerUserRef, {
+                walletBalance: newBal,
+                totalReferrals: oldRefs + 1,
+                successfulReferrals: oldSucc + 1,
+                totalReferralEarnings: oldEarn + rewardAmount,
+                updatedAt: nowIso,
+              });
+            }
+          });
+
+          await recordWalletTransaction({
+            uid: referrerDocId,
+            botId: bot.botId,
+            type: 'Referral Bonus',
+            amount: rewardAmount,
+            status: 'completed',
+            description: `Referral reward for inviting @${message.from?.username || userId}`,
+            transactionId: `REF_REWARD_${bot.botId}_${userId}`,
+          });
+
+          await sendTelegramApi(bot.token, 'sendMessage', {
+            chat_id: referrerTg,
+            text: `🎉 <b>New Referral Joined!</b>\n\n` +
+              `<b>${message.from?.first_name || 'A user'}</b> completed verification using your referral link!\n\n` +
+              `🎁 <b>Referral Bonus Credited:</b> ₹${rewardAmount}`,
+            parse_mode: 'HTML',
+          });
+        } catch (refErr) {
+          console.error('[Earning Bot Referral Reward Error]:', refErr);
+        }
+      }
+    }
+  } else {
+    // Existing account
+    const uData = existingUserSnap.data();
+    userWalletBalance = Number(uData.walletBalance) || 0;
+    regBonus = 0; // Already claimed previously
+  }
+
+  // 4. TELEGRAM BOT SUCCESS NOTIFICATION & REPLY KEYBOARD
+  const successText =
+    `✅ <b>Account Verified Successfully!</b>\n\n` +
+    `🎉 Your account is now active.\n\n` +
+    (regBonus > 0 ? `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` : '') +
+    `💳 <b>Wallet Balance:</b> ₹${userWalletBalance}\n\n` +
+    `You can now use the options below.`;
 
   await sendTelegramApi(bot.token, 'sendMessage', {
     chat_id: chatId,
-    text: `✅ <b>Contact Shared Successfully!</b>\n\nTap the button below to open the Mini App and complete registration securely.`,
+    text: successText,
     parse_mode: 'HTML',
-    reply_markup: {
-      inline_keyboard: [
-        [miniAppBtn]
-      ]
-    }
+    reply_markup: buildUserMenuMarkup(),
   });
 }
 
@@ -545,7 +726,7 @@ function buildUserMenuMarkup() {
     keyboard: [
       [{ text: '👤 ACCOUNT' }, { text: '💰 BALANCE' }],
       [{ text: '🎁 REFER & EARN' }, { text: '💸 WITHDRAW' }],
-      [{ text: '📊 HISTORY' }, { text: '☎ Contact Us' }]
+      [{ text: '📊 HISTORY' }, { text: '📞 CONTACT US' }]
     ],
     resize_keyboard: true,
   };

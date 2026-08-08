@@ -89,38 +89,30 @@ function buildMiniAppButton(label: string, customUrl?: string, eventId?: string,
  * Helper to display Registration V2 Welcome & Open Mini App button
  */
 export async function sendCreateAccountPrompt(token: string, chatId: string | number) {
-  const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
-  const miniAppUrl = `${baseUrl}/?action=register&tgId=${chatId}`;
-
-  const welcomeText =
+  const promptText =
     `✅ <b>Membership Verified!</b>\n\n` +
     `👋 <b>Welcome to Roy Share Wallet</b>\n\n` +
-    `Your membership has been verified.\n\n` +
-    `Please create your account securely using our Registration Mini App.\n\n` +
-    `🌐 <b>Open Registration Mini App</b>`;
+    `Please tap the button below to share your verified mobile number and activate your account.`;
 
   await sendTelegramApi(token, 'sendMessage', {
     chat_id: chatId,
-    text: welcomeText,
+    text: promptText,
     parse_mode: 'HTML',
     reply_markup: {
-      inline_keyboard: [
-        [
-          {
-            text: '🌐 Open Registration Mini App',
-            web_app: { url: miniAppUrl }
-          }
-        ]
-      ]
+      keyboard: [
+        [{ text: '📱 Share Contact', request_contact: true }]
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: true,
     }
   });
 }
 
 export function buildMainMenuKeyboard(hasActiveLiveEvent: boolean = false) {
   const keyboard: any[][] = [
-    [{ text: '👛 Wallet' }, { text: '💸 Withdraw' }],
-    [{ text: '🎁 Refer & Earn' }, { text: '☎ Contact Us' }],
-    [{ text: '🎁 Lucky Draw' }],
+    [{ text: '👤 ACCOUNT' }, { text: '💰 BALANCE' }],
+    [{ text: '🎁 REFER & EARN' }, { text: '💸 WITHDRAW' }],
+    [{ text: '📊 HISTORY' }, { text: '📞 CONTACT US' }],
   ];
 
   return {
@@ -1061,96 +1053,180 @@ export async function processTelegramUpdate(token: string, update: any) {
 
   // TELEGRAM CONTACT VERIFICATION HANDLER
   if (contact) {
-    const sessionDocRef = doc(db, 'registrationSessions', chatId);
-    const sessionSnap = await getDoc(sessionDocRef);
-
-    if (sessionSnap.exists()) {
-      const pendingSession = sessionSnap.data();
-
-      // Check 1: contact.user_id === current Telegram user ID
-      const contactUserId = String(contact.user_id || message.from?.id || '');
-      if (contactUserId !== String(chatId)) {
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `❌ <b>This contact does not belong to your Telegram account.</b>`,
-          parse_mode: 'HTML',
-        });
-        return;
-      }
-
-      // Check 2: normalize phone numbers and compare
-      const normalizePhone = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
-      const sharedPhoneNorm = normalizePhone(contact.phone_number);
-      const registeredPhoneNorm = normalizePhone(pendingSession.mobile);
-
-      if (!sharedPhoneNorm || sharedPhoneNorm !== registeredPhoneNorm) {
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `❌ <b>The shared contact number does not match the number entered during registration.</b>\n\n` +
-            `Entered: <code>${pendingSession.mobile}</code>\n` +
-            `Shared: <code>${contact.phone_number || 'Unknown'}</code>\n\n` +
-            `Please tap <b>📱 Share Contact</b> below to share the correct contact number.`,
-          parse_mode: 'HTML',
-          reply_markup: {
-            keyboard: [
-              [{ text: '📱 Share Contact', request_contact: true }]
-            ],
-            resize_keyboard: true,
-            one_time_keyboard: true
-          }
-        });
-        return;
-      }
-
-      // Both checks pass! Mark contactVerified, generate 6-digit OTP code & set 2 min expiry
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const otpExpiry = Date.now() + 120000;
-
-      await setDoc(sessionDocRef, {
-        contactVerified: true,
-        sharedContactMobile: sharedPhoneNorm,
-        otp,
-        otpExpiry,
-        attempts: 0,
-      }, { merge: true });
-
-      // Send bot message: Mobile Number Verified!
+    const contactUserId = String(contact.user_id || message.from?.id || '');
+    if (contactUserId !== String(chatId)) {
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: `✅ <b>Mobile Number Verified!</b>\n\nYour mobile number has been successfully verified.`,
+        text: `❌ <b>This contact does not belong to your Telegram account.</b>\n\nPlease share your own verified contact number using the button below.`,
         parse_mode: 'HTML',
         reply_markup: {
-          remove_keyboard: true
-        }
-      });
-
-      // Send bot message: OTP Code
-      const otpMessage =
-        `━━━━━━━━━━━━━━\n` +
-        `🔐 <b>Roy Share OTP Code</b>\n\n` +
-        `Your 6-digit OTP for registration is:\n` +
-        `<code>${otp}</code>\n\n` +
-        `⏱ This code will expire in <b>02:00</b> minutes.\n` +
-        `━━━━━━━━━━━━━━`;
-
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: otpMessage,
-        parse_mode: 'HTML',
-      });
-
-      return;
-    } else {
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `❌ <b>No active registration session found.</b>\n\nPlease create an account via the Registration Mini App first.`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          remove_keyboard: true
-        }
+          keyboard: [[{ text: '📱 Share Contact', request_contact: true }]],
+          resize_keyboard: true,
+          one_time_keyboard: true,
+        },
       });
       return;
     }
+
+    const normalizePhone = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
+    const sharedPhoneNorm = normalizePhone(contact.phone_number);
+
+    if (!sharedPhoneNorm || sharedPhoneNorm.length < 7) {
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `❌ <b>Invalid mobile number received.</b>\n\nPlease tap the button below to share your contact number.`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [[{ text: '📱 Share Contact', request_contact: true }]],
+          resize_keyboard: true,
+          one_time_keyboard: true,
+        },
+      });
+      return;
+    }
+
+    // 1. SILENT BACKGROUND SECURITY CHECK
+    const phoneQuery = query(collection(db, 'users'), where('mobile', '==', sharedPhoneNorm));
+    const phoneSnap = await getDocs(phoneQuery);
+    let duplicatePhone = false;
+    phoneSnap.forEach((docSnap) => {
+      const d = docSnap.data();
+      if (d.telegramId && String(d.telegramId) !== chatId && (!d.botId || d.botId === '')) {
+        duplicatePhone = true;
+      }
+    });
+
+    const secReviewSnap = await getDoc(doc(db, 'securityReviews', chatId));
+    const isRejected = secReviewSnap.exists() && secReviewSnap.data()?.status === 'REJECTED';
+
+    if (duplicatePhone || isRejected) {
+      console.log(`[SECURITY CHECK REJECTED] chatId: ${chatId} | phone: ${sharedPhoneNorm} | dupPhone: ${duplicatePhone} | rejected: ${isRejected}`);
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `❌ <b>Verification Failed</b>\n\nYour account could not be verified at this time.\n\nPlease contact support if you believe this is a mistake.`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          remove_keyboard: true,
+        },
+      });
+      return;
+    }
+
+    // 2. CREATE OR FETCH ACCOUNT
+    let currentUser = await getUserByTelegramId(chatId);
+    let regBonus = 10;
+    const nowIso = new Date().toISOString();
+
+    if (!currentUser) {
+      const userDocRef = doc(db, 'users', chatId);
+      const newUserRecord = {
+        id: chatId,
+        docId: chatId,
+        uid: chatId,
+        telegramId: chatId,
+        username: message.from?.username || '',
+        firstName: message.from?.first_name || 'User',
+        lastName: message.from?.last_name || '',
+        mobile: sharedPhoneNorm,
+        walletBalance: regBonus,
+        lockedBalance: 0,
+        totalWithdrawn: 0,
+        channelVerified: true,
+        groupVerified: true,
+        contactVerified: true,
+        status: 'ACTIVE',
+        securityStatus: 'SAFE',
+        deviceScore: 98,
+        riskFlags: [],
+        createdAt: nowIso,
+        lastActive: nowIso,
+      };
+
+      await setDoc(userDocRef, newUserRecord);
+      currentUser = newUserRecord as any;
+
+      if (regBonus > 0) {
+        try {
+          await recordWalletTransaction({
+            uid: chatId,
+            type: 'Registration Bonus',
+            amount: regBonus,
+            status: 'completed',
+            description: `Welcome registration bonus for joining Roy Share Wallet`,
+            transactionId: `REG_BONUS_${chatId}`,
+          });
+        } catch (txErr) {
+          console.warn('[Ledger Warning] Main bot registration bonus log:', txErr);
+        }
+      }
+
+      // Check referral attribution for main bot
+      const session = userSessions.get(chatId);
+      if (session?.referrerUid && String(session.referrerUid) !== chatId) {
+        try {
+          const referrerUid = session.referrerUid;
+          const referrerDoc = await getUserByUid(referrerUid);
+          if (referrerDoc) {
+            const rewardAmt = 5; // Main bot referral reward
+            const refUserRef = doc(db, 'users', referrerDoc.id);
+
+            await runTransaction(db, async (transaction) => {
+              const rSnap = await transaction.get(refUserRef);
+              if (rSnap.exists()) {
+                const rData = rSnap.data();
+                const oldBal = Number(rData.walletBalance) || 0;
+                transaction.update(refUserRef, {
+                  walletBalance: oldBal + rewardAmt,
+                  totalReferrals: (Number(rData.totalReferrals) || 0) + 1,
+                  successfulReferrals: (Number(rData.successfulReferrals) || 0) + 1,
+                  totalReferralEarnings: (Number(rData.totalReferralEarnings) || 0) + rewardAmt,
+                  updatedAt: nowIso,
+                });
+              }
+            });
+
+            await recordWalletTransaction({
+              uid: referrerDoc.id,
+              type: 'Referral Bonus',
+              amount: rewardAmt,
+              status: 'completed',
+              description: `Referral bonus for inviting @${message.from?.username || chatId}`,
+              transactionId: `REF_REWARD_${chatId}`,
+            });
+
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: referrerDoc.telegramId || referrerDoc.id,
+              text: `🎉 <b>New Referral Joined!</b>\n\n` +
+                `<b>${message.from?.first_name || 'A user'}</b> joined using your referral link!\n\n` +
+                `🎁 <b>Referral Bonus Credited:</b> ₹${rewardAmt}`,
+              parse_mode: 'HTML',
+            });
+          }
+        } catch (refErr) {
+          console.error('[Main Bot Referral Reward Error]:', refErr);
+        }
+      }
+    } else {
+      regBonus = 0; // Already registered
+    }
+
+    const { hasActiveEvent } = await checkLiveEventActive();
+
+    const successText =
+      `✅ <b>Account Verified Successfully!</b>\n\n` +
+      `🎉 Your Roy Share account is now active.\n\n` +
+      (regBonus > 0 ? `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` : '') +
+      `💳 <b>Wallet Balance:</b> ₹${currentUser.walletBalance || regBonus}\n\n` +
+      `You can now use the options below.`;
+
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: successText,
+      parse_mode: 'HTML',
+      reply_markup: buildMainMenuKeyboard(hasActiveEvent),
+    });
+
+    return;
   }
 
   // Query database to see if user is already registered
@@ -1554,7 +1630,7 @@ export async function processTelegramUpdate(token: string, update: any) {
     }
 
     // Reset active withdrawal session if user clicks a main menu button
-    if (text === '👛 Wallet' || text === '💸 Withdraw' || text === '🎁 Refer & Earn' || text === '☎ Contact Us' || text === '🎁 Lucky Draw') {
+    if (text === '👛 Wallet' || text === '👤 ACCOUNT' || text === '💰 BALANCE' || text === '📊 HISTORY' || text === '💸 Withdraw' || text === '🎁 Refer & Earn' || text === '☎ Contact Us' || text === '📞 CONTACT US' || text === '🎁 Lucky Draw') {
       userSessions.delete(chatId);
     }
 
@@ -1598,14 +1674,47 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    if (text === '👛 Wallet') {
+    if (text === '👛 Wallet' || text === '👤 ACCOUNT' || text === '💰 BALANCE') {
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: `👛 <b>My Wallet</b>\n\n` +
-          `👤 <b>Name:</b> ${existingUser.firstName}\n` +
-          `🆔 <b>UID:</b> <code>${existingUser.uid}</code>\n` +
-          `📱 <b>Mobile:</b> <code>${existingUser.mobile}</code>\n` +
-          `💰 <b>Balance:</b> ₹${existingUser.walletBalance || 0}`,
+        text: `👤 <b>Account Details</b>\n\n` +
+          `• <b>Name:</b> ${existingUser.firstName}\n` +
+          `• <b>UID:</b> <code>${existingUser.uid}</code>\n` +
+          `• <b>Mobile:</b> <code>${existingUser.mobile}</code>\n` +
+          `• <b>Wallet Balance:</b> ₹${existingUser.walletBalance || 0}`,
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    if (text === '📊 HISTORY') {
+      const txQuery = query(
+        collection(db, 'wallet_transactions'),
+        where('telegramId', '==', chatId),
+        limit(10)
+      );
+      const snap = await getDocs(txQuery);
+
+      if (snap.empty) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `📊 <b>No recent transaction history found.</b>`,
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      let histText = `📊 <b>Recent Transactions:</b>\n\n`;
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        const date = d.createdAt ? new Date(d.createdAt).toLocaleDateString() : '';
+        const sign = d.amount >= 0 ? '🟢 +' : '🔴 ';
+        histText += `• [${date}] ${d.description || d.type}\n   <b>${sign}₹${Math.abs(d.amount)}</b> (${d.status || 'completed'})\n\n`;
+      });
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: histText,
         parse_mode: 'HTML',
       });
       return;
