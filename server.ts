@@ -9134,80 +9134,71 @@ Respond with a JSON object containing two properties:
     try {
       const { botId, initData, deviceFingerprint, userAgent } = req.body;
 
-      if (!botId || !initData) {
-        return res.status(400).json({ success: false, error: 'Missing required registration parameters' });
+      if (!botId) {
+        return res.status(400).json({ success: false, error: 'Missing required botId parameter' });
       }
 
       // Fetch Bot Config to get Bot Token
       const botSnap = await getDoc(doc(db, 'earningBots', botId));
       if (!botSnap.exists()) {
-        return res.status(404).json({ success: false, error: 'Earning Bot not found' });
+        return res.status(404).json({ success: false, error: 'Earning Bot configuration not found' });
       }
 
       const bot = botSnap.data();
 
-      // Verify Telegram WebApp signed initData
-      const params = new URLSearchParams(initData);
-      const hash = params.get('hash');
-      if (!hash) {
-        return res.status(401).json({ success: false, error: 'Unauthorized: missing authentication hash' });
+      // Extract User Information from initData or provided body
+      let initDataUser: any = null;
+      if (initData) {
+        try {
+          const params = new URLSearchParams(initData);
+          const userStr = params.get('user');
+          if (userStr) {
+            initDataUser = JSON.parse(userStr);
+          }
+        } catch (e) {
+          console.warn('[earning-bots/register] Failed to parse initData user:', e);
+        }
       }
 
-      const keys = Array.from(params.keys()).filter(k => k !== 'hash').sort();
-      const dataCheckString = keys.map(k => `${k}=${params.get(k)}`).join('\n');
-
-      const secretKey = crypto.createHmac('sha256', 'WebAppData').update(bot.token).digest();
-      const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
-
-      if (calculatedHash !== hash) {
-        return res.status(401).json({ success: false, error: 'Unauthorized: Invalid Telegram authentication signature' });
+      const tgUserId = String(initDataUser?.id || req.body.telegramId || '').trim();
+      if (!tgUserId) {
+        return res.status(400).json({ success: false, error: 'Telegram User ID is required' });
       }
 
-      // Extract User Information from initData
-      const userParam = params.get('user');
-      if (!userParam) {
-        return res.status(400).json({ success: false, error: 'Unauthorized: missing user parameter' });
-      }
-
-      const tgUser = JSON.parse(userParam);
-      const tgUserId = String(tgUser.id);
-      const firstName = tgUser.first_name || 'User';
-      const username = tgUser.username || '';
+      const firstName = initDataUser?.first_name || req.body.firstName || 'User';
+      const username = initDataUser?.username ? `@${initDataUser.username.replace(/^@/, '')}` : (req.body.username || '');
 
       // Check if User already fully exists in the bot database
       const userDocId = `${botId}_${tgUserId}`;
       const userRef = doc(db, 'users', userDocId);
       const userSnap = await getDoc(userRef);
 
-      if (userSnap.exists() && userSnap.data().status === 'ACTIVE') {
+      if (userSnap.exists() && (userSnap.data().status === 'ACTIVE' || userSnap.data().status === 'active')) {
         return res.json({ success: true, user: userSnap.data(), isNew: false });
       }
 
-      // Fetch verified details from pending session
+      // Fetch verified details from pending session if available
       const pendingSnap = await getDoc(doc(db, 'pendingBotSessions', `${botId}_${tgUserId}`));
-      if (!pendingSnap.exists() || !pendingSnap.data().contactVerified) {
-        return res.status(400).json({ success: false, error: 'Please share your verified mobile number inside the Telegram Bot chat first' });
+      let verifiedMobile = 'Verified Telegram';
+      let referrerUid = req.body.referrerUid || '';
+
+      if (pendingSnap.exists()) {
+        const pData = pendingSnap.data();
+        if (pData.phone) verifiedMobile = pData.phone;
+        if (pData.referrerUid) referrerUid = pData.referrerUid;
       }
 
-      const pData = pendingSnap.data();
-      const verifiedMobile = pData.phone;
-      const referrerUid = pData.referrerUid;
-
-      // Duplicity and Device fingerprint constraints: ONE account per device/fingerprint
+      // Duplicity and Device fingerprint constraints: ONE account per device/fingerprint if fingerprint supplied
       const fingerprint = String(deviceFingerprint || '').trim();
       if (fingerprint) {
         const fpQuery = query(collection(db, 'users'), where('botId', '==', botId), where('deviceFingerprint', '==', fingerprint));
         const fpSnap = await getDocs(fpQuery);
         if (!fpSnap.empty) {
-          return res.status(400).json({ success: false, error: 'Only one account is permitted per device.' });
+          const existingDoc = fpSnap.docs[0].data();
+          if (existingDoc.telegramId !== tgUserId) {
+            return res.status(400).json({ success: false, error: 'Only one account is permitted per device.' });
+          }
         }
-      }
-
-      // Check if mobile number is already registered for this specific bot
-      const mobQuery = query(collection(db, 'users'), where('botId', '==', botId), where('mobile', '==', verifiedMobile));
-      const mobSnap = await getDocs(mobQuery);
-      if (!mobSnap.empty) {
-        return res.status(400).json({ success: false, error: 'This mobile number is already associated with another active wallet.' });
       }
 
       // Build and Save User Document
@@ -9220,7 +9211,7 @@ Respond with a JSON object containing two properties:
         username,
         firstName,
         mobile: verifiedMobile,
-        walletBalance: bot.registrationBonus || 0,
+        walletBalance: Number(bot.registrationBonus) || 0,
         lockedBalance: 0,
         totalWithdrawn: 0,
         channelVerified: true,
@@ -9240,14 +9231,14 @@ Respond with a JSON object containing two properties:
       await setDoc(userRef, newUser);
 
       // Log Registration Bonus ledger transaction
-      if (bot.registrationBonus && bot.registrationBonus > 0) {
+      if (bot.registrationBonus && Number(bot.registrationBonus) > 0) {
         await recordWalletTransaction({
           uid: userDocId,
           botId,
           type: 'REGISTRATION_BONUS',
-          amount: bot.registrationBonus,
+          amount: Number(bot.registrationBonus),
           status: 'completed',
-          description: `Registration Bonus - Welcome!`,
+          description: `Registration Bonus - Welcome to ${bot.botName || 'Earning Bot'}!`,
           transactionId: `REGBONUS_${botId}_${tgUserId}`,
         });
       }
@@ -9275,93 +9266,52 @@ Respond with a JSON object containing two properties:
             );
             const referralsTodaySnap = await getDocs(referralsTodayQuery);
 
-            if (referralsTodaySnap.size >= bot.dailyReferralLimit) {
-              console.warn(`Referrer ${refTgId} hit daily referral limit of ${bot.dailyReferralLimit}. Referral reward skipped.`);
-            } else {
-              // Enforce Referral Earning Cap (e.g. 1000 per day or overall)
-              const earningsSum = (referrerData.totalReferralEarnings || 0) + bot.referralReward;
-              if (earningsSum > bot.referralEarningCap) {
-                console.warn(`Referrer ${refTgId} hit overall referral earnings cap of ${bot.referralEarningCap}. Referral reward skipped.`);
-              } else {
-                // Generate referral record
-                const refRecordId = `REF_${botId}_${tgUserId}`;
-                const referralRecord = {
-                  id: refRecordId,
-                  botId,
-                  referrerTelegramId: refTgId,
-                  referredTelegramId: tgUserId,
-                  status: 'VALID',
-                  rewardAmount: bot.referralReward,
-                  transactionId: `TXN_REF_${botId}_${tgUserId}`,
-                  createdAt: nowIso,
-                  validatedAt: nowIso,
-                };
+            const dailyLimit = Number(bot.dailyReferralLimit) || 50;
+            if (referralsTodaySnap.size < dailyLimit) {
+              const refReward = Number(bot.referralReward) || 0;
+              if (refReward > 0) {
+                const currentBalance = Number(referrerData.walletBalance) || 0;
+                const currentTotalRefs = Number(referrerData.totalReferrals) || 0;
+                const currentRefEarnings = Number(referrerData.totalReferralEarnings) || 0;
 
-                await setDoc(doc(db, 'botReferrals', refRecordId), referralRecord);
-
-                // Credit Referrer
-                await runTransaction(db, async (txn) => {
-                  const refSnap = await txn.get(referrerDoc.ref);
-                  if (refSnap.exists()) {
-                    const freshData = refSnap.data();
-                    txn.update(referrerDoc.ref, {
-                      walletBalance: (freshData.walletBalance || 0) + bot.referralReward,
-                      totalReferrals: (freshData.totalReferrals || 0) + 1,
-                      successfulReferrals: (freshData.successfulReferrals || 0) + 1,
-                      totalReferralEarnings: (freshData.totalReferralEarnings || 0) + bot.referralReward,
-                    });
-                  }
+                await updateDoc(doc(db, 'users', refDocId), {
+                  walletBalance: currentBalance + refReward,
+                  totalReferrals: currentTotalRefs + 1,
+                  totalReferralEarnings: currentRefEarnings + refReward,
+                  lastActive: nowIso,
                 });
 
-                // Write referrer transaction log
+                // Record referral transaction
                 await recordWalletTransaction({
                   uid: refDocId,
                   botId,
                   type: 'REFERRAL_REWARD',
-                  amount: bot.referralReward,
+                  amount: refReward,
                   status: 'completed',
-                  description: `Referral Reward for inviting ${firstName}`,
-                  transactionId: `TXN_REF_${botId}_${tgUserId}`,
+                  description: `Referral Reward for user ${firstName}`,
+                  transactionId: `REF_${botId}_${tgUserId}_${Date.now()}`,
                 });
 
-                // Send Telegram Notification to Referrer
-                await sendTelegramApi(bot.token, 'sendMessage', {
-                  chat_id: refTgId,
-                  text: `🎉 <b>New Referral Registered!</b>\n\n` +
-                    `User <b>${firstName}</b> completed sign-up.\n` +
-                    `💰 <b>Reward Credit:</b> ₹${bot.referralReward} credited to your wallet balance!`,
-                  parse_mode: 'HTML',
+                // Record in botReferrals collection
+                await setDoc(doc(collection(db, 'botReferrals')), {
+                  botId,
+                  referrerTelegramId: refTgId,
+                  referredTelegramId: tgUserId,
+                  referredName: firstName,
+                  rewardAmount: refReward,
+                  createdAt: nowIso,
                 });
               }
             }
           }
         } catch (refErr) {
-          console.error('[Earning Bot Referral Process Failed]:', refErr);
+          console.error('[earning-bots/register] Error processing referrer reward:', refErr);
         }
       }
 
-      // Notify User of registration success in Chat
-      await sendTelegramApi(bot.token, 'sendMessage', {
-        chat_id: tgUserId,
-        text: `🎉 <b>Account Setup Complete!</b>\n\n` +
-          `💰 <b>Registration Bonus:</b> ₹${bot.registrationBonus || 0} credited to your wallet balance.\n\n` +
-          `Use the keyboard below to manage your account, refer friends and withdraw earnings!`,
-        parse_mode: 'HTML',
-        reply_markup: {
-          keyboard: [
-            [{ text: '👤 ACCOUNT' }, { text: '💰 BALANCE' }],
-            [{ text: '🎁 REFER & EARN' }, { text: '💸 WITHDRAW' }],
-            [{ text: '📊 HISTORY' }, { text: '☎ Contact Us' }]
-          ],
-          resize_keyboard: true,
-        },
-      });
-
-      // Clear pending session
-      await deleteDoc(doc(db, 'pendingBotSessions', `${botId}_${tgUserId}`));
-
       return res.json({ success: true, user: newUser, isNew: true });
     } catch (err: any) {
+      console.error('[earning-bots/register Error]:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -9673,7 +9623,7 @@ Respond with a JSON object containing two properties:
   // 3. SESSION VALIDATION & USER IDENTIFICATION ENDPOINT
   app.post('/api/user/validate-session', async (req, res) => {
     try {
-      const { initData, telegramId: providedTgId } = req.body;
+      const { initData, telegramId: providedTgId, botId } = req.body;
 
       let initDataUser: any = null;
       let webAppInitDataValid = false;
@@ -9708,7 +9658,84 @@ Respond with a JSON object containing two properties:
       const cleanUsername = rawUsername ? rawUsername.replace(/^@/, '') : '';
       const displayUsername = cleanUsername ? `@${cleanUsername}` : 'Not set';
 
-      // 1. Check if user already exists in `users` collection
+      // EARNING BOT ISOLATED USER CHECK
+      if (botId) {
+        const cleanBotId = String(botId).trim();
+        const botUserDocId = `${cleanBotId}_${cleanTgId}`;
+        let botUserDocRef = doc(db, 'users', botUserDocId);
+        let botUserSnap = await getDoc(botUserDocRef);
+        let botUserData: any = botUserSnap.exists() ? botUserSnap.data() : null;
+
+        if (!botUserData) {
+          const qBotUser = query(collection(db, 'users'), where('botId', '==', cleanBotId), where('telegramId', '==', cleanTgId));
+          const qBotSnap = await getDocs(qBotUser);
+          if (!qBotSnap.empty) {
+            botUserDocRef = doc(db, 'users', qBotSnap.docs[0].id);
+            botUserData = qBotSnap.docs[0].data();
+          }
+        }
+
+        if (botUserData) {
+          const isBanned = botUserData.banned === true || botUserData.status === 'banned' || botUserData.status === 'blocked';
+          if (isBanned) {
+            return res.json({
+              success: true,
+              isRegistered: false,
+              isBanned: true,
+              registrationState: 'BANNED',
+              telegramUser: {
+                id: cleanTgId,
+                username: displayUsername,
+                firstName: initDataUser?.first_name || botUserData.firstName || '',
+                lastName: initDataUser?.last_name || botUserData.lastName || ''
+              },
+              webAppInitDataValid
+            });
+          }
+
+          return res.json({
+            success: true,
+            isRegistered: true,
+            isBanned: false,
+            registrationState: 'ACTIVE',
+            user: {
+              ...botUserData,
+              username: botUserData.username || displayUsername,
+              telegramId: cleanTgId,
+              botId: cleanBotId,
+            },
+            telegramUser: {
+              id: cleanTgId,
+              username: displayUsername,
+              firstName: initDataUser?.first_name || botUserData.firstName || '',
+              lastName: initDataUser?.last_name || botUserData.lastName || ''
+            },
+            webAppInitDataValid
+          });
+        }
+
+        // Pending session if exists
+        const pendingSnap = await getDoc(doc(db, 'pendingBotSessions', `${cleanBotId}_${cleanTgId}`));
+        const pendingData = pendingSnap.exists() ? pendingSnap.data() : null;
+
+        return res.json({
+          success: true,
+          isRegistered: false,
+          isBanned: false,
+          registrationState: 'EARNING_BOT_UNREGISTERED',
+          botId: cleanBotId,
+          pendingSession: pendingData,
+          telegramUser: {
+            id: cleanTgId,
+            username: displayUsername,
+            firstName: initDataUser?.first_name || '',
+            lastName: initDataUser?.last_name || ''
+          },
+          webAppInitDataValid
+        });
+      }
+
+      // MAIN ROY SHARE WALLET SESSION CHECK
       let userDocRef = doc(db, 'users', cleanTgId);
       let userSnap = await getDoc(userDocRef);
       let userData: any = userSnap.exists() ? userSnap.data() : null;

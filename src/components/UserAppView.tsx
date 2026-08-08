@@ -20,7 +20,8 @@ import {
   Send,
   Timer,
   Key,
-  ArrowRight
+  ArrowRight,
+  Bot
 } from 'lucide-react';
 
 interface UserAppViewProps {
@@ -257,6 +258,50 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       setIsSubmittingReg(false);
     }
   };
+
+  const handleRegisterEarningBotUser = async () => {
+    if (!earningBotId) return;
+    setIsSubmittingReg(true);
+    setRegError(null);
+    try {
+      const tg = (window as any).Telegram?.WebApp;
+      const initData = tg?.initData || '';
+      const tgId = getTelegramUserId();
+
+      const res = await fetch('/api/earning-bots/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          botId: earningBotId,
+          initData,
+          telegramId: tgId,
+          firstName: tg?.initDataUnsafe?.user?.first_name || 'User',
+          username: tg?.initDataUnsafe?.user?.username || '',
+          deviceFingerprint: localStorage.getItem('roy_device_fp') || `fp_${tgId}_${Date.now()}`
+        })
+      });
+
+      const data = await res.json();
+      if (data.success && data.user) {
+        showToast(`🎉 Welcome to ${earningBotConfig?.botName || 'Earning Bot'}! Account activated!`, 'success');
+        setUser({
+          ...data.user,
+          userName: data.user.firstName || data.user.username || `User #${tgId}`,
+          avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${tgId}`,
+          walletBalance: Number(data.user.walletBalance) || 0,
+        });
+        setIsRegistered(true);
+        setRegistrationState('ACTIVE');
+      } else {
+        setRegError(data.error || 'Failed to activate account.');
+      }
+    } catch (err: any) {
+      setRegError(err.message || 'An error occurred during account activation.');
+    } finally {
+      setIsSubmittingReg(false);
+    }
+  };
+
   const [otpCode, setOtpCode] = useState<string>('');
   const [otpExpiryTimer, setOtpExpiryTimer] = useState<number>(0);
   const [isGeneratingOtp, setIsGeneratingOtp] = useState(false);
@@ -742,14 +787,18 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       const res = await fetch('/api/user/validate-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ initData, telegramId: tgId })
+        body: JSON.stringify({ initData, telegramId: tgId, botId: earningBotId })
       });
 
       const data = await res.json();
       if (data.success) {
         setRegistrationState(data.registrationState);
 
-        if (data.registrationState === 'BANNED' || data.isBanned) {
+        if (data.registrationState === 'EARNING_BOT_UNREGISTERED') {
+          setIsRegistered(false);
+          setUser(null);
+          setRegistrationState('EARNING_BOT_UNREGISTERED');
+        } else if (data.registrationState === 'BANNED' || data.isBanned) {
           setIsRegistered(false);
           setUser(null);
         } else if (data.registrationState === 'PENDING_SECURITY_REVIEW') {
@@ -1382,6 +1431,81 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
   // UNREGISTERED OR PENDING REGISTRATION USERS
   if (!isRegistered || !user) {
+    if (earningBotId || registrationState === 'EARNING_BOT_UNREGISTERED') {
+      const botTitle = earningBotConfig?.botName || earningBotConfig?.botFirstName || 'Earning Bot';
+      const regBonus = earningBotConfig?.registrationBonus ?? 0;
+      const refBonus = earningBotConfig?.referralReward ?? 0;
+      const minWith = earningBotConfig?.minWithdrawal ?? 100;
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-white font-sans flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800/80 rounded-3xl p-6 shadow-2xl space-y-6">
+            {/* Bot Header */}
+            <div className="text-center space-y-2">
+              <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center text-slate-950 mx-auto shadow-xl shadow-emerald-500/20">
+                <Bot className="w-9 h-9" />
+              </div>
+              <div className="inline-block px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-black uppercase tracking-wider">
+                🤖 Isolated Earning Bot
+              </div>
+              <h1 className="text-2xl font-black tracking-tight text-white">
+                {botTitle}
+              </h1>
+              <p className="text-xs text-slate-400">
+                Welcome! Activate your earning account to claim your signup bonus & start earning instant rewards.
+              </p>
+            </div>
+
+            {/* Error Alert */}
+            {regError && (
+              <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center gap-2">
+                <span className="text-rose-400 text-base">❌</span>
+                <span>{regError}</span>
+              </div>
+            )}
+
+            {/* Earning Bot Highlights Box */}
+            <div className="space-y-3 bg-slate-950/80 p-4 rounded-2xl border border-slate-800">
+              <div className="flex items-center justify-between text-xs p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                <span className="text-slate-400 font-medium">🎁 Signup Welcome Bonus</span>
+                <span className="font-black text-amber-400 text-sm">₹{regBonus}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                <span className="text-slate-400 font-medium">👥 Per Referral Bonus</span>
+                <span className="font-black text-emerald-400 text-sm">₹{refBonus}</span>
+              </div>
+              <div className="flex items-center justify-between text-xs p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                <span className="text-slate-400 font-medium">⚡ Minimum Withdrawal</span>
+                <span className="font-black text-sky-400 text-sm">₹{minWith}</span>
+              </div>
+            </div>
+
+            {/* Security Note */}
+            <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800 text-[11px] text-slate-400 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Isolated bot wallet linked to your Telegram account.</span>
+            </div>
+
+            {/* Action Button */}
+            <button
+              onClick={handleRegisterEarningBotUser}
+              disabled={isSubmittingReg}
+              className="w-full py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl shadow-emerald-500/20 transition disabled:opacity-50 cursor-pointer"
+            >
+              {isSubmittingReg ? (
+                <span>Activating Account...</span>
+              ) : (
+                <>
+                  <span>🚀 START EARNING NOW (CLAIM ₹{regBonus} BONUS)</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-slate-950 text-white font-sans flex items-center justify-center p-4">
         <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-6">
@@ -1617,6 +1741,19 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
             </div>
           </div>
         </div>
+
+        {/* Earning Bot Isolated Badge */}
+        {earningBotId && (
+          <div className="mt-3 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-xs text-emerald-300">
+            <div className="flex items-center gap-2 font-bold">
+              <Bot className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Connected Bot: <b>{earningBotConfig?.botName || 'Ultra Pay user'}</b> {earningBotConfig?.botUsername ? `(@${earningBotConfig.botUsername.replace(/^@/,'')})` : ''}</span>
+            </div>
+            <span className="text-[9px] font-black uppercase bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded">
+              Isolated
+            </span>
+          </div>
+        )}
 
         {/* Global Balance Stats Grid */}
         <div className="grid grid-cols-3 gap-3 mt-6">
