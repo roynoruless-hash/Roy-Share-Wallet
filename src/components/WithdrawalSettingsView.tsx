@@ -50,7 +50,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
   const [withdrawals, setWithdrawals] = useState<WithdrawalRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'all' | 'Pending' | 'Approved' | 'Rejected'>('Pending');
-  const [methodFilter, setMethodFilter] = useState<'all' | 'upi' | 'qr' | 'redeem_code'>('all');
+  const [methodFilter, setMethodFilter] = useState<'all' | 'upi' | 'qr' | 'redeem_code' | 'ultra_pay'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -154,7 +154,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
       (statusLower === 'completed' && filterLower === 'approved') ||
       (statusLower === 'approved' && filterLower === 'approved');
 
-    const itemMethod = w.method || 'upi';
+    const itemMethod = String(w.method || 'upi').toLowerCase();
     const matchesMethod = methodFilter === 'all' || itemMethod === methodFilter;
 
     const q = searchQuery.toLowerCase().trim();
@@ -385,7 +385,8 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
     const headers = ['Withdrawal ID', 'UID', 'Telegram ID', 'Username', 'Name', 'Amount', 'Fee', 'Final Payout', 'Method', 'Payout Destination', 'Status', 'Requested Time'];
     
     const rows = filteredWithdrawals.map(w => {
-      const payoutDest = w.method === 'upi' ? w.upiId : (w.method === 'redeem_code' ? w.redeemCodeDetails : 'QR Code Image Upload');
+      const m = String(w.method || 'upi').toLowerCase();
+      const payoutDest = m === 'upi' ? (w.upiId || '') : (m === 'redeem_code' ? (w.redeemCodeDetails || '') : ((m === 'ultra_pay' || m === 'ultrapay') ? (w.paytoNumber || w.paymentDetails?.paytoNumber || '') : 'QR Code Image Upload'));
       return [
         w.withdrawalId || w.requestId || '',
         w.uid || '',
@@ -1060,6 +1061,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
               <option value="upi">💳 UPI ID</option>
               <option value="qr">🖼 QR Code</option>
               <option value="redeem_code">🎁 Redeem Code</option>
+              <option value="ultra_pay">⚡ Ultra Pay</option>
             </select>
 
             {/* CSV Export */}
@@ -1188,7 +1190,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                   const isProcessing = processingId === w.id;
                   const isSelected = selectedIds.includes(w.id!);
                   const isPending = String(w.status).toLowerCase() === 'pending';
-                  const method = w.method || 'upi';
+                  const method = String(w.method || 'upi').toLowerCase();
 
                   return (
                     <tr
@@ -1268,6 +1270,56 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                             {w.redeemCodeDetails || 'N/A'}
                           </span>
                         )}
+                        {(method === 'ultra_pay' || method === 'ultrapay') && (() => {
+                          const payNumber = w.paytoNumber || w.paymentDetails?.paytoNumber;
+                          if (!payNumber) {
+                            return <span className="text-slate-500 italic text-[11.5px] font-bold bg-slate-950 p-2 rounded-xl border border-slate-900 block max-w-[200px]">Details unavailable for legacy request</span>;
+                          }
+                          const maskPayNumber = (num: string) => {
+                            const clean = String(num).trim();
+                            if (clean.length >= 4) {
+                              return '*'.repeat(clean.length - 4) + clean.slice(-4);
+                            }
+                            return clean;
+                          };
+                          const amountVal = w.payoutAmount !== undefined ? w.payoutAmount : (w.finalPayout !== undefined ? w.finalPayout : w.amount);
+                          return (
+                            <div className="bg-slate-950 p-3 rounded-2xl border border-amber-500/20 text-[10.5px] text-slate-300 space-y-1.5 max-w-[250px] leading-relaxed select-all">
+                              <div className="flex justify-between border-b border-slate-850 pb-1.5 mb-1">
+                                <span className="text-amber-400 font-black tracking-wider uppercase text-[9.5px]">Method</span>
+                                <span className="font-extrabold text-white text-[11px]">ULTRA PAY</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-medium">Pay Number</span>
+                                <span className="font-black text-slate-200">{maskPayNumber(payNumber)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-medium">Amount</span>
+                                <span className="font-black text-emerald-400">₹{amountVal}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-medium">Gateway Status</span>
+                                <span className="font-black text-orange-400 uppercase tracking-wide">
+                                  {w.status === 'PENDING' ? 'PENDING' : w.status}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-medium">Withdrawal ID</span>
+                                <span className="font-mono text-slate-400">{w.id || w.withdrawalId || 'N/A'}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-medium">Gateway Ref</span>
+                                <span className="font-mono text-slate-400 truncate max-w-[120px]" title={w.providerReference || 'Not yet assigned'}>
+                                  {w.providerReference || 'Gateway Reference: Not yet assigned'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between pt-1 border-t border-slate-850 text-[9px] text-slate-500 mt-1">
+                                <span className="font-medium">Requested At</span>
+                                <span>{w.createdAt ? new Date(w.createdAt).toLocaleString() : 'N/A'}</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Requested Amount -> Platform Fee -> Payout Value */}
