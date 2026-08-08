@@ -94,12 +94,11 @@ export async function sendCreateAccountPrompt(token: string, chatId: string | nu
   const miniAppUrl = `${baseUrl}/?action=register&tgId=${chatId}`;
 
   const welcomeText =
-    `━━━━━━━━━━━━━━━━━━\n` +
+    `✅ <b>Membership Verified!</b>\n\n` +
     `👋 <b>Welcome to Roy Share Wallet</b>\n\n` +
-    `Before using Roy Share Wallet you must create your account.\n\n` +
-    `Tap below.\n\n` +
-    `🌐 <b>Create Account</b>\n` +
-    `━━━━━━━━━━━━━━━━━━`;
+    `Your membership has been verified.\n\n` +
+    `Please create your account securely using our Registration Mini App.\n\n` +
+    `🌐 <b>Open Registration Mini App</b>`;
 
   await sendTelegramApi(token, 'sendMessage', {
     chat_id: chatId,
@@ -837,20 +836,8 @@ export async function processTelegramUpdate(token: string, update: any) {
             });
           }
         } else {
-          // Onboarding registration flow for unregistered user
-          const currentSess = userSessions.get(chatId);
-          userSessions.set(chatId, {
-            ...currentSess,
-            step: 'WAITING_NAME',
-            channelVerified: true,
-            groupVerified: true,
-          } as any);
-
-          await sendTelegramApi(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `👋 <b>Welcome to Roy Share Wallet Bot!</b>\n\nLet's complete your registration to submit your vote.\n\n<b>Step 1/3:</b> Please enter your <b>Full Name</b>:`,
-            parse_mode: 'HTML',
-          });
+          // Unregistered user -> Prompt to open Registration Mini App
+          await sendCreateAccountPrompt(token, chatId);
         }
       } else {
         await sendTelegramApi(token, 'answerCallbackQuery', {
@@ -1522,57 +1509,49 @@ Final Payout: ₹${payoutAmount}`);
   console.log('[TELEGRAM WEBHOOK] Incoming RAW UPDATE:', JSON.stringify(update));
   console.log('[TELEGRAM WEBHOOK] Message Text:', text, 'Chat ID:', chatId);
 
-  // Enforce Required Join check for all messages except when completing the onboarding registration steps
-  const session = userSessions.get(chatId);
-  const isOnboardingMessage = session && 
-    ((session.step as any) === 'WAITING_NAME' || (session.step as any) === 'WAITING_MOBILE' || (session.step as any) === 'WAITING_CONTACT' || (session.step as any) === 'WAITING_OTP') &&
-    !text.startsWith('/') &&
-    !['👛 Wallet', '💸 Withdraw', '🎁 Refer & Earn', '☎ Contact Us', '🏆 Contests', '⚔️ Giveaway War', '👥 Open Waiting Lobby'].includes(text);
-
-  if (!isOnboardingMessage) {
-    const verifyRes = await verifyUserSmartJoin(token, chatId, existingUser);
-    if (!verifyRes.verified) {
-      if (text.startsWith('/start')) {
-        let startParam = '';
-        const parts = text.split(/\s+/);
-        if (parts.length > 1 && parts[1]) {
-          startParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
-        } else {
-          const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
-          if (match && match[1] && match[1].toLowerCase() !== '/start') {
-            startParam = match[1].trim();
-          }
-        }
-
-        if (startParam) {
-          const sess = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
-          
-          if (startParam.startsWith('vote_')) {
-            const vParts = startParam.split('_');
-            sess.pendingVote = { contestId: vParts[1], contestantId: vParts[2] };
-          } else if (detectWarPayloadType(startParam)) {
-            const warParam = await parseWarStartParam(startParam);
-            if (warParam) {
-              sess.pendingWarJoin = { warId: warParam.warId, teamId: warParam.teamId, inviterTgId: warParam.inviterTgId };
-            }
-          } else {
-            const referrer = await getUserByUid(startParam);
-            if (referrer) {
-              sess.referrerUid = String(referrer.uid);
-            }
-          }
-          userSessions.set(chatId, sess);
+  // Enforce Required Join check for all non-verified messages
+  const verifyRes = await verifyUserSmartJoin(token, chatId, existingUser);
+  if (!verifyRes.verified) {
+    if (text.startsWith('/start')) {
+      let startParam = '';
+      const parts = text.split(/\s+/);
+      if (parts.length > 1 && parts[1]) {
+        startParam = parts[1].replace(/^(?:start=|\?start=)/i, '').trim();
+      } else {
+        const match = text.match(/^\/start(?:=|\?start=)?(\S+)/i);
+        if (match && match[1] && match[1].toLowerCase() !== '/start') {
+          startParam = match[1].trim();
         }
       }
 
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: buildForceJoinText(verifyRes.missingItems, existingUser !== null),
-        parse_mode: 'HTML',
-        reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
-      });
-      return;
+      if (startParam) {
+        const sess = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
+        
+        if (startParam.startsWith('vote_')) {
+          const vParts = startParam.split('_');
+          sess.pendingVote = { contestId: vParts[1], contestantId: vParts[2] };
+        } else if (detectWarPayloadType(startParam)) {
+          const warParam = await parseWarStartParam(startParam);
+          if (warParam) {
+            sess.pendingWarJoin = { warId: warParam.warId, teamId: warParam.teamId, inviterTgId: warParam.inviterTgId };
+          }
+        } else {
+          const referrer = await getUserByUid(startParam);
+          if (referrer) {
+            sess.referrerUid = String(referrer.uid);
+          }
+        }
+        userSessions.set(chatId, sess);
+      }
     }
+
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: buildForceJoinText(verifyRes.missingItems, existingUser !== null),
+      parse_mode: 'HTML',
+      reply_markup: buildForceJoinKeyboard(verifyRes.missingItems),
+    });
+    return;
   }
 
   // A. COMMAND: /start
