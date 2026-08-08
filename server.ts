@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { processTelegramUpdate, sendTelegramApi } from './src/server/botHandler';
+import { resolveEarningBotReferrer } from './src/server/earningBotHandler';
 import { getReferralTokenInfo, processReferralVerification } from './src/server/referralVerification';
 import { getMilestoneTokenInfo, processMilestoneClaim } from './src/server/milestoneVerification';
 import { approveWithdrawal, rejectWithdrawal } from './src/server/withdrawalHandler';
@@ -4987,21 +4988,27 @@ Respond with a JSON object containing two properties:
   app.get('/api/user/withdrawals/config', async (req, res) => {
     try {
       const tgId = (req.query.telegramId as string) || (req.headers['x-telegram-id'] as string);
-      const botId = (req.query.botId as string) || (req.headers['x-bot-id'] as string) || '';
+      const botId = (req.query.botId as string) || (req.query.earningBotId as string) || (req.headers['x-bot-id'] as string) || '';
       const cleanTgId = tgId ? String(tgId).trim() : '';
+      const cleanBotId = botId ? String(botId).trim() : '';
 
       const configData = await getDecryptedConfig();
       const settings = getV2WithdrawalSettings(configData);
 
       // Earning Bot Settings Override
-      if (botId) {
+      if (cleanBotId) {
         try {
-          const botSnap = await getDoc(doc(db, 'earningBots', String(botId).trim()));
+          const botSnap = await getDoc(doc(db, 'earningBots', cleanBotId));
           if (botSnap.exists()) {
             const b = botSnap.data();
-            const min = Number(b.minWithdrawal) || 100;
+            const min = Number(b.minWithdrawal) || 10;
             const tax = Number(b.withdrawalTax) || 0;
             const methods = Array.isArray(b.withdrawalMethods) ? b.withdrawalMethods : ['UPI'];
+            const botStatus = b.status || 'active';
+
+            const isActive = (botStatus === 'active' || botStatus === 'ACTIVE');
+            settings.allWithdrawalsEnabled = isActive;
+            settings.globalWithdrawalsEnabled = isActive;
 
             settings.upi.min = min;
             settings.upi.tax = tax;
@@ -5009,7 +5016,7 @@ Respond with a JSON object containing two properties:
 
             settings.qr.min = min;
             settings.qr.tax = tax;
-            settings.qr.enabled = methods.includes('UPI');
+            settings.qr.enabled = methods.includes('QR');
 
             settings.redeem.min = min;
             settings.redeem.tax = tax;
@@ -5029,11 +5036,8 @@ Respond with a JSON object containing two properties:
       let userStatus = { isRegistered: false, status: 'UNREGISTERED', mobileVerified: false };
 
       if (cleanTgId) {
-        const userDocId = botId ? `${botId}_${cleanTgId}` : cleanTgId;
-        let userSnap = await getDoc(doc(db, 'users', userDocId));
-        if (!userSnap.exists() && botId) {
-          userSnap = await getDoc(doc(db, 'users', cleanTgId));
-        }
+        const userDocId = cleanBotId ? `${cleanBotId}_${cleanTgId}` : cleanTgId;
+        const userSnap = await getDoc(doc(db, 'users', userDocId));
         if (userSnap.exists()) {
           const u = userSnap.data();
           walletBalance = Number(u.walletBalance) || 0;
@@ -5041,7 +5045,7 @@ Respond with a JSON object containing two properties:
           userStatus = {
             isRegistered: true,
             status: u.status || 'ACTIVE',
-            mobileVerified: u.mobileVerified === true || Boolean(u.mobile),
+            mobileVerified: cleanBotId ? true : (u.mobileVerified === true || Boolean(u.mobile)),
           };
         }
       }
@@ -5069,6 +5073,7 @@ Respond with a JSON object containing two properties:
     try {
       const { telegramId, method, amount, paymentDetails, idempotencyKey } = req.body;
       const cleanTgId = telegramId ? String(telegramId).trim() : '';
+      const botId = (req.body.botId || req.body.earningBotId) ? String(req.body.botId || req.body.earningBotId).trim() : '';
 
       if (!cleanTgId) {
         return res.status(400).json({ success: false, error: 'Telegram ID is required.' });
@@ -5090,7 +5095,6 @@ Respond with a JSON object containing two properties:
         const idempSnap = await getDocs(idempQuery);
         if (!idempSnap.empty) {
           const existing = idempSnap.docs[0].data();
-          console.log(`[Idempotency Guard] Blocked duplicate submission for key: ${idempotencyKey}`);
           return res.json({
             success: true,
             duplicated: true,
@@ -5100,130 +5104,108 @@ Respond with a JSON object containing two properties:
         }
       }
 
-      // Fetch Config & Settings
-      const configData = await getDecryptedConfig();
-      const settings = getV2WithdrawalSettings(configData);
-
-      // Check Global Switch
-      if (!settings.allWithdrawalsEnabled) {
-        return res.status(400).json({
-          success: false,
-          error: '🔧 Withdrawals Temporarily Unavailable\n\nWithdrawal service is currently under maintenance. Please try again later.',
-        });
-      }
-
-      const botId = req.body.botId || '';
-      const targetUserDocId = req.body.userDocId || (botId ? `${botId}_${cleanTgId}` : cleanTgId);
-
-      // Verify Account Eligibility
+      const targetUserDocId = botId ? `${botId}_${cleanTgId}` : cleanTgId;
       let userRef = doc(db, 'users', targetUserDocId);
       let userSnap = await getDoc(userRef);
-      if (!userSnap.exists() && botId) {
-        userRef = doc(db, 'users', cleanTgId);
-        userSnap = await getDoc(userRef);
-      }
+
       if (!userSnap.exists()) {
         return res.status(400).json({ success: false, error: 'User account not found.' });
       }
 
       const uData = userSnap.data();
-      if (uData.status !== 'active' || uData.banned === true || uData.suspended === true) {
-        return res.status(400).json({ success: false, error: 'Account is not ACTIVE or eligible for withdrawals.' });
-      }
 
-      if (!uData.mobileVerified && !uData.mobile) {
-        return res.status(400).json({ success: false, error: 'Mobile number verification is required before requesting withdrawals.' });
-      }
-
-      // Check Security Reviews
-      const reviewSnap = await getDoc(doc(db, 'securityReviews', cleanTgId));
-      if (reviewSnap.exists()) {
-        const rev = reviewSnap.data();
-        if (rev.status === 'PENDING') {
-          return res.status(400).json({ success: false, error: 'Your account registration is under Security Review. Withdrawals are disabled until approved.' });
-        } else if (rev.status === 'REJECTED') {
-          return res.status(400).json({ success: false, error: 'Your account registration request was rejected by Admin.' });
-        }
-      }
-
-      // Method specific verification & fee lookup
+      // Settings lookup based on whether it's an Earning Bot or Roy Share Wallet
       let methodCfg: { enabled: boolean; min: number; feeType: 'PERCENTAGE' | 'FIXED'; fee: number; tax: number };
+      let botData: any = null;
+
+      if (botId) {
+        const botSnap = await getDoc(doc(db, 'earningBots', botId));
+        if (!botSnap.exists()) {
+          return res.status(400).json({ success: false, error: 'Earning Bot configuration not found.' });
+        }
+        botData = botSnap.data();
+        if (botData.status !== 'active' && botData.status !== 'ACTIVE') {
+          return res.status(400).json({ success: false, error: 'Withdrawals are currently paused for this bot.' });
+        }
+
+        const min = Number(botData.minWithdrawal) || 10;
+        const tax = Number(botData.withdrawalTax) || 0;
+        const methods: string[] = Array.isArray(botData.withdrawalMethods) ? botData.withdrawalMethods : ['UPI'];
+
+        let isAllowed = false;
+        if (normMethod === 'UPI' && methods.includes('UPI')) isAllowed = true;
+        if (normMethod === 'QR' && methods.includes('QR')) isAllowed = true;
+        if (normMethod === 'REDEEM_CODE' && methods.includes('REDEEM_CODE')) isAllowed = true;
+        if (normMethod === 'ULTRA_PAY' && methods.includes('ULTRA_PAY')) isAllowed = true;
+
+        if (!isAllowed) {
+          return res.status(400).json({ success: false, error: `Method ${normMethod} is not enabled for this Earning Bot.` });
+        }
+
+        methodCfg = {
+          enabled: true,
+          min,
+          feeType: 'PERCENTAGE',
+          fee: 0,
+          tax,
+        };
+      } else {
+        const configData = await getDecryptedConfig();
+        const settings = getV2WithdrawalSettings(configData);
+
+        if (!settings.allWithdrawalsEnabled) {
+          return res.status(400).json({
+            success: false,
+            error: '🔧 Withdrawals Temporarily Unavailable\n\nWithdrawal service is currently under maintenance. Please try again later.',
+          });
+        }
+
+        if (normMethod === 'UPI') methodCfg = settings.upi as any;
+        else if (normMethod === 'QR') methodCfg = settings.qr as any;
+        else if (normMethod === 'REDEEM_CODE') methodCfg = settings.redeem as any;
+        else if (normMethod === 'ULTRA_PAY') methodCfg = settings.ultraPay as any;
+        else return res.status(400).json({ success: false, error: 'Invalid payment method selected.' });
+      }
+
+      // Payment details verification
       if (normMethod === 'UPI') {
-        methodCfg = settings.upi as any;
         const upiId = String(paymentDetails?.upiId || '').trim();
         if (!upiId || !/^\S+@\S+$/.test(upiId)) {
           return res.status(400).json({ success: false, error: 'Please enter a valid UPI ID (e.g. name@upi).' });
         }
-      } else if (normMethod === 'QR') {
-        methodCfg = settings.qr as any;
-        const qrData = String(paymentDetails?.qrData || paymentDetails?.qrUrl || '').trim();
-        if (!qrData) {
-          return res.status(400).json({ success: false, error: 'Please upload or provide valid QR code details.' });
-        }
-      } else if (normMethod === 'REDEEM_CODE') {
-        methodCfg = settings.redeem as any;
       } else if (normMethod === 'ULTRA_PAY') {
-        methodCfg = settings.ultraPay as any;
         const paytoNumber = String(paymentDetails?.paytoNumber || '').trim();
         if (!paytoNumber || !/^\d{10}$/.test(paytoNumber)) {
           return res.status(400).json({ success: false, error: 'Please enter a valid 10-digit mobile number registered with Ultra Pay.' });
         }
-      } else {
-        return res.status(400).json({ success: false, error: 'Selected payment method is invalid.' });
-      }
-
-      if (!methodCfg.enabled) {
-        return res.status(400).json({ success: false, error: `The ${normMethod} withdrawal method is currently disabled.` });
       }
 
       if (numAmount < methodCfg.min) {
         return res.status(400).json({ success: false, error: `Minimum withdrawal amount for ${normMethod} is ₹${methodCfg.min}.` });
       }
 
-      if (settings.maxSingleWithdrawal > 0 && numAmount > settings.maxSingleWithdrawal) {
-        return res.status(400).json({ success: false, error: `Maximum single withdrawal limit is ₹${settings.maxSingleWithdrawal}.` });
+      // Pending withdrawal check for this specific bot context
+      const pendingQ = botId
+        ? query(collection(db, 'withdrawals'), where('telegramId', '==', cleanTgId), where('earningBotId', '==', botId), where('status', '==', 'PENDING'))
+        : query(collection(db, 'withdrawals'), where('telegramId', '==', cleanTgId), where('earningBotId', '==', ''), where('status', '==', 'PENDING'));
+      const pendingSnap = await getDocs(pendingQ);
+      if (pendingSnap.size >= 1) {
+        return res.status(400).json({
+          success: false,
+          error: 'You already have a pending withdrawal request. Please wait for admin approval before submitting another.',
+        });
       }
 
-      // Check max pending requests
-      if (settings.maxPendingWithdrawals > 0) {
-        const pendingQ = query(
-          collection(db, 'withdrawals'),
-          where('telegramId', '==', cleanTgId),
-          where('status', '==', 'PENDING')
-        );
-        const pendingSnap = await getDocs(pendingQ);
-        if (pendingSnap.size >= settings.maxPendingWithdrawals) {
-          return res.status(400).json({
-            success: false,
-            error: `You already have ${pendingSnap.size} pending withdrawal request(s). Please wait for admin approval before submitting another.`,
-          });
-        }
-      }
-
-      // Calculate Fees and Payout Server-Side
       const processingFee = methodCfg.feeType === 'PERCENTAGE'
         ? Number(((numAmount * methodCfg.fee) / 100).toFixed(2))
         : Number(methodCfg.fee);
-
       const taxAmount = Number(((numAmount * methodCfg.tax) / 100).toFixed(2));
-
-      let amountRequested = numAmount;
-      let finalPayout = 0;
-      let totalDeduction = 0;
-
-      if (settings.calculationModel === 'OPTION_B') {
-        // Option B: Fee added to wallet deduction
-        finalPayout = numAmount;
-        totalDeduction = Number((numAmount + processingFee + taxAmount).toFixed(2));
-      } else {
-        // Option A (Default): Fee deducted from requested amount
-        amountRequested = numAmount;
-        finalPayout = Number((numAmount - processingFee - taxAmount).toFixed(2));
-        totalDeduction = numAmount;
-      }
+      const amountRequested = numAmount;
+      const finalPayout = Number((numAmount - processingFee - taxAmount).toFixed(2));
+      const totalDeduction = numAmount;
 
       if (finalPayout <= 0) {
-        return res.status(400).json({ success: false, error: 'Payout amount after fees and taxes must be greater than ₹0.' });
+        return res.status(400).json({ success: false, error: 'Payout amount after tax must be greater than ₹0.' });
       }
 
       const withdrawalId = `WD-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
@@ -5232,9 +5214,10 @@ Respond with a JSON object containing two properties:
       const newWithdrawalRecord: any = {
         id: withdrawalId,
         withdrawalId,
-        uid: uData.appUid || uData.uid || cleanTgId,
+        earningBotId: botId || '',
+        uid: targetUserDocId,
         telegramId: cleanTgId,
-        fullName: uData.fullName || uData.firstName || 'User',
+        fullName: uData.fullName || uData.firstName || uData.userName || 'User',
         username: uData.username || '',
         mobile: uData.mobile || '',
         gmail: uData.gmail || '',
@@ -5244,28 +5227,23 @@ Respond with a JSON object containing two properties:
         taxAmount,
         finalPayout,
         totalDeduction,
-        calculationModel: settings.calculationModel,
         method: normMethod as any,
         upiId: paymentDetails?.upiId || '',
         qrData: paymentDetails?.qrData || paymentDetails?.qrUrl || '',
-        qrImageUrl: paymentDetails?.qrUrl || '',
         paytoNumber: paymentDetails?.paytoNumber || '',
         paymentDetails: {
           upiId: paymentDetails?.upiId || '',
           qrData: paymentDetails?.qrData || paymentDetails?.qrUrl || '',
-          qrUrl: paymentDetails?.qrUrl || '',
           paytoNumber: paymentDetails?.paytoNumber || '',
         },
         currentWalletBalance: Number(uData.walletBalance) || 0,
         status: 'PENDING',
-        riskStatus: uData.riskStatus || 'LOW',
         createdAt: nowIso,
         updatedAt: nowIso,
-        idempotencyKey: idempotencyKey || `withdrawal:${cleanTgId}:${Date.now()}`,
+        idempotencyKey: idempotencyKey || `withdrawal:${botId}:${cleanTgId}:${Date.now()}`,
         providerPaymentStarted: false,
       };
 
-      // Perform Atomic Transaction: Lock Balance & Save Withdrawal
       let updatedAvailable = 0;
       await runTransaction(db, async (transaction) => {
         const uSnap = await transaction.get(userRef);
@@ -5285,21 +5263,19 @@ Respond with a JSON object containing two properties:
         const newLock = currentLock + totalDeduction;
         updatedAvailable = currentBal - newLock;
 
-        // Update user locked balance
         transaction.update(userRef, {
           lockedBalance: newLock,
           updatedAt: nowIso,
         });
 
-        // Set withdrawal doc
         const wDocRef = doc(db, 'withdrawals', withdrawalId);
         transaction.set(wDocRef, newWithdrawalRecord);
       });
 
-      // Record immutable ledger entry for hold
       try {
         await recordWalletTransaction({
-          uid: uData.appUid || uData.uid || cleanTgId,
+          uid: targetUserDocId,
+          botId: botId || undefined,
           type: 'Withdrawal Hold',
           amount: -totalDeduction,
           status: 'pending',
@@ -5310,20 +5286,20 @@ Respond with a JSON object containing two properties:
         console.warn('[Ledger Warning] Hold transaction log error:', txErr);
       }
 
-      // Notify User via Telegram
-      if (configData?.botToken) {
+      // Notify User via Telegram using the appropriate bot token
+      const botTokenToUse = botData?.token || (await getDecryptedConfig())?.botToken;
+      if (botTokenToUse) {
         const notifyMsg =
           `💸 <b>Withdrawal Request Submitted!</b>\n\n` +
           `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
           `💰 <b>Amount Requested:</b> ₹${amountRequested}\n` +
-          `⚡ <b>Processing Fee:</b> ₹${processingFee}\n` +
-          `🏛️ <b>Tax/Withholding:</b> ₹${taxAmount}\n` +
+          `🏛️ <b>Tax Deducted:</b> ₹${taxAmount}\n` +
           `🎁 <b>Final Payout:</b> ₹${finalPayout}\n` +
           `📌 <b>Method:</b> ${normMethod}\n` +
           `⏱ <b>Status:</b> PENDING APPROVAL\n\n` +
           `Your request has been submitted for verification.`;
 
-        await sendTelegramMessage(configData.botToken, cleanTgId, notifyMsg);
+        await sendTelegramMessage(botTokenToUse, cleanTgId, notifyMsg);
       }
 
       return res.json({
@@ -5342,26 +5318,46 @@ Respond with a JSON object containing two properties:
   app.get('/api/user/withdrawals/history', async (req, res) => {
     try {
       const tgId = (req.query.telegramId as string) || (req.headers['x-telegram-id'] as string);
+      const botId = (req.query.botId as string) || (req.query.earningBotId as string) || (req.headers['x-bot-id'] as string) || '';
       const cleanTgId = tgId ? String(tgId).trim() : '';
+      const cleanBotId = botId ? String(botId).trim() : '';
 
       if (!cleanTgId) {
         return res.status(400).json({ success: false, error: 'Telegram ID is required.' });
       }
 
-      const q = query(
-        collection(db, 'withdrawals'),
-        where('telegramId', '==', cleanTgId)
-      );
+      let q;
+      if (cleanBotId) {
+        q = query(
+          collection(db, 'withdrawals'),
+          where('telegramId', '==', cleanTgId),
+          where('earningBotId', '==', cleanBotId)
+        );
+      } else {
+        q = query(
+          collection(db, 'withdrawals'),
+          where('telegramId', '==', cleanTgId)
+        );
+      }
 
       const snap = await getDocs(q);
       const list: any[] = [];
       snap.forEach((d) => {
-        list.push({ id: d.id, ...(d.data() as any) });
+        const data = d.data() as any;
+        if (cleanBotId) {
+          if (data.earningBotId === cleanBotId) {
+            list.push({ id: d.id, ...data });
+          }
+        } else {
+          if (!data.earningBotId || data.earningBotId === '') {
+            list.push({ id: d.id, ...data });
+          }
+        }
       });
 
       list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
-      return res.json({ success: true, withdrawals: list });
+      return res.json({ success: true, withdrawals: list, records: list });
     } catch (err: any) {
       console.error('[API User Withdrawal History Error]:', err);
       return res.status(500).json({ success: false, error: err.message });
@@ -5371,10 +5367,22 @@ Respond with a JSON object containing two properties:
   // 4. ADMIN GET ALL WITHDRAWALS (PROTECTED)
   app.get('/api/admin/withdrawals', requireAdminSession, async (req, res) => {
     try {
+      const botId = (req.query.botId as string) || '';
+      const cleanBotId = botId ? String(botId).trim() : '';
+
       const snap = await getDocs(query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc')));
       const list: any[] = [];
       snap.forEach((d) => {
-        list.push({ id: d.id, ...(d.data() as any) });
+        const data = d.data() as any;
+        if (cleanBotId) {
+          if (data.earningBotId === cleanBotId) {
+            list.push({ id: d.id, ...data });
+          }
+        } else {
+          if (!data.earningBotId || data.earningBotId === '') {
+            list.push({ id: d.id, ...data });
+          }
+        }
       });
 
       return res.json({ success: true, withdrawals: list });
@@ -9177,16 +9185,33 @@ Respond with a JSON object containing two properties:
         return res.json({ success: true, user: userSnap.data(), isNew: false });
       }
 
+      // 7. Log Registration Completion
+      console.log(`[REFERRAL DEBUG] 7. registration completion triggered for user "${tgUserId}" on bot "${botId}"`);
+
       // Fetch verified details from pending session if available
       const pendingSnap = await getDoc(doc(db, 'pendingBotSessions', `${botId}_${tgUserId}`));
       let verifiedMobile = 'Verified Telegram';
-      let referrerUid = req.body.referrerUid || '';
+      let rawRefUid = req.body.referrerUid || '';
 
       if (pendingSnap.exists()) {
         const pData = pendingSnap.data();
         if (pData.phone) verifiedMobile = pData.phone;
-        if (pData.referrerUid) referrerUid = pData.referrerUid;
+        if (pData.referrerTelegramId) rawRefUid = pData.referrerTelegramId;
+        else if (pData.referrerUid) rawRefUid = pData.referrerUid;
       }
+
+      // Resolve referrer
+      let resolvedReferrer: { telegramId: string; docId: string } | null = null;
+      if (rawRefUid && String(rawRefUid) !== String(tgUserId)) {
+        resolvedReferrer = await resolveEarningBotReferrer(bot, rawRefUid);
+      }
+
+      if (resolvedReferrer && String(resolvedReferrer.telegramId) === String(tgUserId)) {
+        resolvedReferrer = null; // Anti Self-referral
+      }
+
+      const referrerTgId = resolvedReferrer?.telegramId || '';
+      const refDocId = resolvedReferrer?.docId || '';
 
       // Duplicity and Device fingerprint constraints: ONE account per device/fingerprint if fingerprint supplied
       const fingerprint = String(deviceFingerprint || '').trim();
@@ -9216,8 +9241,8 @@ Respond with a JSON object containing two properties:
         totalWithdrawn: 0,
         channelVerified: true,
         groupVerified: true,
-        referrerUid: referrerUid || '',
-        referredBy: referrerUid || '',
+        referrerUid: referrerTgId || '',
+        referredBy: referrerTgId || '',
         referralRewardReceived: false,
         totalReferrals: 0,
         successfulReferrals: 0,
@@ -9244,74 +9269,171 @@ Respond with a JSON object containing two properties:
       }
 
       // Referral reward logic
-      if (referrerUid) {
+      if (referrerTgId && refDocId) {
         try {
-          // Look up Referrer
-          const rQuery = query(collection(db, 'users'), where('botId', '==', botId), where('uid', '==', referrerUid));
-          const rSnap = await getDocs(rQuery);
+          const referrerSnap = await getDoc(doc(db, 'users', refDocId));
+          if (referrerSnap.exists()) {
+            const referrerData = referrerSnap.data();
+            const refRecordId = `REF_${botId}_${tgUserId}`;
+            const refRecordRef = doc(db, 'botReferrals', refRecordId);
+            const refRecordSnap = await getDoc(refRecordRef);
 
-          if (!rSnap.empty) {
-            const referrerDoc = rSnap.docs[0];
-            const referrerData = referrerDoc.data();
-            const refDocId = referrerDoc.id;
-            const refTgId = referrerData.telegramId;
+            const isAlreadyValid = refRecordSnap.exists() && refRecordSnap.data()?.status === 'VALID';
 
-            // Enforce Daily Referral Limits (e.g. 50 per day)
-            const todayStr = nowIso.substring(0, 10);
-            const referralsTodayQuery = query(
-              collection(db, 'botReferrals'),
-              where('botId', '==', botId),
-              where('referrerTelegramId', '==', refTgId),
-              where('createdAt', '>=', todayStr)
-            );
-            const referralsTodaySnap = await getDocs(referralsTodayQuery);
-
-            const dailyLimit = Number(bot.dailyReferralLimit) || 50;
-            if (referralsTodaySnap.size < dailyLimit) {
+            if (!isAlreadyValid) {
               const refReward = Number(bot.referralReward) || 0;
-              if (refReward > 0) {
-                const currentBalance = Number(referrerData.walletBalance) || 0;
-                const currentTotalRefs = Number(referrerData.totalReferrals) || 0;
-                const currentRefEarnings = Number(referrerData.totalReferralEarnings) || 0;
 
-                await updateDoc(doc(db, 'users', refDocId), {
-                  walletBalance: currentBalance + refReward,
-                  totalReferrals: currentTotalRefs + 1,
-                  totalReferralEarnings: currentRefEarnings + refReward,
-                  lastActive: nowIso,
-                });
+              // Enforce Daily Referral Limits (e.g. 50 per day)
+              const todayStr = nowIso.substring(0, 10);
+              const referralsTodayQuery = query(
+                collection(db, 'botReferrals'),
+                where('botId', '==', botId),
+                where('referrerTelegramId', '==', referrerTgId),
+                where('status', '==', 'VALID'),
+                where('registrationCompletedAt', '>=', todayStr)
+              );
+              const referralsTodaySnap = await getDocs(referralsTodayQuery);
 
-                // Record referral transaction
-                await recordWalletTransaction({
-                  uid: refDocId,
+              const dailyLimit = Number(bot.dailyReferralLimit) || 50;
+              if (referralsTodaySnap.size < dailyLimit) {
+                // 8. Log Referral Status Transition
+                console.log(`[REFERRAL DEBUG] 8. referral status transition: PENDING -> VALID for user "${tgUserId}", referrer "${referrerTgId}", reward: ₹${refReward}`);
+
+                const validRefRecord = {
+                  id: refRecordId,
                   botId,
-                  type: 'REFERRAL_REWARD',
-                  amount: refReward,
-                  status: 'completed',
-                  description: `Referral Reward for user ${firstName}`,
-                  transactionId: `REF_${botId}_${tgUserId}_${Date.now()}`,
-                });
-
-                // Record in botReferrals collection
-                await setDoc(doc(collection(db, 'botReferrals')), {
-                  botId,
-                  referrerTelegramId: refTgId,
+                  referrerTelegramId: referrerTgId,
+                  referrerDocId: refDocId,
                   referredTelegramId: tgUserId,
                   referredName: firstName,
+                  status: 'VALID',
                   rewardAmount: refReward,
-                  createdAt: nowIso,
-                });
+                  rewardStatus: 'PAID',
+                  createdAt: refRecordSnap.exists() ? (refRecordSnap.data()?.createdAt || nowIso) : nowIso,
+                  registrationCompletedAt: nowIso,
+                };
+
+                await setDoc(refRecordRef, validRefRecord);
+
+                if (refReward > 0) {
+                  const currentBalance = Number(referrerData.walletBalance) || 0;
+                  const currentTotalRefs = Number(referrerData.totalReferrals) || 0;
+                  const currentRefEarnings = Number(referrerData.totalReferralEarnings) || 0;
+
+                  await updateDoc(doc(db, 'users', refDocId), {
+                    walletBalance: currentBalance + refReward,
+                    totalReferrals: currentTotalRefs + 1,
+                    successfulReferrals: Number(referrerData.successfulReferrals || 0) + 1,
+                    totalReferralEarnings: currentRefEarnings + refReward,
+                    lastActive: nowIso,
+                  });
+
+                  // 9. Log Reward Transaction Creation
+                  const txnId = `REF_${botId}_${tgUserId}`;
+                  await recordWalletTransaction({
+                    uid: refDocId,
+                    botId,
+                    type: 'REFERRAL_REWARD',
+                    amount: refReward,
+                    status: 'completed',
+                    description: `Referral Reward for user ${firstName}`,
+                    transactionId: txnId,
+                  });
+                  console.log(`[REFERRAL DEBUG] 9. reward transaction creation: TXN ID "${txnId}", amount ₹${refReward} for referrer "${referrerTgId}"`);
+
+                  // Send Telegram Notification to Referrer
+                  try {
+                    await sendTelegramApi(bot.token, 'sendMessage', {
+                      chat_id: referrerTgId,
+                      text: `🎉 <b>New Referral Registered!</b>\n\n` +
+                        `User <b>${firstName}</b> completed sign-up.\n` +
+                        `💰 <b>Reward Credit:</b> ₹${refReward} credited to your wallet balance!`,
+                      parse_mode: 'HTML',
+                    });
+                  } catch (e) {
+                    console.warn('[REFERRAL DEBUG] Failed to send Telegram notification to referrer:', e);
+                  }
+                }
+              } else {
+                console.warn(`[REFERRAL DEBUG] Referrer ${referrerTgId} reached daily referral limit of ${dailyLimit}`);
               }
             }
           }
         } catch (refErr) {
-          console.error('[earning-bots/register] Error processing referrer reward:', refErr);
+          console.error('[REFERRAL DEBUG Error processing referrer reward]:', refErr);
         }
       }
 
       return res.json({ success: true, user: newUser, isNew: true });
     } catch (err: any) {
       console.error('[earning-bots/register Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // GET Live Referral Statistics for an Earning Bot User
+  app.get('/api/earning-bots/referral-stats', async (req, res) => {
+    try {
+      const { botId, tgId } = req.query;
+      if (!botId || !tgId) {
+        return res.status(400).json({ success: false, error: 'Missing botId or tgId parameter' });
+      }
+
+      const cleanBotId = String(botId).trim();
+      const cleanTgId = String(tgId).trim();
+
+      const refCol = collection(db, 'botReferrals');
+      const q = query(refCol, where('botId', '==', cleanBotId), where('referrerTelegramId', '==', cleanTgId));
+      const snap = await getDocs(q);
+
+      let total = 0;
+      let valid = 0;
+      let pending = 0;
+      let rejected = 0;
+      let availableEarnings = 0;
+      let pendingEarnings = 0;
+
+      snap.forEach((dDoc) => {
+        const d = dDoc.data();
+        total++;
+        if (d.status === 'VALID') {
+          valid++;
+          availableEarnings += Number(d.rewardAmount) || 0;
+        } else if (d.status === 'PENDING') {
+          pending++;
+          pendingEarnings += Number(d.rewardAmount) || 0;
+        } else if (d.status === 'REJECTED') {
+          rejected++;
+        }
+      });
+
+      // Get bot details for referral link and reward
+      const botSnap = await getDoc(doc(db, 'earningBots', cleanBotId));
+      let botUsername = 'bot';
+      let referralReward = 0;
+      if (botSnap.exists()) {
+        const bData = botSnap.data();
+        botUsername = bData.botUsername ? bData.botUsername.replace(/^@/, '') : 'bot';
+        referralReward = Number(bData.referralReward) || 0;
+      }
+
+      const referralLink = `https://t.me/${botUsername}?start=ref_${cleanTgId}`;
+
+      return res.json({
+        success: true,
+        stats: {
+          total,
+          valid,
+          pending,
+          rejected,
+          availableEarnings,
+          pendingEarnings,
+          referralReward,
+        },
+        referralLink,
+      });
+    } catch (err: any) {
+      console.error('[referral-stats Error]:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });

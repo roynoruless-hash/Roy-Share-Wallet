@@ -88,6 +88,31 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       .catch((err) => console.error('Error fetching Earning Bot Config:', err));
   }, [earningBotId]);
 
+  // Earning Bot Referral Statistics
+  const [earningBotRefStats, setEarningBotRefStats] = useState<{
+    total: number;
+    valid: number;
+    pending: number;
+    rejected: number;
+    availableEarnings: number;
+    pendingEarnings: number;
+    referralReward: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (activeTab === 'referral' && earningBotId) {
+      const tgId = getTelegramUserId();
+      fetch(`/api/earning-bots/referral-stats?botId=${earningBotId}&tgId=${tgId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.stats) {
+            setEarningBotRefStats(data.stats);
+          }
+        })
+        .catch((err) => console.error('Error fetching earning bot referral stats:', err));
+    }
+  }, [activeTab, earningBotId]);
+
   // Form State for Withdrawals
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawMethod, setWithdrawMethod] = useState<'upi' | 'qr' | 'redeem_code' | 'ultra_pay'>('upi');
@@ -869,10 +894,15 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     try {
       const tgId = getTelegramUserId();
       if (!tgId) return;
-      const res = await fetch(`/api/user/withdrawals/history?telegramId=${encodeURIComponent(tgId)}`);
+      const url = earningBotId
+        ? `/api/user/withdrawals/history?telegramId=${encodeURIComponent(tgId)}&botId=${encodeURIComponent(earningBotId)}`
+        : `/api/user/withdrawals/history?telegramId=${encodeURIComponent(tgId)}`;
+      const res = await fetch(url);
       const data = await res.json();
       if (data.success && Array.isArray(data.records)) {
         setWithdrawHistory(data.records);
+      } else if (data.success && Array.isArray(data.withdrawals)) {
+        setWithdrawHistory(data.withdrawals);
       }
     } catch (err) {
       console.error('Failed to fetch withdrawal history:', err);
@@ -1058,11 +1088,23 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       const list: any[] = [];
       snap.forEach((docSnap) => {
         const d = docSnap.data();
-        list.push({
-          id: docSnap.id,
-          details: d.upiId || d.redeemCodeDetails || d.qrImageUrl || '',
-          ...d,
-        });
+        if (earningBotId) {
+          if (d.earningBotId === earningBotId) {
+            list.push({
+              id: docSnap.id,
+              details: d.upiId || d.redeemCodeDetails || d.qrImageUrl || '',
+              ...d,
+            });
+          }
+        } else {
+          if (!d.earningBotId || d.earningBotId === '') {
+            list.push({
+              id: docSnap.id,
+              details: d.upiId || d.redeemCodeDetails || d.qrImageUrl || '',
+              ...d,
+            });
+          }
+        }
       });
       list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       setWithdrawHistory(list);
@@ -1160,6 +1202,8 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           telegramId: tgId,
+          botId: earningBotId || '',
+          earningBotId: earningBotId || '',
           method: normMethod,
           amount: amt,
           paymentDetails,
@@ -1938,35 +1982,87 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
         {activeTab === 'referral' && (
           <div className="space-y-6">
-            {/* Invite Box */}
-            <div className="p-5 rounded-3xl bg-slate-900/40 border border-slate-800/60 text-center space-y-4">
-              <Users className="w-10 h-10 text-amber-400 mx-auto" />
-              <h2 className="text-base font-black text-white">Refer & Earn Real Cash</h2>
-              <p className="text-xs text-slate-400 leading-relaxed max-w-sm mx-auto">
-                Get ₹10 credited directly to your wallet for every friend who joins using your link. Claim huge milestone bonuses as your count grows!
-              </p>
-
-              <div className="pt-2">
-                <button
-                  onClick={handleCopyLink}
-                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg transition"
-                >
-                  {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                  <span>{copied ? 'Copied Link!' : 'Copy Personal Invite Link'}</span>
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-800/50">
-                <div>
-                  <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Total Invites</span>
-                  <span className="text-xl font-black text-amber-400">{user.referralCount || 0} Friends</span>
+            {earningBotId ? (
+              <div className="p-5 rounded-3xl bg-slate-900/60 border border-emerald-500/30 text-center space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto">
+                  <Users className="w-6 h-6" />
                 </div>
                 <div>
-                  <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Refer Earned</span>
-                  <span className="text-xl font-black text-emerald-400">₹{(user.referralCount || 0) * 10}</span>
+                  <h2 className="text-base font-black text-white">{earningBotConfig?.botName || 'Earning Bot'} Refer & Earn</h2>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Get ₹{earningBotRefStats?.referralReward ?? (earningBotConfig?.referralReward || 0)} credited to your wallet for every verified friend who registers using your link.
+                  </p>
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    onClick={handleCopyLink}
+                    className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                  >
+                    {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    <span>{copied ? 'Copied Referral Link!' : 'Copy Personal Referral Link'}</span>
+                  </button>
+                </div>
+
+                {/* 6 Required Referral Statistics */}
+                <div className="grid grid-cols-3 gap-2.5 pt-4 border-t border-slate-800/80">
+                  <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">Total Referrals</span>
+                    <span className="text-base font-black text-white">{earningBotRefStats?.total ?? user.totalReferrals ?? 0}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950 border border-emerald-500/30">
+                    <span className="text-[9px] text-emerald-400 font-bold uppercase tracking-wider block">🟢 Valid</span>
+                    <span className="text-base font-black text-emerald-400">{earningBotRefStats?.valid ?? user.successfulReferrals ?? 0}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950 border border-amber-500/30">
+                    <span className="text-[9px] text-amber-400 font-bold uppercase tracking-wider block">🟡 Pending</span>
+                    <span className="text-base font-black text-amber-400">{earningBotRefStats?.pending ?? 0}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950 border border-rose-500/30">
+                    <span className="text-[9px] text-rose-400 font-bold uppercase tracking-wider block">🔴 Rejected</span>
+                    <span className="text-base font-black text-rose-400">{earningBotRefStats?.rejected ?? 0}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950 border border-emerald-500/30">
+                    <span className="text-[9px] text-emerald-400 font-bold uppercase tracking-wider block">Available Earnings</span>
+                    <span className="text-base font-black text-emerald-400">₹{earningBotRefStats?.availableEarnings ?? (user.totalReferralEarnings ?? 0)}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-950 border border-amber-500/30">
+                    <span className="text-[9px] text-amber-400 font-bold uppercase tracking-wider block">Pending Earnings</span>
+                    <span className="text-base font-black text-amber-400">₹{earningBotRefStats?.pendingEarnings ?? 0}</span>
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              /* Standard Roy Share Wallet Invite Box */
+              <div className="p-5 rounded-3xl bg-slate-900/40 border border-slate-800/60 text-center space-y-4">
+                <Users className="w-10 h-10 text-amber-400 mx-auto" />
+                <h2 className="text-base font-black text-white">Refer & Earn Real Cash</h2>
+                <p className="text-xs text-slate-400 leading-relaxed max-w-sm mx-auto">
+                  Get ₹10 credited directly to your wallet for every friend who joins using your link. Claim huge milestone bonuses as your count grows!
+                </p>
+
+                <div className="pt-2">
+                  <button
+                    onClick={handleCopyLink}
+                    className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg transition"
+                  >
+                    {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    <span>{copied ? 'Copied Link!' : 'Copy Personal Invite Link'}</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-800/50">
+                  <div>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Total Invites</span>
+                    <span className="text-xl font-black text-amber-400">{user.referralCount || 0} Friends</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Refer Earned</span>
+                    <span className="text-xl font-black text-emerald-400">₹{(user.referralCount || 0) * 10}</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Milestones list */}
             <div className="space-y-3">

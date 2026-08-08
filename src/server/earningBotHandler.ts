@@ -121,6 +121,95 @@ export async function processEarningBotUpdate(bot: any, update: any) {
 }
 
 /**
+ * Resolve Earning Bot Referrer by code, Telegram ID, UID, or Admin Chat ID
+ */
+export async function resolveEarningBotReferrer(bot: any, rawReferrerCode: string): Promise<{ telegramId: string; docId: string } | null> {
+  if (!rawReferrerCode || !bot || !bot.botId) return null;
+
+  const botId = bot.botId;
+  let cleanCode = String(rawReferrerCode).trim();
+  if (cleanCode.startsWith('ref_')) {
+    cleanCode = cleanCode.substring(4).trim();
+  }
+  if (!cleanCode) return null;
+
+  // Extract possible Telegram ID if format is `${botId}_${tgUserId}`
+  let candidateTgId = cleanCode;
+  if (cleanCode.includes('_')) {
+    const parts = cleanCode.split('_');
+    candidateTgId = parts[parts.length - 1] || cleanCode;
+  }
+
+  // 1. Check if candidate matches Admin Chat ID or 'ADMIN'
+  const adminChatId = String(bot.adminChatId || '').trim();
+  if (cleanCode === 'ADMIN' || (adminChatId && (cleanCode === adminChatId || candidateTgId === adminChatId))) {
+    const targetAdminTg = adminChatId || 'ADMIN';
+    const adminDocId = `${botId}_${targetAdminTg}`;
+    const adminRef = doc(db, 'users', adminDocId);
+    const adminSnap = await getDoc(adminRef);
+
+    if (!adminSnap.exists()) {
+      const nowIso = new Date().toISOString();
+      await setDoc(adminRef, {
+        id: adminDocId,
+        uid: adminDocId,
+        botId,
+        telegramId: targetAdminTg,
+        username: 'Admin',
+        firstName: 'Bot Admin',
+        mobile: 'Admin',
+        walletBalance: 0,
+        lockedBalance: 0,
+        totalWithdrawn: 0,
+        channelVerified: true,
+        groupVerified: true,
+        referrerUid: '',
+        totalReferrals: 0,
+        successfulReferrals: 0,
+        totalReferralEarnings: 0,
+        status: 'ACTIVE',
+        createdAt: nowIso,
+        lastActive: nowIso,
+      });
+    }
+    return { telegramId: targetAdminTg, docId: adminDocId };
+  }
+
+  // 2. Direct Doc ID check
+  const directDocId = `${botId}_${candidateTgId}`;
+  const directSnap = await getDoc(doc(db, 'users', directDocId));
+  if (directSnap.exists()) {
+    const d = directSnap.data();
+    return { telegramId: String(d.telegramId || candidateTgId), docId: directDocId };
+  }
+
+  // 3. Try cleanCode as direct Doc ID
+  const rawDocSnap = await getDoc(doc(db, 'users', cleanCode));
+  if (rawDocSnap.exists() && rawDocSnap.data()?.botId === botId) {
+    const d = rawDocSnap.data();
+    return { telegramId: String(d.telegramId || candidateTgId), docId: rawDocSnap.id };
+  }
+
+  // 4. Query users collection by botId and telegramId
+  const qTg = query(collection(db, 'users'), where('botId', '==', botId), where('telegramId', '==', candidateTgId));
+  const snapTg = await getDocs(qTg);
+  if (!snapTg.empty) {
+    const d = snapTg.docs[0].data();
+    return { telegramId: String(d.telegramId || candidateTgId), docId: snapTg.docs[0].id };
+  }
+
+  // 5. Query users collection by botId and uid
+  const qUid = query(collection(db, 'users'), where('botId', '==', botId), where('uid', '==', cleanCode));
+  const snapUid = await getDocs(qUid);
+  if (!snapUid.empty) {
+    const d = snapUid.docs[0].data();
+    return { telegramId: String(d.telegramId || candidateTgId), docId: snapUid.docs[0].id };
+  }
+
+  return null;
+}
+
+/**
  * Handle /start and Referral Tracking
  */
 async function handleStartCommand(bot: any, message: any, text: string, sessionRef: any) {
@@ -150,23 +239,64 @@ async function handleStartCommand(bot: any, message: any, text: string, sessionR
     return;
   }
 
-  // Parse deep link referrer code (ref_CODE)
-  let referrerUid = '';
+  // Parse deep link referrer code (ref_CODE or /start ref_CODE or /start CODE)
+  let rawReferrerCode = '';
   if (text.includes('start=')) {
-    const payload = text.split('start=')[1] || '';
-    if (payload.startsWith('ref_')) {
-      referrerUid = payload.substring(4).trim();
+    rawReferrerCode = text.split('start=')[1] || '';
+  } else {
+    const parts = text.split(/\s+/);
+    if (parts.length > 1) {
+      rawReferrerCode = parts[1];
     }
+  }
+
+  if (rawReferrerCode.startsWith('ref_')) {
+    rawReferrerCode = rawReferrerCode.substring(4).trim();
+  } else {
+    rawReferrerCode = rawReferrerCode.trim();
+  }
+
+  // 1. Log Raw Telegram /start payload
+  console.log(`[REFERRAL DEBUG] 1. Raw Telegram /start payload: "${text}"`);
+  // 2. Log Parsed referral payload
+  console.log(`[REFERRAL DEBUG] 2. Parsed referral payload: "${rawReferrerCode}"`);
+  // 3. Log earningBotId
+  console.log(`[REFERRAL DEBUG] 3. earningBotId: "${bot.botId}"`);
+  // 5. Log referredTelegramUserId
+  console.log(`[REFERRAL DEBUG] 5. referredTelegramUserId: "${userId}"`);
+
+  let resolvedReferrer: { telegramId: string; docId: string } | null = null;
+  if (rawReferrerCode) {
+    resolvedReferrer = await resolveEarningBotReferrer(bot, rawReferrerCode);
+  }
+
+  // Anti Self-Referral Protection
+  if (resolvedReferrer && String(resolvedReferrer.telegramId) === String(userId)) {
+    console.log(`[REFERRAL DEBUG] Self-referral detected for user ${userId}. Ignoring referrer.`);
+    resolvedReferrer = null;
+  }
+
+  if (resolvedReferrer) {
+    // 4. Log resolved referrerTelegramUserId
+    console.log(`[REFERRAL DEBUG] 4. resolved referrerTelegramUserId: "${resolvedReferrer.telegramId}" (docId: "${resolvedReferrer.docId}")`);
+  } else {
+    console.log(`[REFERRAL DEBUG] 4. resolved referrerTelegramUserId: NONE`);
   }
 
   // Create or update pending session
   const sessionSnap = await getDoc(sessionRef);
-  let savedReferrer = referrerUid;
+  let savedReferrerTg = resolvedReferrer?.telegramId || '';
+  let savedReferrerDocId = resolvedReferrer?.docId || '';
+
   if (sessionSnap.exists()) {
     const sData = sessionSnap.data() as any;
     // Referral relationship is immutable after creation
-    if (sData?.referrerUid) {
-      savedReferrer = sData.referrerUid;
+    if (sData?.referrerTelegramId) {
+      savedReferrerTg = sData.referrerTelegramId;
+      savedReferrerDocId = sData.referrerDocId || `${bot.botId}_${sData.referrerTelegramId}`;
+    } else if (sData?.referrerUid) {
+      savedReferrerTg = sData.referrerUid;
+      savedReferrerDocId = sData.referrerDocId || `${bot.botId}_${sData.referrerUid}`;
     }
   }
 
@@ -175,12 +305,40 @@ async function handleStartCommand(bot: any, message: any, text: string, sessionR
     telegramId: userId,
     firstName,
     username,
-    referrerUid: savedReferrer,
+    referrerUid: savedReferrerTg,
+    referrerTelegramId: savedReferrerTg,
+    referrerDocId: savedReferrerDocId,
     channelVerified: false,
     groupVerified: false,
     contactVerified: false,
     updatedAt: new Date().toISOString(),
   }, { merge: true });
+
+  // Create PENDING referral record in botReferrals if referrer exists
+  if (savedReferrerTg) {
+    const refRecordId = `REF_${bot.botId}_${userId}`;
+    const refRecordRef = doc(db, 'botReferrals', refRecordId);
+    const refSnap = await getDoc(refRecordRef);
+
+    if (!refSnap.exists() || refSnap.data()?.status !== 'VALID') {
+      const pendingRefData = {
+        id: refRecordId,
+        botId: bot.botId,
+        referrerTelegramId: savedReferrerTg,
+        referrerDocId: savedReferrerDocId,
+        referredTelegramId: userId,
+        referredName: firstName,
+        status: 'PENDING',
+        rewardAmount: Number(bot.referralReward) || 0,
+        rewardStatus: 'UNPAID',
+        createdAt: new Date().toISOString(),
+        registrationCompletedAt: null,
+      };
+      await setDoc(refRecordRef, pendingRefData, { merge: true });
+      // 6. Log Referral Record Creation
+      console.log(`[REFERRAL DEBUG] 6. referral record creation (PENDING):`, pendingRefData);
+    }
+  }
 
   // Step 1: Verification of channel/group joins
   await sendChannelGroupJoinPrompt(bot, chatId, userId);
