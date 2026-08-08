@@ -168,7 +168,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         return;
       }
 
-      setOtpSuccessMsg('Your 6-digit OTP has been sent to your Telegram Bot chat. Copy it and paste below.');
+      setOtpSuccessMsg('📱 Mobile Verification sent to Telegram Chat!\n\nPlease open your Telegram Bot chat and tap "📱 Share Contact" to verify your number. Your 6-digit OTP will then appear in the chat.');
       setRegStep('OTP');
     } catch (err: any) {
       setRegError(err.message || 'Network error occurred. Please try again.');

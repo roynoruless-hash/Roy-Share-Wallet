@@ -7669,11 +7669,10 @@ Claim now and don't forget to share your screenshot!`;
   // 1. INITIATE REGISTRATION
   app.post('/api/register/initiate', async (req, res) => {
     try {
-      const { telegramId, username, firstName, lastName, fullName, mobile, sharedContactMobile, gmail, deviceFingerprint, ip } = req.body;
+      const { telegramId, username, firstName, lastName, fullName, mobile, gmail, deviceFingerprint, ip } = req.body;
 
       const cleanTgId = String(telegramId || '').trim();
       const cleanMobile = String(mobile || '').replace(/\D/g, '').slice(-10);
-      const cleanSharedMobile = String(sharedContactMobile || '').replace(/\D/g, '').slice(-10);
       const cleanGmail = String(gmail || '').trim().toLowerCase();
       const fingerprint = String(deviceFingerprint || '').trim();
       const clientIp = String(ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
@@ -7684,10 +7683,6 @@ Claim now and don't forget to share your screenshot!`;
       }
       if (!cleanMobile || cleanMobile.length !== 10) {
         return res.status(400).json({ success: false, error: 'Please enter a valid 10-digit mobile number' });
-      }
-      // Step 3 Check: Entered Number = Shared Contact Number
-      if (cleanMobile !== cleanSharedMobile) {
-        return res.status(400).json({ success: false, error: '❌ Mobile number does not match your Telegram contact.' });
       }
       if (!cleanGmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanGmail)) {
         return res.status(400).json({ success: false, error: 'Please enter a valid Gmail address.' });
@@ -7773,8 +7768,7 @@ Claim now and don't forget to share your screenshot!`;
         }
       }
 
-      // Generate 6-digit OTP
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      // Save pending registration session
       const sessionData = {
         telegramId: cleanTgId,
         username: username ? username.replace('@', '') : '',
@@ -7782,31 +7776,34 @@ Claim now and don't forget to share your screenshot!`;
         mobile: cleanMobile,
         gmail: cleanGmail,
         deviceFingerprint: fingerprint,
-        otp,
-        otpExpiry: Date.now() + 120000, // 120s
+        contactVerified: false,
         attempts: 0,
         createdAt: Date.now(),
       };
 
       await setDoc(sessionDocRef, sessionData);
 
-      // Send OTP to user's Telegram Chat
+      // Send Telegram Bot message with Share Contact button
       const config = await getDecryptedConfig();
       if (config?.botToken) {
-        const otpMessage =
-          `━━━━━━━━━━━━━━\n` +
-          `🔐 <b>Roy Share OTP Code</b>\n\n` +
-          `Your 6-digit OTP for registration is:\n` +
-          `<code>${otp}</code>\n\n` +
-          `⏱ This code will expire in <b>02:00</b> minutes.\n` +
-          `━━━━━━━━━━━━━━`;
-        await sendTelegramMessage(config.botToken, cleanTgId, otpMessage);
+        const promptText =
+          `📱 <b>Mobile Verification</b>\n\n` +
+          `Please tap the button below to share the mobile number linked to this Telegram account.`;
+
+        await sendTelegramMessage(config.botToken, cleanTgId, promptText, {
+          reply_markup: {
+            keyboard: [
+              [{ text: '📱 Share Contact', request_contact: true }]
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        });
       }
 
       return res.json({
         success: true,
-        message: 'OTP generated and sent to your Telegram Bot chat.',
-        expiresInSeconds: 120
+        message: 'Mobile verification request sent to your Telegram Bot chat. Please tap "Share Contact" in Telegram.',
       });
     } catch (err: any) {
       console.error('[API Initiate Registration Error]:', err);
@@ -7836,6 +7833,14 @@ Claim now and don't forget to share your screenshot!`;
       }
 
       const session = sessionSnap.data();
+
+      // Check contact verification
+      if (!session.contactVerified) {
+        return res.status(400).json({
+          success: false,
+          error: '📱 Mobile number not verified yet. Please tap "Share Contact" in your Telegram Bot chat first.'
+        });
+      }
 
       // Check 10 minute timeout
       if (Date.now() - (session.createdAt || 0) > 600000) {

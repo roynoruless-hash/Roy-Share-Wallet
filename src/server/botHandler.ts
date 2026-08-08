@@ -1412,6 +1412,100 @@ Final Payout: ₹${payoutAmount}`);
   const text = message.text ? message.text.trim() : '';
   const contact = message.contact;
 
+  // TELEGRAM CONTACT VERIFICATION HANDLER
+  if (contact) {
+    const sessionDocRef = doc(db, 'registrationSessions', chatId);
+    const sessionSnap = await getDoc(sessionDocRef);
+
+    if (sessionSnap.exists()) {
+      const pendingSession = sessionSnap.data();
+
+      // Check 1: contact.user_id === current Telegram user ID
+      const contactUserId = String(contact.user_id || message.from?.id || '');
+      if (contactUserId !== String(chatId)) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `❌ <b>This contact does not belong to your Telegram account.</b>`,
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      // Check 2: normalize phone numbers and compare
+      const normalizePhone = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
+      const sharedPhoneNorm = normalizePhone(contact.phone_number);
+      const registeredPhoneNorm = normalizePhone(pendingSession.mobile);
+
+      if (!sharedPhoneNorm || sharedPhoneNorm !== registeredPhoneNorm) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `❌ <b>The shared contact number does not match the number entered during registration.</b>\n\n` +
+            `Entered: <code>${pendingSession.mobile}</code>\n` +
+            `Shared: <code>${contact.phone_number || 'Unknown'}</code>\n\n` +
+            `Please tap <b>📱 Share Contact</b> below to share the correct contact number.`,
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [{ text: '📱 Share Contact', request_contact: true }]
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        });
+        return;
+      }
+
+      // Both checks pass! Mark contactVerified, generate 6-digit OTP code & set 2 min expiry
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpExpiry = Date.now() + 120000;
+
+      await setDoc(sessionDocRef, {
+        contactVerified: true,
+        sharedContactMobile: sharedPhoneNorm,
+        otp,
+        otpExpiry,
+        attempts: 0,
+      }, { merge: true });
+
+      // Send bot message: Mobile Number Verified!
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `✅ <b>Mobile Number Verified!</b>\n\nYour mobile number has been successfully verified.`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          remove_keyboard: true
+        }
+      });
+
+      // Send bot message: OTP Code
+      const otpMessage =
+        `━━━━━━━━━━━━━━\n` +
+        `🔐 <b>Roy Share OTP Code</b>\n\n` +
+        `Your 6-digit OTP for registration is:\n` +
+        `<code>${otp}</code>\n\n` +
+        `⏱ This code will expire in <b>02:00</b> minutes.\n` +
+        `━━━━━━━━━━━━━━`;
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: otpMessage,
+        parse_mode: 'HTML',
+      });
+
+      return;
+    } else {
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `❌ <b>No active registration session found.</b>\n\nPlease create an account via the Registration Mini App first.`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          remove_keyboard: true
+        }
+      });
+      return;
+    }
+  }
+
   // Query database to see if user is already registered
   const existingUser = await getUserByTelegramId(chatId);
 
