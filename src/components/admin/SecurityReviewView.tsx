@@ -36,9 +36,24 @@ interface SecurityReviewViewProps {
   showToast: (text: string, type?: 'success' | 'error' | 'info') => void;
 }
 
+function getAdminSessionToken(): string {
+  try {
+    const direct = localStorage.getItem('adminSessionToken');
+    if (direct && direct.trim()) return direct.trim();
+    const raw = localStorage.getItem('roy_admin_auth_v1');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.sessionToken) return parsed.sessionToken.trim();
+    }
+  } catch (e) {}
+  return '';
+}
+
 export const SecurityReviewView: React.FC<SecurityReviewViewProps> = ({ showToast }) => {
   const [reviews, setReviews] = useState<SecurityReview[]>([]);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(false);
+  const [authErrorMessage, setAuthErrorMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('PENDING');
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -50,11 +65,39 @@ export const SecurityReviewView: React.FC<SecurityReviewViewProps> = ({ showToas
 
   const fetchReviews = async () => {
     setLoading(true);
+    setAuthError(false);
+    setAuthErrorMessage('');
     try {
-      const res = await fetch('/api/admin/security-reviews');
+      const sessionToken = getAdminSessionToken();
+      if (!sessionToken) {
+        setAuthError(true);
+        setAuthErrorMessage('Admin session token missing. Please log in again.');
+        setLoading(false);
+        return;
+      }
+
+      const res = await fetch('/api/admin/security-reviews', {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-session-token': sessionToken,
+          'Authorization': `Bearer ${sessionToken}`,
+        }
+      });
+
+      if (res.status === 401 || res.status === 403) {
+        const data = await res.json().catch(() => ({}));
+        setAuthError(true);
+        setAuthErrorMessage(data.error || 'Unauthorized: Admin session token missing or expired. Please log in again.');
+        setLoading(false);
+        return;
+      }
+
       const data = await res.json();
       if (data.success) {
         setReviews(data.reviews || []);
+      } else if (data.error && (data.error.toLowerCase().includes('unauthorized') || data.error.toLowerCase().includes('session'))) {
+        setAuthError(true);
+        setAuthErrorMessage(data.error);
       } else {
         showToast(data.error || 'Failed to fetch security reviews', 'error');
       }
@@ -76,11 +119,22 @@ export const SecurityReviewView: React.FC<SecurityReviewViewProps> = ({ showToas
 
     setProcessingId(review.id);
     try {
+      const sessionToken = getAdminSessionToken();
       const res = await fetch('/api/admin/security-reviews/approve', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-session-token': sessionToken,
+          'Authorization': `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({ reviewId: review.id }),
       });
+
+      if (res.status === 401 || res.status === 403) {
+        setAuthError(true);
+        setAuthErrorMessage('Session expired while performing approval. Please log in again.');
+        return;
+      }
 
       const data = await res.json();
       if (data.success) {
@@ -108,11 +162,22 @@ export const SecurityReviewView: React.FC<SecurityReviewViewProps> = ({ showToas
 
     setProcessingId(selectedReview.id);
     try {
+      const sessionToken = getAdminSessionToken();
       const res = await fetch('/api/admin/security-reviews/reject', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-session-token': sessionToken,
+          'Authorization': `Bearer ${sessionToken}`,
+        },
         body: JSON.stringify({ reviewId: selectedReview.id, reason }),
       });
+
+      if (res.status === 401 || res.status === 403) {
+        setAuthError(true);
+        setAuthErrorMessage('Session expired while rejecting. Please log in again.');
+        return;
+      }
 
       const data = await res.json();
       if (data.success) {
@@ -146,6 +211,32 @@ export const SecurityReviewView: React.FC<SecurityReviewViewProps> = ({ showToas
   });
 
   const pendingCount = reviews.filter((r) => r.status === 'PENDING').length;
+
+  if (authError) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center space-y-4 max-w-lg mx-auto my-12 shadow-2xl">
+        <div className="w-16 h-16 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-center mx-auto text-amber-400">
+          <ShieldAlert className="w-8 h-8 animate-bounce" />
+        </div>
+        <div>
+          <h2 className="text-xl font-bold text-white flex items-center justify-center gap-2">
+            🔐 Admin Session Required
+          </h2>
+          <p className="text-sm text-slate-400 mt-2">
+            {authErrorMessage || 'Your admin session could not be verified. Please log in again.'}
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('admin-session-expired'));
+          }}
+          className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-lg transition cursor-pointer"
+        >
+          Login Again
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

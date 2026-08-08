@@ -65,7 +65,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
   // Registration V2 States
   const [isRegistered, setIsRegistered] = useState<boolean>(false);
-  const [registrationState, setRegistrationState] = useState<'LOADING' | 'UNREGISTERED' | 'PROFILE_SUBMITTED' | 'CONTACT_VERIFIED' | 'OTP_PENDING' | 'ACTIVE' | 'BANNED' | 'INVALID_SESSION'>('LOADING');
+  const [registrationState, setRegistrationState] = useState<'LOADING' | 'UNREGISTERED' | 'PROFILE_SUBMITTED' | 'CONTACT_VERIFIED' | 'OTP_PENDING' | 'PENDING_SECURITY_REVIEW' | 'REJECTED' | 'ACTIVE' | 'BANNED' | 'INVALID_SESSION'>('LOADING');
   const [regStep, setRegStep] = useState<'DETAILS' | 'PENDING_CONTACT' | 'OTP'>('DETAILS');
   const [fullName, setFullName] = useState<string>('');
   const [mobile, setMobile] = useState<string>('');
@@ -714,6 +714,20 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         if (data.registrationState === 'BANNED' || data.isBanned) {
           setIsRegistered(false);
           setUser(null);
+        } else if (data.registrationState === 'PENDING_SECURITY_REVIEW') {
+          setRegistrationState('PENDING_SECURITY_REVIEW');
+          setIsRegistered(false);
+          setUser(null);
+          if (data.session) {
+            setFullName(data.session.fullName || '');
+            setMobile(data.session.mobile || '');
+            setGmail(data.session.gmail || '');
+          }
+        } else if (data.registrationState === 'REJECTED') {
+          setRegistrationState('REJECTED');
+          setIsRegistered(false);
+          setUser(null);
+          setRegError(data.rejectReason || 'Registration rejected during security review.');
         } else if (data.registrationState === 'ACTIVE' && data.isRegistered) {
           setIsRegistered(true);
           setUser(data.user);
@@ -1180,6 +1194,92 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           <p className="text-xs text-slate-400 leading-relaxed">
             Please open this Mini App directly from your Telegram Bot chat.
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  // PENDING SECURITY REVIEW
+  if (registrationState === 'PENDING_SECURITY_REVIEW') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white font-sans flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-slate-900 border border-amber-500/30 rounded-3xl p-6 text-center space-y-6 shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto text-3xl">
+            🛡
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-lg font-black text-amber-400">Account Under Security Review</h1>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Your account registration has been submitted for Security Review by Admin.
+            </p>
+          </div>
+          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 text-left space-y-2 text-xs">
+            <div className="flex justify-between border-b border-slate-800 pb-1.5">
+              <span className="text-slate-400">Status:</span>
+              <span className="font-bold text-amber-400 bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-500/20">⏳ PENDING REVIEW</span>
+            </div>
+            {fullName && (
+              <div className="flex justify-between border-b border-slate-800 pb-1.5">
+                <span className="text-slate-400">Name:</span>
+                <span className="font-bold text-white">{fullName}</span>
+              </div>
+            )}
+            {mobile && (
+              <div className="flex justify-between border-b border-slate-800 pb-1.5">
+                <span className="text-slate-400">Mobile:</span>
+                <span className="font-bold text-white">{mobile}</span>
+              </div>
+            )}
+            {gmail && (
+              <div className="flex justify-between">
+                <span className="text-slate-400">Gmail:</span>
+                <span className="font-bold text-white">{gmail}</span>
+              </div>
+            )}
+          </div>
+          <p className="text-[11px] text-slate-400">
+            Once approved by Admin, your wallet will be activated and you will receive a notification in Telegram.
+          </p>
+          <button
+            type="button"
+            onClick={validateUserSession}
+            className="w-full py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl cursor-pointer"
+          >
+            <span>Check Approval Status</span>
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // REJECTED REGISTRATION
+  if (registrationState === 'REJECTED') {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white font-sans flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-slate-900 border border-rose-500/30 rounded-3xl p-6 text-center space-y-6 shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mx-auto text-3xl">
+            ❌
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-lg font-black text-rose-400">Registration Rejected</h1>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Your account registration request was rejected during Security Review.
+            </p>
+          </div>
+          {regError && (
+            <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-semibold">
+              {regError}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={validateUserSession}
+            className="w-full py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <span>Refresh</span>
+            <RefreshCw className="w-4 h-4" />
+          </button>
         </div>
       </div>
     );
