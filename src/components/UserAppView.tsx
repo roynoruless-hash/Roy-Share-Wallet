@@ -778,6 +778,20 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     }
   };
 
+  const fetchWithdrawalHistory = async () => {
+    try {
+      const tgId = getTelegramUserId();
+      if (!tgId) return;
+      const res = await fetch(`/api/user/withdrawals/history?telegramId=${encodeURIComponent(tgId)}`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.records)) {
+        setWithdrawHistory(data.records);
+      }
+    } catch (err) {
+      console.error('Failed to fetch withdrawal history:', err);
+    }
+  };
+
   // Setup Real-time Firestore Sync
   useEffect(() => {
     const tgId = getTelegramUserId();
@@ -883,7 +897,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     });
 
     // 4. Listen to withdrawals history in real-time
-    const withdrawalsRef = collection(db, 'withdraw_requests');
+    const withdrawalsRef = collection(db, 'withdrawals');
     const qWithdraw = query(withdrawalsRef, where('telegramId', '==', tgId));
     const unsubscribeWithdrawals = onSnapshot(qWithdraw, (snap) => {
       const list: any[] = [];
@@ -924,119 +938,70 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     e.preventDefault();
     const amt = parseFloat(withdrawAmount);
     if (isNaN(amt) || amt <= 0) {
-      showToast('⚠️ Please enter a valid positive amount', 'error');
+      addToast('⚠️ Please enter a valid positive amount', 'error');
       return;
     }
-    if (user && amt > (user.walletBalance || 0)) {
-      showToast(`❌ Insufficient balance! Your current balance is ₹${user.walletBalance || 0}`, 'error');
+
+    const tgId = getTelegramUserId();
+    if (!tgId) {
+      addToast('❌ Telegram session invalid. Please reopen via Telegram Bot.', 'error');
       return;
     }
-    if (!withdrawDetails.trim()) {
-      showToast('⚠️ Please enter account details (UPI, QR Link, or voucher spec)', 'error');
-      return;
+
+    const normMethod = withdrawMethod.toUpperCase();
+    const paymentDetails: any = {};
+
+    if (normMethod === 'UPI') {
+      if (!withdrawDetails.trim() || !/^\S+@\S+$/.test(withdrawDetails.trim())) {
+        addToast('⚠️ Please enter a valid UPI ID (e.g. name@upi)', 'error');
+        return;
+      }
+      paymentDetails.upiId = withdrawDetails.trim();
+    } else if (normMethod === 'QR') {
+      if (!withdrawDetails.trim()) {
+        addToast('⚠️ Please provide valid QR Code details or Image URL', 'error');
+        return;
+      }
+      paymentDetails.qrData = withdrawDetails.trim();
+      paymentDetails.qrUrl = withdrawDetails.trim();
+    } else if (normMethod === 'ULTRA_PAY') {
+      if (!withdrawDetails.trim() || !/^\d{10}$/.test(withdrawDetails.trim())) {
+        addToast('⚠️ Please enter a valid 10-digit Ultra Pay mobile number', 'error');
+        return;
+      }
+      paymentDetails.paytoNumber = withdrawDetails.trim();
     }
 
     setIsSubmittingWithdrawal(true);
+    const idempotencyKey = `idemp_${tgId}_${Date.now()}`;
+
     try {
-      const tgId = getTelegramUserId();
-      const userRef = doc(db, 'users', user?.id || tgId);
-
-      // Deduct balance and create withdrawal record atomically
-      await runTransaction(db, async (transaction) => {
-        const userDoc = await transaction.get(userRef);
-        if (!userDoc.exists()) {
-          throw new Error("User profile not found.");
-        }
-
-        const userData = userDoc.data();
-        const currentWallet = Number(userData.walletBalance || userData.balance || 0);
-
-        if (amt > currentWallet) {
-          throw new Error("Insufficient balance!");
-        }
-
-        // Deduct balance from user
-        transaction.update(userRef, {
-          walletBalance: currentWallet - amt
-        });
-
-        // Generate Transaction/Withdrawal ID
-        const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-        let randStr = '';
-        for (let i = 0; i < 8; i++) {
-          randStr += characters.charAt(Math.floor(Math.random() * characters.length));
-        }
-        const withdrawalId = `WD${randStr}`;
-        const finalUid = userData.appUid || user?.appUid || userData.uid || user?.uid || '';
-
-        // Create withdrawal record in withdraw_requests (as required)
-        const withdrawRequestsRef = doc(collection(db, 'withdraw_requests'));
-        transaction.set(withdrawRequestsRef, {
-          requestId: withdrawalId,
+      const res = await fetch('/api/user/withdrawals/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           telegramId: tgId,
-          username: userData.username || userData.userName || userData.firstName || '',
-          userName: userData.userName || userData.name || userData.firstName || `User #${tgId}`,
+          method: normMethod,
           amount: amt,
-          upiId: withdrawMethod === 'upi' ? withdrawDetails : '',
-          currentWalletBalance: currentWallet,
-          status: 'Pending',
-          createdAt: new Date().toISOString(),
-          processedAt: '',
-          processedBy: '',
-          rejectReason: '',
-          // Add extra fields to keep compatibility with standard visual components
-          withdrawalId: withdrawalId,
-          userId: tgId,
-          uid: finalUid,
-          method: withdrawMethod,
-          qrImageUrl: withdrawMethod === 'qr' ? withdrawDetails : '',
-          redeemCodeDetails: withdrawMethod === 'redeem_code' ? withdrawDetails : '',
-          payoutAmount: amt,
-          platformFee: 0,
-          feePercent: 0,
-        });
-
-        // Also create record in withdrawals for backward-compatibility with other system endpoints
-        const withdrawRef = doc(collection(db, 'withdrawals'));
-        transaction.set(withdrawRef, {
-          withdrawalId,
-          userId: tgId,
-          uid: finalUid,
-          telegramId: tgId,
-          userName: userData.userName || userData.name || `User #${tgId}`,
-          amount: amt,
-          requestedAmount: amt,
-          platformFee: 0,
-          payoutAmount: amt,
-          feePercent: 0,
-          method: withdrawMethod,
-          upiId: withdrawMethod === 'upi' ? withdrawDetails : '',
-          qrImageUrl: withdrawMethod === 'qr' ? withdrawDetails : '',
-          redeemCodeDetails: withdrawMethod === 'redeem_code' ? withdrawDetails : '',
-          status: 'pending',
-          createdAt: new Date().toISOString()
-        });
-
-        // Create transaction entry
-        const txnRef = doc(collection(db, 'transactions'));
-        transaction.set(txnRef, {
-          transactionId: `TXN${Date.now()}`,
-          uid: finalUid,
-          telegramId: tgId,
-          userName: userData.userName || userData.name || `User #${tgId}`,
-          amount: amt,
-          type: 'WITHDRAWAL_REQUEST',
-          status: 'pending',
-          description: `Withdrawal request of ₹${amt} via ${withdrawMethod.toUpperCase()}`,
-          createdAt: new Date().toISOString()
-        });
+          paymentDetails,
+          idempotencyKey,
+        }),
       });
 
-      setWithdrawAmount('');
-      setWithdrawDetails('');
-      showToast('💸 Withdrawal Request Submitted! Awaiting Admin review.', 'success');
+      const data = await res.json();
+      if (data.success) {
+        addToast('✅ Withdrawal request submitted successfully!', 'success');
+        setWithdrawAmount('');
+        setWithdrawDetails('');
+
+        // Refresh user data & withdrawal history
+        fetchUserData();
+        fetchWithdrawalHistory();
+      } else {
+        addToast(`❌ ${data.error || 'Failed to submit withdrawal request.'}`, 'error');
+      }
     } catch (err: any) {
-      showToast(`❌ Error: ${err.message || 'Submission failed'}`, 'error');
+      addToast(`❌ Error submitting request: ${err.message}`, 'error');
     } finally {
       setIsSubmittingWithdrawal(false);
     }

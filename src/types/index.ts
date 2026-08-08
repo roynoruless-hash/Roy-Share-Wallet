@@ -43,11 +43,48 @@ export interface AdminConfig {
   platformFeePercent?: number;
   uidLength: number;
 
-  // Withdrawal Settings
+  // Withdrawal Settings V2
   enableWithdraw: boolean;
+  allWithdrawalsEnabled?: boolean;
   enableUpi: boolean;
+  upiEnabled?: boolean;
+  upiMin?: number;
+  upiFeeType?: 'PERCENTAGE' | 'FIXED';
+  upiFee?: number;
+  upiTax?: number;
+
   enableQr: boolean;
+  qrEnabled?: boolean;
+  qrMin?: number;
+  qrFeeType?: 'PERCENTAGE' | 'FIXED';
+  qrFee?: number;
+  qrTax?: number;
+
   enableRedeemCode: boolean;
+  redeemEnabled?: boolean;
+  redeemMin?: number;
+  redeemFeeType?: 'PERCENTAGE' | 'FIXED';
+  redeemFee?: number;
+  redeemTax?: number;
+  redeemExpiryDays?: number;
+
+  ultraPayEnabled?: boolean;
+  ultraPayMin?: number;
+  ultraPayFeeType?: 'PERCENTAGE' | 'FIXED';
+  ultraPayFee?: number;
+  ultraPayTax?: number;
+
+  ultraPayApiToken?: string;
+  ultraPayApiKey?: string;
+  ultraPayEndpoint?: string;
+
+  calculationModel?: 'OPTION_A' | 'OPTION_B';
+
+  dailyWithdrawalLimit?: number;
+  weeklyWithdrawalLimit?: number;
+  maxSingleWithdrawal?: number;
+  maxPendingWithdrawals?: number;
+
   processingTimeNotice: string;
 
   // Referral Settings
@@ -508,21 +545,68 @@ export interface WithdrawalRecord {
   telegramId: string;
   userName?: string;
   username?: string;
+  fullName?: string;
+  mobile?: string;
+  gmail?: string;
   amount: number;
   requestedAmount?: number;
+  amountRequested?: number;
   platformFee?: number;
+  processingFee?: number;
+  taxAmount?: number;
   payoutAmount?: number;
+  finalPayout?: number;
+  totalDeduction?: number;
+  calculationModel?: 'OPTION_A' | 'OPTION_B';
   feePercent?: number;
-  method: 'upi' | 'qr' | 'redeem_code';
+  method: 'UPI' | 'QR' | 'REDEEM_CODE' | 'ULTRA_PAY' | 'upi' | 'qr' | 'redeem_code';
   upiId?: string;
   qrImageUrl?: string;
+  qrData?: string;
   redeemCodeDetails?: string;
+  paytoNumber?: string;
+  paymentDetails?: {
+    upiId?: string;
+    qrUrl?: string;
+    qrData?: string;
+    redeemCode?: string;
+    paytoNumber?: string;
+  };
   currentWalletBalance?: number;
-  status: 'Pending' | 'Approved' | 'Rejected' | 'pending' | 'completed' | 'rejected';
+  walletBalance?: number;
+  status:
+    | 'PENDING'
+    | 'APPROVED'
+    | 'PROCESSING'
+    | 'PAID'
+    | 'REJECTED'
+    | 'FAILED'
+    | 'CANCELLED'
+    | 'REFUNDED'
+    | 'PROVIDER_UNKNOWN'
+    | 'Pending'
+    | 'Approved'
+    | 'Rejected'
+    | 'pending'
+    | 'completed'
+    | 'rejected';
+  riskStatus?: 'LOW' | 'MEDIUM' | 'HIGH';
   rejectReason?: string;
+  rejectionReason?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
   createdAt: string;
+  updatedAt?: string;
   processedAt?: string;
   processedBy?: string;
+  paidAt?: string;
+  approvedAt?: string;
+  idempotencyKey?: string;
+  providerReference?: string;
+  providerResponse?: any;
+  providerPaymentStarted?: boolean;
+  failureReason?: string;
+  previousCount?: number;
 }
 
 export interface ReferralMilestone {

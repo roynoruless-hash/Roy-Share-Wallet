@@ -12,7 +12,11 @@ export interface TransactionInput {
     | 'Admin Debit'
     | 'Withdrawal Request'
     | 'Withdrawal Approved'
-    | 'Withdrawal Rejected';
+    | 'Withdrawal Rejected'
+    | 'Withdrawal Hold'
+    | 'Withdrawal Paid'
+    | 'Withdrawal Refund'
+    | 'Withdrawal Release';
   amount: number; // positive for credit, negative for debit
   status: 'completed' | 'pending' | 'rejected' | 'approved';
   description: string;

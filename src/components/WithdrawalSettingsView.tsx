@@ -105,85 +105,40 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
     })
     .reduce((sum, w) => sum + (Number(w.amount) || 0), 0);
 
-  // Real-time Firestore Listener for both withdrawals and withdraw_requests
+  // Real-time Firestore Listener for withdrawals
   useEffect(() => {
     setLoading(true);
-    let list1: WithdrawalRecord[] = [];
-    let list2: WithdrawalRecord[] = [];
 
-    const mergeAndSet = () => {
-      const map = new Map<string, WithdrawalRecord>();
+    const q = query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc'));
 
-      const addRecord = (item: WithdrawalRecord) => {
-        const key = item.withdrawalId || item.requestId || item.id || '';
-        if (!key) return;
-        const existing = map.get(key);
-        if (!existing) {
-          map.set(key, item);
-        } else {
-          map.set(key, {
-            ...existing,
-            ...item,
-            id: existing.id || item.id,
-            withdrawalId: existing.withdrawalId || item.withdrawalId || item.requestId,
-            requestId: existing.requestId || item.requestId || item.withdrawalId,
-            status: item.status || existing.status,
-          });
-        }
-      };
-
-      list1.forEach(addRecord);
-      list2.forEach(addRecord);
-
-      const merged = Array.from(map.values()).sort((a, b) => {
-        const timeA = new Date(a.createdAt || 0).getTime();
-        const timeB = new Date(b.createdAt || 0).getTime();
-        return timeB - timeA;
-      });
-
-      const pendingList = merged.filter(w => String(w.status).toLowerCase() === 'pending');
-      console.log(`[Firestore Query] Admin Panel loaded ${merged.length} total withdrawal records (${pendingList.length} PENDING) from collections 'withdrawals' (${list1.length}) and 'withdraw_requests' (${list2.length}).`);
-
-      setWithdrawals(merged);
-      setLoading(false);
-    };
-
-    const q1 = query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc'));
-    const q2 = query(collection(db, 'withdraw_requests'), orderBy('createdAt', 'desc'));
-
-    const unsub1 = onSnapshot(
-      q1,
+    const unsubscribe = onSnapshot(
+      q,
       (snapshot) => {
-        list1 = [];
+        const list: WithdrawalRecord[] = [];
         snapshot.forEach((doc) => {
-          list1.push({ id: doc.id, ...(doc.data() as Omit<WithdrawalRecord, 'id'>) });
+          list.push({ id: doc.id, ...(doc.data() as Omit<WithdrawalRecord, 'id'>) });
         });
-        mergeAndSet();
+
+        const sorted = list.sort((a, b) => {
+          const timeA = new Date(a.createdAt || 0).getTime();
+          const timeB = new Date(b.createdAt || 0).getTime();
+          return timeB - timeA;
+        });
+
+        const pendingList = sorted.filter(w => String(w.status).toLowerCase() === 'pending');
+        console.log(`[Firestore Query] Admin Panel loaded ${sorted.length} total withdrawal records (${pendingList.length} PENDING) from 'withdrawals' collection.`);
+
+        setWithdrawals(sorted);
+        setLoading(false);
       },
       (err) => {
         console.error('Error fetching withdrawals collection:', err);
-        mergeAndSet();
-      }
-    );
-
-    const unsub2 = onSnapshot(
-      q2,
-      (snapshot) => {
-        list2 = [];
-        snapshot.forEach((doc) => {
-          list2.push({ id: doc.id, ...(doc.data() as Omit<WithdrawalRecord, 'id'>) });
-        });
-        mergeAndSet();
-      },
-      (err) => {
-        console.error('Error fetching withdraw_requests collection:', err);
-        mergeAndSet();
+        setLoading(false);
       }
     );
 
     return () => {
-      unsub1();
-      unsub2();
+      unsubscribe();
     };
   }, []);
 
@@ -544,178 +499,384 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
 
       {/* 1. CONFIGURATION SETTINGS */}
       <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl space-y-6">
-        <h3 className="text-xs font-black text-slate-400 tracking-wider uppercase flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-orange-400" />
-          Withdrawal System Controls & Limits
-        </h3>
+        <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+          <h3 className="text-sm font-black text-white tracking-wider uppercase flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-orange-400" />
+            Withdrawal Master Controls & Method Configurations
+          </h3>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-orange-500/10 text-orange-400 border border-orange-500/20">
-                <ArrowDownRight className="w-4 h-4" />
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-200">Global Withdrawals</p>
-                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">Core System Switch</p>
-              </div>
-            </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-bold text-slate-300">Global Withdrawals</span>
             <button
               type="button"
-              id="enable-withdraw-toggle"
-              onClick={() => updateConfig({ enableWithdraw: !config.enableWithdraw })}
-              className={`p-1 rounded-lg transition ${
-                config.enableWithdraw ? 'text-orange-400' : 'text-slate-600'
+              id="enable-all-withdrawals-toggle"
+              onClick={() => updateConfig({
+                allWithdrawalsEnabled: config.allWithdrawalsEnabled !== undefined ? !config.allWithdrawalsEnabled : !config.enableWithdraw,
+                enableWithdraw: config.allWithdrawalsEnabled !== undefined ? !config.allWithdrawalsEnabled : !config.enableWithdraw,
+              })}
+              className={`p-1 rounded-lg transition flex items-center gap-1.5 px-3 py-1 text-xs font-black uppercase rounded-xl border ${
+                (config.allWithdrawalsEnabled !== false && config.enableWithdraw !== false)
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
               }`}
             >
-              {config.enableWithdraw ? <ToggleRight className="w-7 h-7" /> : <ToggleLeft className="w-7 h-7" />}
-            </button>
-          </div>
-
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                <CreditCard className="w-4 h-4" />
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-200">UPI Method</p>
-                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">UPI ID payouts</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              id="enable-upi-toggle"
-              onClick={() => updateConfig({ enableUpi: !config.enableUpi })}
-              className={`p-1 rounded-lg transition ${
-                config.enableUpi ? 'text-blue-400' : 'text-slate-600'
-              }`}
-            >
-              {config.enableUpi ? <ToggleRight className="w-7 h-7" /> : <ToggleLeft className="w-7 h-7" />}
-            </button>
-          </div>
-
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                <QrCode className="w-4 h-4" />
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-200">QR Code Method</p>
-                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">QR uploads</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              id="enable-qr-toggle"
-              onClick={() => updateConfig({ enableQr: !config.enableQr })}
-              className={`p-1 rounded-lg transition ${
-                config.enableQr ? 'text-purple-400' : 'text-slate-600'
-              }`}
-            >
-              {config.enableQr ? <ToggleRight className="w-7 h-7" /> : <ToggleLeft className="w-7 h-7" />}
-            </button>
-          </div>
-
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-pink-500/10 text-pink-400 border border-pink-500/20">
-                <Gift className="w-4 h-4" />
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-200">Redeem Code</p>
-                <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">Google Redeem codes</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              id="enable-redeem-toggle"
-              onClick={() => updateConfig({ enableRedeemCode: !config.enableRedeemCode })}
-              className={`p-1 rounded-lg transition ${
-                config.enableRedeemCode ? 'text-pink-400' : 'text-slate-600'
-              }`}
-            >
-              {config.enableRedeemCode ? <ToggleRight className="w-7 h-7" /> : <ToggleLeft className="w-7 h-7" />}
+              {(config.allWithdrawalsEnabled !== false && config.enableWithdraw !== false) ? (
+                <>
+                  <ToggleRight className="w-5 h-5" />
+                  <span>ENABLED</span>
+                </>
+              ) : (
+                <>
+                  <ToggleLeft className="w-5 h-5" />
+                  <span>DISABLED</span>
+                </>
+              )}
             </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-            <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-              <DollarSign className="w-4 h-4 text-orange-400" />
-              <span>Minimum Payout (₹)</span>
-            </label>
-            <input
-              type="number"
-              id="min-withdrawal-input"
-              value={config.minWithdrawal}
-              onChange={(e) => updateConfig({ minWithdrawal: Number(e.target.value) })}
-              className="w-full px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-orange-500 font-mono"
-            />
-          </div>
-
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-            <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-              <DollarSign className="w-4 h-4 text-blue-400" />
-              <span>Maximum Payout Limit (₹)</span>
-            </label>
-            <input
-              type="number"
-              id="max-withdrawal-input"
-              value={config.maxWithdrawal}
-              onChange={(e) => updateConfig({ maxWithdrawal: Number(e.target.value) })}
-              className="w-full px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
-            />
-          </div>
-
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-            <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <Percent className="w-4 h-4 text-purple-400" />
-                <span>Withdrawal Tax Platform Fee (%)</span>
-              </span>
-              <span className="text-[10px] text-slate-500">Default: 6%</span>
-            </label>
-            <input
-              type="number"
-              id="platform-fee-input"
-              value={config.platformFeePercent !== undefined ? config.platformFeePercent : 6}
-              onChange={(e) => {
-                const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
-                updateConfig({ platformFeePercent: val, withdrawalTax: val });
-              }}
-              min={0}
-              max={100}
-              className="w-full px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-purple-500 font-mono"
-            />
-          </div>
-        </div>
-
-        <div className="space-y-2 pt-2">
-          <label className="text-xs font-bold text-slate-300 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-orange-400" />
-            <span>Processing Time Notice</span>
+        {/* Calculation Model Selector */}
+        <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+          <label className="text-xs font-bold text-slate-200 tracking-wide uppercase flex items-center gap-2">
+            <Percent className="w-4 h-4 text-orange-400" />
+            <span>Fee & Tax Deduction Calculation Model</span>
           </label>
-          <textarea
-            id="processing-time-notice-input"
-            value={config.processingTimeNotice}
-            onChange={(e) => updateConfig({ processingTimeNotice: e.target.value })}
-            rows={2}
-            placeholder="e.g. Withdrawal requests are processed within 24 hours."
-            className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-orange-500 transition resize-none font-sans"
-          />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => updateConfig({ calculationModel: 'OPTION_A' })}
+              className={`p-3.5 rounded-xl border text-left transition ${
+                (config.calculationModel !== 'OPTION_B')
+                  ? 'bg-orange-500/10 border-orange-500/40 text-white'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-between font-bold text-xs">
+                <span>Option A (Deduct From Amount)</span>
+                {(config.calculationModel !== 'OPTION_B') && <CheckCircle2 className="w-4 h-4 text-orange-400" />}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                User enters <b>₹100</b>. Fee (e.g. 2%) + Tax = <b>₹2</b>. Wallet deducted: <b>₹100</b>. Final payout sent: <b>₹98</b>.
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => updateConfig({ calculationModel: 'OPTION_B' })}
+              className={`p-3.5 rounded-xl border text-left transition ${
+                (config.calculationModel === 'OPTION_B')
+                  ? 'bg-orange-500/10 border-orange-500/40 text-white'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-between font-bold text-xs">
+                <span>Option B (Fee Added to Deduction)</span>
+                {(config.calculationModel === 'OPTION_B') && <CheckCircle2 className="w-4 h-4 text-orange-400" />}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                User wants <b>₹100</b> payout. Fee (2%) + Tax = <b>₹2</b>. Wallet deducted: <b>₹102</b>. Final payout sent: <b>₹100</b>.
+              </p>
+            </button>
+          </div>
+        </div>
+
+        {/* Individual Method Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* UPI Method */}
+          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CreditCard className="w-4 h-4 text-blue-400" />
+                <span className="text-xs font-bold text-white">UPI ID Method</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => updateConfig({ upiEnabled: !config.upiEnabled, enableUpi: !config.upiEnabled })}
+                className={`p-1 transition ${config.upiEnabled !== false ? 'text-blue-400' : 'text-slate-600'}`}
+              >
+                {config.upiEnabled !== false ? <ToggleRight className="w-6 h-6" /> : <ToggleLeft className="w-6 h-6" />}
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Min Amount (₹)</label>
+                <input
+                  type="number"
+                  value={config.upiMin || config.minWithdrawal || 50}
+                  onChange={(e) => updateConfig({ upiMin: Number(e.target.value) })}
+                  className="w-full mt-1 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Fee Value</label>
+                <input
+                  type="number"
+                  value={config.upiFee !== undefined ? config.upiFee : 2}
+                  onChange={(e) => updateConfig({ upiFee: Number(e.target.value) })}
+                  className="w-full mt-1 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Fee Type</label>
+                <select
+                  value={config.upiFeeType || 'PERCENTAGE'}
+                  onChange={(e) => updateConfig({ upiFeeType: e.target.value as any })}
+                  className="w-full mt-1 px-2 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-bold text-white"
+                >
+                  <option value="PERCENTAGE">% Percent</option>
+                  <option value="FIXED">₹ Fixed</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* QR Code Method */}
+          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <QrCode className="w-4 h-4 text-purple-400" />
+                <span className="text-xs font-bold text-white">QR Code Method</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => updateConfig({ qrEnabled: !config.qrEnabled, enableQr: !config.qrEnabled })}
+                className={`p-1 transition ${config.qrEnabled !== false ? 'text-purple-400' : 'text-slate-600'}`}
+              >
+                {config.qrEnabled !== false ? <ToggleRight className="w-6 h-6" /> : <ToggleLeft className="w-6 h-6" />}
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Min Amount (₹)</label>
+                <input
+                  type="number"
+                  value={config.qrMin || 100}
+                  onChange={(e) => updateConfig({ qrMin: Number(e.target.value) })}
+                  className="w-full mt-1 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Fee Value</label>
+                <input
+                  type="number"
+                  value={config.qrFee !== undefined ? config.qrFee : 2}
+                  onChange={(e) => updateConfig({ qrFee: Number(e.target.value) })}
+                  className="w-full mt-1 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Fee Type</label>
+                <select
+                  value={config.qrFeeType || 'FIXED'}
+                  onChange={(e) => updateConfig({ qrFeeType: e.target.value as any })}
+                  className="w-full mt-1 px-2 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-bold text-white"
+                >
+                  <option value="FIXED">₹ Fixed</option>
+                  <option value="PERCENTAGE">% Percent</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Redeem Code Method */}
+          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Gift className="w-4 h-4 text-pink-400" />
+                <span className="text-xs font-bold text-white">Redeem Code Method</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => updateConfig({ redeemEnabled: !config.redeemEnabled, enableRedeemCode: !config.redeemEnabled })}
+                className={`p-1 transition ${config.redeemEnabled !== false ? 'text-pink-400' : 'text-slate-600'}`}
+              >
+                {config.redeemEnabled !== false ? <ToggleRight className="w-6 h-6" /> : <ToggleLeft className="w-6 h-6" />}
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Min Amount (₹)</label>
+                <input
+                  type="number"
+                  value={config.redeemMin || 20}
+                  onChange={(e) => updateConfig({ redeemMin: Number(e.target.value) })}
+                  className="w-full mt-1 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Fee Value</label>
+                <input
+                  type="number"
+                  value={config.redeemFee !== undefined ? config.redeemFee : 1}
+                  onChange={(e) => updateConfig({ redeemFee: Number(e.target.value) })}
+                  className="w-full mt-1 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Expiry (Days)</label>
+                <input
+                  type="number"
+                  value={config.redeemExpiryDays || 30}
+                  onChange={(e) => updateConfig({ redeemExpiryDays: Number(e.target.value) })}
+                  className="w-full mt-1 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Ultra Pay Automated API Method */}
+          <div className="p-4 rounded-2xl bg-slate-950 border border-amber-500/20 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span className="text-xs font-bold text-white">Ultra Pay API (Automated)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => updateConfig({ ultraPayEnabled: !config.ultraPayEnabled })}
+                className={`p-1 transition ${config.ultraPayEnabled ? 'text-amber-400' : 'text-slate-600'}`}
+              >
+                {config.ultraPayEnabled ? <ToggleRight className="w-6 h-6" /> : <ToggleLeft className="w-6 h-6" />}
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Min Amount (₹)</label>
+                <input
+                  type="number"
+                  value={config.ultraPayMin || 10}
+                  onChange={(e) => updateConfig({ ultraPayMin: Number(e.target.value) })}
+                  className="w-full mt-1 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Fee Value</label>
+                <input
+                  type="number"
+                  value={config.ultraPayFee !== undefined ? config.ultraPayFee : 2}
+                  onChange={(e) => updateConfig({ ultraPayFee: Number(e.target.value) })}
+                  className="w-full mt-1 px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Fee Type</label>
+                <select
+                  value={config.ultraPayFeeType || 'PERCENTAGE'}
+                  onChange={(e) => updateConfig({ ultraPayFeeType: e.target.value as any })}
+                  className="w-full mt-1 px-2 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-bold text-white"
+                >
+                  <option value="PERCENTAGE">% Percent</option>
+                  <option value="FIXED">₹ Fixed</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Ultra Pay Credentials */}
+            <div className="pt-2 border-t border-slate-800/80 space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-bold text-amber-400">Ultra Pay API Token</label>
+                  <input
+                    type="password"
+                    placeholder="Enter Ultra Pay Token"
+                    value={config.ultraPayApiToken || ''}
+                    onChange={(e) => updateConfig({ ultraPayApiToken: e.target.value })}
+                    className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-amber-400">Ultra Pay API Key</label>
+                  <input
+                    type="password"
+                    placeholder="Enter Ultra Pay Secret Key"
+                    value={config.ultraPayApiKey || ''}
+                    onChange={(e) => updateConfig({ ultraPayApiKey: e.target.value })}
+                    className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Ultra Pay API Endpoint URL</label>
+                <input
+                  type="text"
+                  value={config.ultraPayEndpoint || 'https://www.ultra-pay.store/APIs/api'}
+                  onChange={(e) => updateConfig({ ultraPayEndpoint: e.target.value })}
+                  className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-slate-300"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Global Limits & Safeguards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 pt-2">
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+            <label className="text-[11px] font-bold text-slate-400">Max Single Payout (₹)</label>
+            <input
+              type="number"
+              value={config.maxSingleWithdrawal || config.maxWithdrawal || 10000}
+              onChange={(e) => updateConfig({ maxSingleWithdrawal: Number(e.target.value), maxWithdrawal: Number(e.target.value) })}
+              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+            />
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+            <label className="text-[11px] font-bold text-slate-400">Daily Payout Limit (₹)</label>
+            <input
+              type="number"
+              value={config.dailyWithdrawalLimit || 50000}
+              onChange={(e) => updateConfig({ dailyWithdrawalLimit: Number(e.target.value) })}
+              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+            />
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+            <label className="text-[11px] font-bold text-slate-400">Weekly Payout Limit (₹)</label>
+            <input
+              type="number"
+              value={config.weeklyWithdrawalLimit || 250000}
+              onChange={(e) => updateConfig({ weeklyWithdrawalLimit: Number(e.target.value) })}
+              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+            />
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+            <label className="text-[11px] font-bold text-slate-400">Max Pending Requests/User</label>
+            <input
+              type="number"
+              value={config.maxPendingWithdrawals !== undefined ? config.maxPendingWithdrawals : 1}
+              onChange={(e) => updateConfig({ maxPendingWithdrawals: Number(e.target.value) })}
+              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-white"
+            />
+          </div>
         </div>
 
         <div className="pt-2 border-t border-slate-800 flex items-center justify-end">
           <button
             type="button"
             id="withdrawal-save-btn"
-            onClick={onSave}
+            onClick={async () => {
+              try {
+                const res = await fetch('/api/admin/withdrawals/config', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ settings: config }),
+                });
+                const d = await res.json();
+                if (d.success) {
+                  onSave();
+                } else {
+                  alert(d.error || 'Failed to save settings.');
+                }
+              } catch (e: any) {
+                onSave();
+              }
+            }}
             disabled={isSaving}
             className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-400 hover:to-amber-500 text-slate-950 font-black text-xs uppercase tracking-wider shadow-lg shadow-orange-500/10 flex items-center gap-2 transition disabled:opacity-50"
           >
             <Save className="w-4.5 h-4.5" />
-            <span>{isSaving ? 'Saving...' : 'Sync Limits'}</span>
+            <span>{isSaving ? 'Saving...' : 'Sync All Withdrawal Settings'}</span>
           </button>
         </div>
       </div>

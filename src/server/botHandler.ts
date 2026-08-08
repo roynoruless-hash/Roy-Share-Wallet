@@ -872,295 +872,33 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    // WITHDRAWAL FLOW CALLBACK QUERIES
-    if (data === 'withdraw_continue') {
-      const adminConfig = await getAdminConfig();
-      if (adminConfig?.enableWithdraw === false) {
-        await sendTelegramApi(token, 'answerCallbackQuery', {
-          callback_query_id: cbId,
-          text: '❌ Withdrawals are currently disabled by Admin.',
-          show_alert: true,
-        });
-        return;
-      }
-
-      const existingUser = await getUserByTelegramId(chatId);
-      if (!existingUser) {
-        await sendTelegramApi(token, 'answerCallbackQuery', {
-          callback_query_id: cbId,
-          text: '❌ Account not found. Please register first.',
-          show_alert: true,
-        });
-        return;
-      }
-
-      const minW = adminConfig?.minWithdrawal ?? 100;
-      const maxW = adminConfig?.maxWithdrawal ?? 10000;
-      const walletBal = Number(existingUser.walletBalance) || 0;
-
-      if (walletBal < minW) {
-        await sendTelegramApi(token, 'answerCallbackQuery', {
-          callback_query_id: cbId,
-          text: `❌ Insufficient Balance! Minimum withdrawal is ₹${minW}. Your balance is ₹${walletBal}.`,
-          show_alert: true,
-        });
-        return;
-      }
-
-      userSessions.set(chatId, { step: 'WITHDRAW_METHOD_SELECT' });
+    // WITHDRAWAL FLOW CALLBACK QUERIES (DECOMMISSIONED LEGACY SYSTEMS REPLACED BY SECURE MINI APP V2)
+    if (data === 'withdraw_continue' || data === 'withdraw_method_upi' || data === 'withdraw_method_qr' || data === 'withdraw_method_redeem' || data === 'withdraw_confirm' || data === 'withdraw_cancel') {
+      const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
+      const withdrawMiniAppUrl = `${baseUrl}/?action=withdraw&tgId=${chatId}`;
 
       await sendTelegramApi(token, 'answerCallbackQuery', {
         callback_query_id: cbId,
-        text: 'Choose withdrawal method',
-        show_alert: false,
+        text: '🔧 Please use the secure Withdrawal Mini App.',
+        show_alert: true,
       });
 
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: `💸 <b>Select Withdrawal Method</b>\n\n` +
-          `💰 <b>Available Balance:</b> ₹${walletBal}\n` +
-          `📉 <b>Minimum:</b> ₹${minW} | 📈 <b>Maximum:</b> ₹${maxW}\n\n` +
-          `Please select your preferred withdrawal option below:`,
+        text: `⚠️ <b>Legacy Withdrawal Path Disabled</b>\n\n` +
+          `To ensure maximum transaction security and support our updated fee system, all withdrawals must be processed through our new <b>Withdrawal Mini App V2</b>.\n\n` +
+          `Please tap the button below to complete your request securely:`,
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '💳 UPI ID', callback_data: 'withdraw_method_upi' }],
-            [{ text: '🖼 QR Code Image Upload', callback_data: 'withdraw_method_qr' }],
-            [{ text: '🎁 Redeem Code', callback_data: 'withdraw_method_redeem' }],
+            [
+              {
+                text: '💸 Open Withdrawal Mini App',
+                web_app: { url: withdrawMiniAppUrl },
+              },
+            ],
           ],
         },
-      });
-      return;
-    }
-
-    if (data === 'withdraw_method_upi' || data === 'withdraw_method_qr' || data === 'withdraw_method_redeem') {
-      const existingUser = await getUserByTelegramId(chatId);
-      if (!existingUser) {
-        await sendTelegramApi(token, 'answerCallbackQuery', {
-          callback_query_id: cbId,
-          text: '❌ Session expired.',
-          show_alert: true,
-        });
-        return;
-      }
-
-      const adminConfig = await getAdminConfig();
-      const minW = adminConfig?.minWithdrawal ?? 100;
-      const maxW = adminConfig?.maxWithdrawal ?? 10000;
-      const walletBal = Number(existingUser.walletBalance) || 0;
-
-      const chosenMethod = data === 'withdraw_method_upi'
-        ? 'upi'
-        : data === 'withdraw_method_qr'
-        ? 'qr'
-        : 'redeem_code';
-
-      const methodNameText = chosenMethod === 'upi'
-        ? 'UPI ID'
-        : chosenMethod === 'qr'
-        ? 'QR Code Image Upload'
-        : 'Redeem Code';
-
-      userSessions.set(chatId, {
-        step: 'WITHDRAW_AMOUNT',
-        withdrawMethod: chosenMethod,
-      });
-
-      await sendTelegramApi(token, 'answerCallbackQuery', {
-        callback_query_id: cbId,
-        text: `Selected ${methodNameText}`,
-        show_alert: false,
-      });
-
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `💸 <b>Enter Withdrawal Amount</b>\n\n` +
-          `📌 <b>Method:</b> ${methodNameText}\n` +
-          `💰 <b>Available Balance:</b> ₹${walletBal}\n` +
-          `📉 <b>Minimum:</b> ₹${minW} | 📈 <b>Maximum:</b> ₹${maxW}\n\n` +
-          `Please enter the withdrawal amount in Rupees (e.g. <code>500</code>):`,
-        parse_mode: 'HTML',
-      });
-      return;
-    }
-
-    if (data === 'withdraw_confirm') {
-      const session = userSessions.get(chatId);
-      if (
-        !session ||
-        session.step !== 'WITHDRAW_CONFIRM' ||
-        !session.withdrawAmount ||
-        !session.withdrawMethod
-      ) {
-        await sendTelegramApi(token, 'answerCallbackQuery', {
-          callback_query_id: cbId,
-          text: '❌ Withdrawal session expired. Please tap 💸 Withdraw again.',
-          show_alert: true,
-        });
-        return;
-      }
-
-      const adminConfig = await getAdminConfig();
-      const amount = session.withdrawAmount;
-      const method = session.withdrawMethod;
-      const upiId = session.withdrawUpi || '';
-      const qrImageUrl = session.withdrawQrUrl || '';
-      const redeemCodeDetails = session.withdrawRedeemDetails || '';
-
-      try {
-        const usersRef = collection(db, 'users');
-        const q = query(usersRef, where('telegramId', '==', String(chatId)));
-        const qSnap = await getDocs(q);
-
-        if (qSnap.empty) {
-          throw new Error('User record not found.');
-        }
-
-        const userDocRef = qSnap.docs[0].ref;
-        const userDocId = qSnap.docs[0].id;
-        const freshUserData = qSnap.docs[0].data();
-        const currentBal = Number(freshUserData.walletBalance) || 0;
-
-        if (currentBal < amount) {
-          userSessions.delete(chatId);
-          await sendTelegramApi(token, 'answerCallbackQuery', {
-            callback_query_id: cbId,
-            text: '❌ Insufficient balance for this withdrawal.',
-            show_alert: true,
-          });
-          return;
-        }
-
-        const withdrawalId = `WDR_${Date.now().toString().slice(-6)}_${Math.floor(1000 + Math.random() * 9000)}`;
-
-        const feePercent = adminConfig?.platformFeePercent !== undefined ? Number(adminConfig.platformFeePercent) : 6;
-        const platformFee = Number(((amount * feePercent) / 100).toFixed(2));
-        const payoutAmount = Number((amount - platformFee).toFixed(2));
-
-        console.log(`[WITHDRAWAL SYSTEM LOG]
-Requested Amount: ₹${amount}
-Fee %: ${feePercent}%
-Platform Fee: ₹${platformFee}
-Final Payout: ₹${payoutAmount}`);
-
-        const userUid = freshUserData.appUid || freshUserData.uid || String(chatId);
-
-        // Add document to withdrawals and withdraw_requests collections simultaneously
-        const withdrawalData = {
-          withdrawalId,
-          requestId: withdrawalId,
-          userId: userDocId,
-          uid: userUid,
-          telegramId: String(chatId),
-          userName: freshUserData.firstName || 'User',
-          amount: amount,
-          requestedAmount: amount,
-          platformFee: platformFee,
-          payoutAmount: payoutAmount,
-          feePercent: feePercent,
-          method: method,
-          upiId: upiId,
-          qrImageUrl: qrImageUrl,
-          redeemCodeDetails: redeemCodeDetails,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-          processedAt: '',
-          processedBy: '',
-          rejectReason: '',
-        };
-
-        const wDocRef = await addDoc(collection(db, 'withdrawals'), withdrawalData);
-        const wrDocRef = await addDoc(collection(db, 'withdraw_requests'), {
-          ...withdrawalData,
-          status: 'Pending', // also keep capitalized for legacy viewers
-        });
-
-        console.log(`[Firestore Write] Created withdrawal #${withdrawalId} | Collection: withdrawals (Doc ID: ${wDocRef.id}) & withdraw_requests (Doc ID: ${wrDocRef.id}) | Status: pending | UID: ${userUid}`);
-
-        // Method label for transaction log
-        let methodDetailLog = '';
-        if (method === 'upi') methodDetailLog = `UPI (${upiId})`;
-        else if (method === 'qr') methodDetailLog = `QR Code Upload`;
-        else if (method === 'redeem_code') methodDetailLog = `Redeem Code (${redeemCodeDetails})`;
-
-        // Deduct balance and write immutable transaction atomically
-        const txResult = await recordWalletTransaction({
-          uid: freshUserData.uid,
-          type: 'Withdrawal Request',
-          amount: -amount, // debit is negative
-          status: 'pending',
-          description: `Withdrawal Request #${withdrawalId} via ${methodDetailLog}`,
-          botToken: token,
-        });
-
-        const newBalance = txResult.success && txResult.balanceAfter !== undefined
-          ? txResult.balanceAfter
-          : Math.max(0, (Number(freshUserData.walletBalance) || 0) - amount);
-
-        // Clear session
-        userSessions.delete(chatId);
-
-        await sendTelegramApi(token, 'answerCallbackQuery', {
-          callback_query_id: cbId,
-          text: '✅ Withdrawal request submitted!',
-          show_alert: false,
-        });
-
-        let userMsgDetail = '';
-        if (method === 'upi') userMsgDetail = `💳 <b>UPI ID:</b> <code>${upiId}</code>\n`;
-        else if (method === 'qr') userMsgDetail = `🖼 <b>QR Image:</b> Received 📷\n`;
-        else if (method === 'redeem_code') userMsgDetail = `🎁 <b>Redeem Code Details:</b> <code>${redeemCodeDetails}</code>\n`;
-
-        await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
-          text: `🎉 <b>Withdrawal Request Submitted!</b>\n\n` +
-            `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
-            `💵 <b>Withdrawal Amount:</b> ₹${amount}\n` +
-            `⚡ <b>Platform Fee (${feePercent}%):</b> ₹${platformFee}\n` +
-            `🎁 <b>Amount You Will Receive:</b> ₹${payoutAmount}\n` +
-            `📌 <b>Method:</b> ${method.toUpperCase()}\n` +
-            userMsgDetail +
-            `⏱ <b>Processing Time:</b> ${adminConfig?.processingTimeNotice || '24 Hours'}\n` +
-            `💰 <b>New Balance:</b> ₹${newBalance}\n` +
-            `⌛ <b>Status:</b> Pending Approval\n\n` +
-            `Your request has been submitted to admin for verification. You will be notified once processed!`,
-          parse_mode: 'HTML',
-        });
-
-        // Notify Admin via Telegram with Interactive Approval Card
-        const adminChat = adminConfig?.adminTelegramId || adminConfig?.adminChatId;
-        if (adminChat) {
-          await sendAdminWithdrawalNotification(
-            token,
-            adminChat,
-            wDocRef.id,
-            withdrawalData,
-            { ...freshUserData, walletBalance: newBalance }
-          );
-        }
-      } catch (err: any) {
-        console.error('Error confirming withdrawal:', err);
-        await sendTelegramApi(token, 'answerCallbackQuery', {
-          callback_query_id: cbId,
-          text: `❌ Error submitting withdrawal: ${err.message}`,
-          show_alert: true,
-        });
-      }
-      return;
-    }
-
-    if (data === 'withdraw_cancel') {
-      userSessions.delete(chatId);
-      await sendTelegramApi(token, 'answerCallbackQuery', {
-        callback_query_id: cbId,
-        text: 'Withdrawal cancelled.',
-        show_alert: false,
-      });
-
-      await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
-        text: `❌ <b>Withdrawal Cancelled</b>\n\nYour withdrawal request has been cancelled. Your wallet balance remains unchanged.`,
-        parse_mode: 'HTML',
       });
       return;
     }
@@ -2097,19 +1835,36 @@ Final Payout: ₹${payoutAmount}`);
       return;
     }
 
-    if (text === '💸 Withdraw') {
+    if (text === '💸 Withdraw' || text === '/withdraw') {
+      const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
+      const withdrawMiniAppUrl = `${baseUrl}/?action=withdraw&tgId=${chatId}`;
+
+      const allEnabled = adminConfig?.allWithdrawalsEnabled !== false && adminConfig?.enableWithdraw !== false;
+
+      if (!allEnabled) {
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `🔧 <b>Withdrawals Temporarily Unavailable</b>\n\n` +
+            `Withdrawal service is currently under maintenance.\n` +
+            `Please try again later.`,
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
         text: `💸 <b>Withdraw Funds</b>\n\n` +
-          `💰 <b>Current Balance:</b> ₹${existingUser.walletBalance || 0}\n` +
-          `📉 <b>Minimum Withdrawal:</b> ₹${adminConfig?.minWithdrawal ?? 100}\n` +
-          `📈 <b>Maximum Withdrawal:</b> ₹${adminConfig?.maxWithdrawal ?? 10000}\n\n` +
-          `ℹ <b>Notice:</b> ${adminConfig?.processingTimeNotice || 'Withdrawal requests are processed within 24 hours.'}`,
+          `💰 <b>Available Balance:</b> ₹${existingUser.walletBalance || 0}\n\n` +
+          `Please tap the button below to open the secure Withdrawal Mini App and complete your request.`,
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '💸 Continue Withdrawal', callback_data: 'withdraw_continue' },
+              {
+                text: '💸 Open Withdrawal Mini App',
+                web_app: { url: withdrawMiniAppUrl },
+              },
             ],
           ],
         },

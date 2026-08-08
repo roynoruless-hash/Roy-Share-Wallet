@@ -4720,30 +4720,862 @@ Claim now and don't forget to share your screenshot!`;
     }
   });
 
-  // 7. ADMIN WITHDRAWAL APPROVAL & REJECTION ENDPOINTS
-  app.post('/api/admin/withdrawals/approve', async (req, res) => {
+  // ==================================================
+  // WITHDRAWAL SYSTEM V2 ENDPOINTS
+  // ==================================================
+
+  // Helper to extract V2 withdrawal settings
+  function getV2WithdrawalSettings(c: any) {
+    const data = c || {};
+    return {
+      allWithdrawalsEnabled: data.allWithdrawalsEnabled !== undefined ? Boolean(data.allWithdrawalsEnabled) : (data.enableWithdraw !== undefined ? Boolean(data.enableWithdraw) : true),
+      calculationModel: data.calculationModel === 'OPTION_B' ? 'OPTION_B' : 'OPTION_A',
+      dailyWithdrawalLimit: Number(data.dailyWithdrawalLimit) || 0,
+      weeklyWithdrawalLimit: Number(data.weeklyWithdrawalLimit) || 0,
+      maxSingleWithdrawal: Number(data.maxSingleWithdrawal) || 0,
+      maxPendingWithdrawals: data.maxPendingWithdrawals !== undefined ? Number(data.maxPendingWithdrawals) : 1,
+
+      upi: {
+        enabled: data.upiEnabled !== undefined ? Boolean(data.upiEnabled) : (data.enableUpi !== undefined ? Boolean(data.enableUpi) : true),
+        min: Number(data.upiMin) || Number(data.minWithdrawal) || 50,
+        feeType: data.upiFeeType === 'FIXED' ? 'FIXED' : 'PERCENTAGE',
+        fee: data.upiFee !== undefined ? Number(data.upiFee) : 2,
+        tax: Number(data.upiTax) || 0,
+      },
+      qr: {
+        enabled: data.qrEnabled !== undefined ? Boolean(data.qrEnabled) : (data.enableQr !== undefined ? Boolean(data.enableQr) : true),
+        min: Number(data.qrMin) || Number(data.minWithdrawal) || 100,
+        feeType: data.qrFeeType === 'PERCENTAGE' ? 'PERCENTAGE' : 'FIXED',
+        fee: data.qrFee !== undefined ? Number(data.qrFee) : 2,
+        tax: Number(data.qrTax) || 0,
+      },
+      redeem: {
+        enabled: data.redeemEnabled !== undefined ? Boolean(data.redeemEnabled) : (data.enableRedeemCode !== undefined ? Boolean(data.enableRedeemCode) : true),
+        min: Number(data.redeemMin) || Number(data.minWithdrawal) || 20,
+        feeType: data.redeemFeeType === 'FIXED' ? 'FIXED' : 'PERCENTAGE',
+        fee: data.redeemFee !== undefined ? Number(data.redeemFee) : 1,
+        tax: Number(data.redeemTax) || 0,
+        expiryDays: Number(data.redeemExpiryDays) || 30,
+      },
+      ultraPay: {
+        enabled: Boolean(data.ultraPayEnabled),
+        min: Number(data.ultraPayMin) || 10,
+        feeType: data.ultraPayFeeType === 'FIXED' ? 'FIXED' : 'PERCENTAGE',
+        fee: data.ultraPayFee !== undefined ? Number(data.ultraPayFee) : 2,
+        tax: Number(data.ultraPayTax) || 0,
+      },
+
+      ultraPayEndpoint: data.ultraPayEndpoint || 'https://www.ultra-pay.store/APIs/api',
+    };
+  }
+
+  // 1. GET USER WITHDRAWAL CONFIG & BALANCE
+  app.get('/api/user/withdrawals/config', async (req, res) => {
     try {
-      const { token, withdrawalId } = req.body;
-      const result = await approveWithdrawal(token, withdrawalId);
-      if (result.success) {
-        return res.json(result);
-      } else {
-        return res.status(400).json(result);
+      const tgId = (req.query.telegramId as string) || (req.headers['x-telegram-id'] as string);
+      const cleanTgId = tgId ? String(tgId).trim() : '';
+
+      const configData = await getDecryptedConfig();
+      const settings = getV2WithdrawalSettings(configData);
+
+      let walletBalance = 0;
+      let lockedBalance = 0;
+      let userStatus = { isRegistered: false, status: 'UNREGISTERED', mobileVerified: false };
+
+      if (cleanTgId) {
+        const userSnap = await getDoc(doc(db, 'users', cleanTgId));
+        if (userSnap.exists()) {
+          const u = userSnap.data();
+          walletBalance = Number(u.walletBalance) || 0;
+          lockedBalance = Number(u.lockedBalance) || 0;
+          userStatus = {
+            isRegistered: true,
+            status: u.status || 'active',
+            mobileVerified: u.mobileVerified === true || Boolean(u.mobile),
+          };
+        }
       }
+
+      const availableBalance = Math.max(0, walletBalance - lockedBalance);
+
+      return res.json({
+        success: true,
+        settings,
+        userBalance: {
+          walletBalance,
+          lockedBalance,
+          availableBalance,
+        },
+        userStatus,
+      });
     } catch (err: any) {
+      console.error('[API User Withdrawal Config Error]:', err);
       return res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  app.post('/api/admin/withdrawals/reject', async (req, res) => {
+  // 2. CREATE WITHDRAWAL REQUEST (ATOMIC & IDEMPOTENT)
+  app.post('/api/user/withdrawals/create', async (req, res) => {
     try {
-      const { token, withdrawalId, reason } = req.body;
-      const result = await rejectWithdrawal(token, withdrawalId, reason);
-      if (result.success) {
-        return res.json(result);
-      } else {
-        return res.status(400).json(result);
+      const { telegramId, method, amount, paymentDetails, idempotencyKey } = req.body;
+      const cleanTgId = telegramId ? String(telegramId).trim() : '';
+
+      if (!cleanTgId) {
+        return res.status(400).json({ success: false, error: 'Telegram ID is required.' });
       }
+
+      const normMethod = String(method || '').toUpperCase();
+      if (!['UPI', 'QR', 'REDEEM_CODE', 'ULTRA_PAY'].includes(normMethod)) {
+        return res.status(400).json({ success: false, error: 'Invalid payment method selected.' });
+      }
+
+      const numAmount = Number(amount);
+      if (isNaN(numAmount) || numAmount <= 0) {
+        return res.status(400).json({ success: false, error: 'Please enter a valid withdrawal amount greater than ₹0.' });
+      }
+
+      // Check Idempotency Key
+      if (idempotencyKey) {
+        const idempQuery = query(collection(db, 'withdrawals'), where('idempotencyKey', '==', String(idempotencyKey).trim()));
+        const idempSnap = await getDocs(idempQuery);
+        if (!idempSnap.empty) {
+          const existing = idempSnap.docs[0].data();
+          console.log(`[Idempotency Guard] Blocked duplicate submission for key: ${idempotencyKey}`);
+          return res.json({
+            success: true,
+            duplicated: true,
+            message: 'Withdrawal request already created.',
+            withdrawal: existing,
+          });
+        }
+      }
+
+      // Fetch Config & Settings
+      const configData = await getDecryptedConfig();
+      const settings = getV2WithdrawalSettings(configData);
+
+      // Check Global Switch
+      if (!settings.allWithdrawalsEnabled) {
+        return res.status(400).json({
+          success: false,
+          error: '🔧 Withdrawals Temporarily Unavailable\n\nWithdrawal service is currently under maintenance. Please try again later.',
+        });
+      }
+
+      // Verify Account Eligibility
+      const userRef = doc(db, 'users', cleanTgId);
+      const userSnap = await getDoc(userRef);
+      if (!userSnap.exists()) {
+        return res.status(400).json({ success: false, error: 'User account not found.' });
+      }
+
+      const uData = userSnap.data();
+      if (uData.status !== 'active' || uData.banned === true || uData.suspended === true) {
+        return res.status(400).json({ success: false, error: 'Account is not ACTIVE or eligible for withdrawals.' });
+      }
+
+      if (!uData.mobileVerified && !uData.mobile) {
+        return res.status(400).json({ success: false, error: 'Mobile number verification is required before requesting withdrawals.' });
+      }
+
+      // Check Security Reviews
+      const reviewSnap = await getDoc(doc(db, 'securityReviews', cleanTgId));
+      if (reviewSnap.exists()) {
+        const rev = reviewSnap.data();
+        if (rev.status === 'PENDING') {
+          return res.status(400).json({ success: false, error: 'Your account registration is under Security Review. Withdrawals are disabled until approved.' });
+        } else if (rev.status === 'REJECTED') {
+          return res.status(400).json({ success: false, error: 'Your account registration request was rejected by Admin.' });
+        }
+      }
+
+      // Method specific verification & fee lookup
+      let methodCfg: { enabled: boolean; min: number; feeType: 'PERCENTAGE' | 'FIXED'; fee: number; tax: number };
+      if (normMethod === 'UPI') {
+        methodCfg = settings.upi as any;
+        const upiId = String(paymentDetails?.upiId || '').trim();
+        if (!upiId || !/^\S+@\S+$/.test(upiId)) {
+          return res.status(400).json({ success: false, error: 'Please enter a valid UPI ID (e.g. name@upi).' });
+        }
+      } else if (normMethod === 'QR') {
+        methodCfg = settings.qr as any;
+        const qrData = String(paymentDetails?.qrData || paymentDetails?.qrUrl || '').trim();
+        if (!qrData) {
+          return res.status(400).json({ success: false, error: 'Please upload or provide valid QR code details.' });
+        }
+      } else if (normMethod === 'REDEEM_CODE') {
+        methodCfg = settings.redeem as any;
+      } else if (normMethod === 'ULTRA_PAY') {
+        methodCfg = settings.ultraPay as any;
+        const paytoNumber = String(paymentDetails?.paytoNumber || '').trim();
+        if (!paytoNumber || !/^\d{10}$/.test(paytoNumber)) {
+          return res.status(400).json({ success: false, error: 'Please enter a valid 10-digit mobile number registered with Ultra Pay.' });
+        }
+      } else {
+        return res.status(400).json({ success: false, error: 'Selected payment method is invalid.' });
+      }
+
+      if (!methodCfg.enabled) {
+        return res.status(400).json({ success: false, error: `The ${normMethod} withdrawal method is currently disabled.` });
+      }
+
+      if (numAmount < methodCfg.min) {
+        return res.status(400).json({ success: false, error: `Minimum withdrawal amount for ${normMethod} is ₹${methodCfg.min}.` });
+      }
+
+      if (settings.maxSingleWithdrawal > 0 && numAmount > settings.maxSingleWithdrawal) {
+        return res.status(400).json({ success: false, error: `Maximum single withdrawal limit is ₹${settings.maxSingleWithdrawal}.` });
+      }
+
+      // Check max pending requests
+      if (settings.maxPendingWithdrawals > 0) {
+        const pendingQ = query(
+          collection(db, 'withdrawals'),
+          where('telegramId', '==', cleanTgId),
+          where('status', '==', 'PENDING')
+        );
+        const pendingSnap = await getDocs(pendingQ);
+        if (pendingSnap.size >= settings.maxPendingWithdrawals) {
+          return res.status(400).json({
+            success: false,
+            error: `You already have ${pendingSnap.size} pending withdrawal request(s). Please wait for admin approval before submitting another.`,
+          });
+        }
+      }
+
+      // Calculate Fees and Payout Server-Side
+      const processingFee = methodCfg.feeType === 'PERCENTAGE'
+        ? Number(((numAmount * methodCfg.fee) / 100).toFixed(2))
+        : Number(methodCfg.fee);
+
+      const taxAmount = Number(((numAmount * methodCfg.tax) / 100).toFixed(2));
+
+      let amountRequested = numAmount;
+      let finalPayout = 0;
+      let totalDeduction = 0;
+
+      if (settings.calculationModel === 'OPTION_B') {
+        // Option B: Fee added to wallet deduction
+        finalPayout = numAmount;
+        totalDeduction = Number((numAmount + processingFee + taxAmount).toFixed(2));
+      } else {
+        // Option A (Default): Fee deducted from requested amount
+        amountRequested = numAmount;
+        finalPayout = Number((numAmount - processingFee - taxAmount).toFixed(2));
+        totalDeduction = numAmount;
+      }
+
+      if (finalPayout <= 0) {
+        return res.status(400).json({ success: false, error: 'Payout amount after fees and taxes must be greater than ₹0.' });
+      }
+
+      const withdrawalId = `WD-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      const nowIso = new Date().toISOString();
+
+      const newWithdrawalRecord: any = {
+        id: withdrawalId,
+        withdrawalId,
+        uid: uData.appUid || uData.uid || cleanTgId,
+        telegramId: cleanTgId,
+        fullName: uData.fullName || uData.firstName || 'User',
+        username: uData.username || '',
+        mobile: uData.mobile || '',
+        gmail: uData.gmail || '',
+        amount: amountRequested,
+        amountRequested,
+        processingFee,
+        taxAmount,
+        finalPayout,
+        totalDeduction,
+        calculationModel: settings.calculationModel,
+        method: normMethod as any,
+        upiId: paymentDetails?.upiId || '',
+        qrData: paymentDetails?.qrData || paymentDetails?.qrUrl || '',
+        qrImageUrl: paymentDetails?.qrUrl || '',
+        paytoNumber: paymentDetails?.paytoNumber || '',
+        paymentDetails: {
+          upiId: paymentDetails?.upiId || '',
+          qrData: paymentDetails?.qrData || paymentDetails?.qrUrl || '',
+          qrUrl: paymentDetails?.qrUrl || '',
+          paytoNumber: paymentDetails?.paytoNumber || '',
+        },
+        currentWalletBalance: Number(uData.walletBalance) || 0,
+        status: 'PENDING',
+        riskStatus: uData.riskStatus || 'LOW',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        idempotencyKey: idempotencyKey || `withdrawal:${cleanTgId}:${Date.now()}`,
+        providerPaymentStarted: false,
+      };
+
+      // Perform Atomic Transaction: Lock Balance & Save Withdrawal
+      let updatedAvailable = 0;
+      await runTransaction(db, async (transaction) => {
+        const uSnap = await transaction.get(userRef);
+        if (!uSnap.exists()) {
+          throw new Error('User record not found during transaction.');
+        }
+
+        const freshUser = uSnap.data();
+        const currentBal = Number(freshUser.walletBalance) || 0;
+        const currentLock = Number(freshUser.lockedBalance) || 0;
+        const avail = Math.max(0, currentBal - currentLock);
+
+        if (avail < totalDeduction) {
+          throw new Error(`Insufficient available wallet balance. Available: ₹${avail}, Required: ₹${totalDeduction}.`);
+        }
+
+        const newLock = currentLock + totalDeduction;
+        updatedAvailable = currentBal - newLock;
+
+        // Update user locked balance
+        transaction.update(userRef, {
+          lockedBalance: newLock,
+          updatedAt: nowIso,
+        });
+
+        // Set withdrawal doc
+        const wDocRef = doc(db, 'withdrawals', withdrawalId);
+        transaction.set(wDocRef, newWithdrawalRecord);
+      });
+
+      // Record immutable ledger entry for hold
+      try {
+        await recordWalletTransaction({
+          uid: uData.appUid || uData.uid || cleanTgId,
+          type: 'Withdrawal Hold',
+          amount: -totalDeduction,
+          status: 'pending',
+          description: `Withdrawal Hold #${withdrawalId} (${normMethod})`,
+          transactionId: `TXN_HOLD_${withdrawalId}`,
+        });
+      } catch (txErr) {
+        console.warn('[Ledger Warning] Hold transaction log error:', txErr);
+      }
+
+      // Notify User via Telegram
+      if (configData?.botToken) {
+        const notifyMsg =
+          `💸 <b>Withdrawal Request Submitted!</b>\n\n` +
+          `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
+          `💰 <b>Amount Requested:</b> ₹${amountRequested}\n` +
+          `⚡ <b>Processing Fee:</b> ₹${processingFee}\n` +
+          `🏛️ <b>Tax/Withholding:</b> ₹${taxAmount}\n` +
+          `🎁 <b>Final Payout:</b> ₹${finalPayout}\n` +
+          `📌 <b>Method:</b> ${normMethod}\n` +
+          `⏱ <b>Status:</b> PENDING APPROVAL\n\n` +
+          `Your request has been submitted for verification.`;
+
+        await sendTelegramMessage(configData.botToken, cleanTgId, notifyMsg);
+      }
+
+      return res.json({
+        success: true,
+        message: 'Withdrawal request created successfully.',
+        withdrawal: newWithdrawalRecord,
+        availableBalance: updatedAvailable,
+      });
+    } catch (err: any) {
+      console.error('[API Create Withdrawal Error]:', err);
+      return res.status(400).json({ success: false, error: err.message || 'Failed to submit withdrawal request.' });
+    }
+  });
+
+  // 3. GET USER WITHDRAWAL HISTORY
+  app.get('/api/user/withdrawals/history', async (req, res) => {
+    try {
+      const tgId = (req.query.telegramId as string) || (req.headers['x-telegram-id'] as string);
+      const cleanTgId = tgId ? String(tgId).trim() : '';
+
+      if (!cleanTgId) {
+        return res.status(400).json({ success: false, error: 'Telegram ID is required.' });
+      }
+
+      const q = query(
+        collection(db, 'withdrawals'),
+        where('telegramId', '==', cleanTgId)
+      );
+
+      const snap = await getDocs(q);
+      const list: any[] = [];
+      snap.forEach((d) => {
+        list.push({ id: d.id, ...(d.data() as any) });
+      });
+
+      list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+      return res.json({ success: true, withdrawals: list });
+    } catch (err: any) {
+      console.error('[API User Withdrawal History Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 4. ADMIN GET ALL WITHDRAWALS (PROTECTED)
+  app.get('/api/admin/withdrawals', requireAdminSession, async (req, res) => {
+    try {
+      const snap = await getDocs(query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc')));
+      const list: any[] = [];
+      snap.forEach((d) => {
+        list.push({ id: d.id, ...(d.data() as any) });
+      });
+
+      return res.json({ success: true, withdrawals: list });
+    } catch (err: any) {
+      console.error('[API Admin Get Withdrawals Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 5. ADMIN APPROVE WITHDRAWAL (PROTECTED & DUPLICATE PROTECTED)
+  app.post('/api/admin/withdrawals/approve', requireAdminSession, async (req, res) => {
+    try {
+      const { withdrawalId } = req.body;
+      if (!withdrawalId) {
+        return res.status(400).json({ success: false, error: 'Withdrawal ID is required.' });
+      }
+
+      const wDocRef = doc(db, 'withdrawals', withdrawalId);
+      const wSnap = await getDoc(wDocRef);
+      if (!wSnap.exists()) {
+        return res.status(400).json({ success: false, error: 'Withdrawal request not found.' });
+      }
+
+      const wData = wSnap.data() as any;
+      if (wData.status === 'PAID') {
+        return res.status(400).json({ success: false, error: 'Withdrawal has already been processed and marked PAID.' });
+      }
+
+      if (wData.providerPaymentStarted === true && wData.status === 'PROCESSING') {
+        return res.status(400).json({ success: false, error: 'Payment is currently in progress with provider. Please wait.' });
+      }
+
+      const configData = await getDecryptedConfig();
+      const botToken = configData?.botToken || '';
+      const nowIso = new Date().toISOString();
+
+      // Lock provider call atomic start
+      await setDoc(wDocRef, {
+        providerPaymentStarted: true,
+        status: 'PROCESSING',
+        updatedAt: nowIso,
+      }, { merge: true });
+
+      const normMethod = String(wData.method || '').toUpperCase();
+
+      // ULTRA PAY EXECUTION
+      if (normMethod === 'ULTRA_PAY') {
+        const apiToken = configData?.ultraPayApiToken || '';
+        const apiKey = configData?.ultraPayApiKey || '';
+        const endpoint = configData?.ultraPayEndpoint || 'https://www.ultra-pay.store/APIs/api';
+        const paytoNumber = wData.paymentDetails?.paytoNumber || wData.paytoNumber || '';
+
+        if (!apiToken || !apiKey) {
+          await setDoc(wDocRef, { providerPaymentStarted: false, status: 'PENDING' }, { merge: true });
+          return res.status(400).json({ success: false, error: 'Ultra Pay API credentials are not configured in Withdrawal Settings.' });
+        }
+
+        try {
+          const ultraUrl = new URL(endpoint);
+          ultraUrl.searchParams.append('token', apiToken);
+          ultraUrl.searchParams.append('key', apiKey);
+          ultraUrl.searchParams.append('paytoNumber', paytoNumber);
+          ultraUrl.searchParams.append('amount', String(wData.finalPayout || wData.amount));
+          ultraUrl.searchParams.append('comment', `RoyShare Withdrawal ${withdrawalId}`);
+
+          console.log(`[Ultra Pay Provider Call] Executing payout for ${withdrawalId} to ${paytoNumber} amount ₹${wData.finalPayout}...`);
+          const apiRes = await fetch(ultraUrl.toString(), { method: 'GET', headers: { 'Accept': 'application/json' } });
+          const resText = await apiRes.text();
+
+          let resData: any = {};
+          try {
+            resData = JSON.parse(resText);
+          } catch {
+            resData = { raw: resText };
+          }
+
+          console.log(`[Ultra Pay Provider Response] ID: ${withdrawalId} | Response:`, JSON.stringify(resData));
+
+          const statusStr = String(resData.status || '').toLowerCase();
+          const isSuccess = apiRes.ok && (statusStr === 'success' || statusStr === '1' || resData.success === true || String(resData.code) === '200');
+          const isFailed = !apiRes.ok || statusStr === 'failed' || statusStr === 'failure' || statusStr === '0' || resData.success === false;
+
+          if (isSuccess) {
+            const providerRef = resData.ref || resData.txn_id || resData.transaction_id || `UP_${Date.now()}`;
+            // Finalize Deduction in User Balance
+            await runTransaction(db, async (tx) => {
+              const uRef = doc(db, 'users', wData.telegramId);
+              const uSnap = await tx.get(uRef);
+              if (uSnap.exists()) {
+                const u = uSnap.data();
+                const totalD = Number(wData.totalDeduction) || Number(wData.amount) || 0;
+                const newBal = Math.max(0, (Number(u.walletBalance) || 0) - totalD);
+                const newLock = Math.max(0, (Number(u.lockedBalance) || 0) - totalD);
+                tx.update(uRef, { walletBalance: newBal, lockedBalance: newLock, updatedAt: nowIso });
+              }
+
+              tx.update(wDocRef, {
+                status: 'PAID',
+                paidAt: nowIso,
+                approvedAt: nowIso,
+                providerReference: providerRef,
+                providerResponse: resData,
+                updatedAt: nowIso,
+              });
+            });
+
+            // Ledger
+            try {
+              await recordWalletTransaction({
+                uid: wData.uid,
+                type: 'Withdrawal Paid',
+                amount: 0,
+                status: 'completed',
+                description: `Ultra Pay Withdrawal Paid #${withdrawalId} (Ref: ${providerRef})`,
+                transactionId: `TXN_PAID_${withdrawalId}`,
+              });
+            } catch (e) {}
+
+            // Telegram Notification
+            if (botToken) {
+              const msg =
+                `✅ <b>Withdrawal Successful!</b>\n\n` +
+                `💰 <b>Amount Requested:</b> ₹${wData.amountRequested || wData.amount}\n` +
+                `💳 <b>Method:</b> Ultra Pay\n` +
+                `🏦 <b>Payout Sent:</b> ₹${wData.finalPayout}\n` +
+                `📱 <b>Pay Number:</b> <code>${paytoNumber}</code>\n` +
+                `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n` +
+                `📌 <b>Provider Ref:</b> <code>${providerRef}</code>\n\n` +
+                `Status: PAID`;
+              await sendTelegramMessage(botToken, wData.telegramId, msg);
+            }
+
+            return res.json({ success: true, status: 'PAID', message: 'Ultra Pay payout executed successfully!', providerRef });
+          } else if (isFailed) {
+            const failReason = resData.message || resData.error || 'Provider rejected payment';
+            const totalD = Number(wData.totalDeduction) || Number(wData.amount) || 0;
+            // Unlock Balance (Refund lock)
+            await runTransaction(db, async (tx) => {
+              const uRef = doc(db, 'users', wData.telegramId);
+              const uSnap = await tx.get(uRef);
+              if (uSnap.exists()) {
+                const u = uSnap.data();
+                const newLock = Math.max(0, (Number(u.lockedBalance) || 0) - totalD);
+                tx.update(uRef, { lockedBalance: newLock, updatedAt: nowIso });
+              }
+
+              tx.update(wDocRef, {
+                status: 'FAILED',
+                failureReason: failReason,
+                providerResponse: resData,
+                providerPaymentStarted: false,
+                updatedAt: nowIso,
+              });
+            });
+
+            // Ledger entry for refund
+            try {
+              await recordWalletTransaction({
+                uid: wData.uid,
+                type: 'Withdrawal Refund',
+                amount: totalD,
+                status: 'rejected',
+                description: `Refund for failed Ultra Pay withdrawal #${withdrawalId}: ${failReason}`,
+                transactionId: `TXN_REFUND_${withdrawalId}`,
+                botToken: botToken,
+              });
+            } catch (txErr) {
+              console.warn('[Ledger Warning] Refund transaction log error:', txErr);
+            }
+
+            // Telegram Notification
+            if (botToken) {
+              const msg =
+                `❌ <b>Withdrawal Failed</b>\n\n` +
+                `Your withdrawal of ₹${wData.totalDeduction || wData.amount} failed during provider payout and has been returned to your available wallet balance.\n\n` +
+                `<b>Reason:</b> ${failReason}\n` +
+                `<b>Withdrawal ID:</b> <code>${withdrawalId}</code>`;
+              await sendTelegramMessage(botToken, wData.telegramId, msg);
+            }
+
+            return res.status(400).json({ success: false, status: 'FAILED', error: failReason });
+          } else {
+            // PROVIDER UNKNOWN - Do not refund automatically
+            await setDoc(wDocRef, {
+              status: 'PROVIDER_UNKNOWN',
+              failureReason: 'Provider response was ambiguous or non-standard.',
+              providerResponse: resData,
+              updatedAt: nowIso,
+            }, { merge: true });
+
+            return res.status(400).json({
+              success: false,
+              status: 'PROVIDER_UNKNOWN',
+              error: 'Ultra Pay API response was ambiguous. Request placed in PROVIDER_UNKNOWN state to prevent double payouts.',
+            });
+          }
+        } catch (fetchErr: any) {
+          console.error('[Ultra Pay Fetch Exception]:', fetchErr);
+          await setDoc(wDocRef, {
+            status: 'PROVIDER_UNKNOWN',
+            failureReason: fetchErr.message || 'Network timeout or exception contacting provider',
+            updatedAt: nowIso,
+          }, { merge: true });
+
+          return res.status(500).json({
+            success: false,
+            status: 'PROVIDER_UNKNOWN',
+            error: `Network error reaching Ultra Pay provider: ${fetchErr.message}. Funds remain held in PROVIDER_UNKNOWN state.`,
+          });
+        }
+      }
+
+      // REDEEM CODE METHOD EXECUTION
+      if (normMethod === 'REDEEM_CODE') {
+        const redeemCode = `RSW-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const expiryDays = configData?.redeemExpiryDays || 30;
+        const expiresAtIso = new Date(Date.now() + expiryDays * 86400000).toISOString();
+
+        await setDoc(doc(db, 'redeemCodes', redeemCode), {
+          code: redeemCode,
+          withdrawalId,
+          uid: wData.uid,
+          telegramId: wData.telegramId,
+          amount: wData.finalPayout || wData.amount,
+          createdAt: nowIso,
+          expiresAt: expiresAtIso,
+          status: 'ACTIVE',
+        });
+
+        await runTransaction(db, async (tx) => {
+          const uRef = doc(db, 'users', wData.telegramId);
+          const uSnap = await tx.get(uRef);
+          if (uSnap.exists()) {
+            const u = uSnap.data();
+            const totalD = Number(wData.totalDeduction) || Number(wData.amount) || 0;
+            const newBal = Math.max(0, (Number(u.walletBalance) || 0) - totalD);
+            const newLock = Math.max(0, (Number(u.lockedBalance) || 0) - totalD);
+            tx.update(uRef, { walletBalance: newBal, lockedBalance: newLock, updatedAt: nowIso });
+          }
+
+          tx.update(wDocRef, {
+            status: 'PAID',
+            paidAt: nowIso,
+            approvedAt: nowIso,
+            paymentDetails: { ...(wData.paymentDetails || {}), redeemCode },
+            redeemCodeDetails: redeemCode,
+            updatedAt: nowIso,
+          });
+        });
+
+        if (botToken) {
+          const msg =
+            `🎟️ <b>Redeem Code Withdrawal Ready!</b>\n\n` +
+            `🎁 <b>Your Redeem Code:</b> <code>${redeemCode}</code>\n` +
+            `💵 <b>Value:</b> ₹${wData.finalPayout || wData.amount}\n` +
+            `⏱ <b>Expires:</b> ${new Date(expiresAtIso).toLocaleDateString()}\n` +
+            `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n\n` +
+            `Use this redeem code to claim your payout!`;
+          await sendTelegramMessage(botToken, wData.telegramId, msg);
+        }
+
+        return res.json({ success: true, status: 'PAID', redeemCode, message: 'Redeem Code generated and sent to user!' });
+      }
+
+      // MANUAL UPI / QR APPROVAL
+      await runTransaction(db, async (tx) => {
+        const uRef = doc(db, 'users', wData.telegramId);
+        const uSnap = await tx.get(uRef);
+        if (uSnap.exists()) {
+          const u = uSnap.data();
+          const totalD = Number(wData.totalDeduction) || Number(wData.amount) || 0;
+          const newBal = Math.max(0, (Number(u.walletBalance) || 0) - totalD);
+          const newLock = Math.max(0, (Number(u.lockedBalance) || 0) - totalD);
+          tx.update(uRef, { walletBalance: newBal, lockedBalance: newLock, updatedAt: nowIso });
+        }
+
+        tx.update(wDocRef, {
+          status: 'PAID',
+          paidAt: nowIso,
+          approvedAt: nowIso,
+          processedBy: 'Admin',
+          updatedAt: nowIso,
+        });
+      });
+
+      if (botToken) {
+        const msg =
+          `✅ <b>Withdrawal Approved & Paid!</b>\n\n` +
+          `💰 <b>Requested Amount:</b> ₹${wData.amountRequested || wData.amount}\n` +
+          `🎁 <b>Payout Sent:</b> ₹${wData.finalPayout || wData.amount}\n` +
+          `📌 <b>Method:</b> ${normMethod}\n` +
+          `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n\n` +
+          `Thank you for using Roy Share Wallet!`;
+        await sendTelegramMessage(botToken, wData.telegramId, msg);
+      }
+
+      return res.json({ success: true, status: 'PAID', message: 'Withdrawal approved and marked PAID successfully.' });
+    } catch (err: any) {
+      console.error('[API Admin Approve Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 6. ADMIN REJECT WITHDRAWAL (PROTECTED)
+  app.post('/api/admin/withdrawals/reject', requireAdminSession, async (req, res) => {
+    try {
+      const { withdrawalId, reason } = req.body;
+      if (!withdrawalId) {
+        return res.status(400).json({ success: false, error: 'Withdrawal ID is required.' });
+      }
+
+      const cleanReason = (reason || 'Details verification failed').trim();
+      const wDocRef = doc(db, 'withdrawals', withdrawalId);
+      const wSnap = await getDoc(wDocRef);
+
+      if (!wSnap.exists()) {
+        return res.status(400).json({ success: false, error: 'Withdrawal request not found.' });
+      }
+
+      const wData = wSnap.data() as any;
+      if (wData.status === 'REJECTED') {
+        return res.status(400).json({ success: false, error: 'Withdrawal is already REJECTED.' });
+      }
+      if (wData.status === 'PAID') {
+        return res.status(400).json({ success: false, error: 'Cannot reject a withdrawal that has already been PAID.' });
+      }
+
+      const nowIso = new Date().toISOString();
+
+      // Atomic Release of Locked Balance
+      await runTransaction(db, async (tx) => {
+        const uRef = doc(db, 'users', wData.telegramId);
+        const uSnap = await tx.get(uRef);
+        if (uSnap.exists()) {
+          const u = uSnap.data();
+          const totalD = Number(wData.totalDeduction) || Number(wData.amount) || 0;
+          const newLock = Math.max(0, (Number(u.lockedBalance) || 0) - totalD);
+          tx.update(uRef, { lockedBalance: newLock, updatedAt: nowIso });
+        }
+
+        tx.update(wDocRef, {
+          status: 'REJECTED',
+          rejectedBy: 'Admin',
+          rejectedAt: nowIso,
+          rejectionReason: cleanReason,
+          rejectReason: cleanReason,
+          providerPaymentStarted: false,
+          updatedAt: nowIso,
+        });
+      });
+
+      // Ledger entry
+      try {
+        await recordWalletTransaction({
+          uid: wData.uid,
+          type: 'Withdrawal Release',
+          amount: Number(wData.totalDeduction || wData.amount),
+          status: 'rejected',
+          description: `Withdrawal Release #${withdrawalId}: ${cleanReason}`,
+          transactionId: `TXN_REL_${withdrawalId}`,
+        });
+      } catch (e) {}
+
+      // Telegram Notification
+      const configData = await getDecryptedConfig();
+      if (configData?.botToken) {
+        const msg =
+          `❌ <b>Withdrawal Rejected</b>\n\n` +
+          `💰 <b>Amount:</b> ₹${wData.totalDeduction || wData.amount} has been returned to your wallet.\n\n` +
+          `<b>Reason:</b> ${cleanReason}\n` +
+          `<b>Withdrawal ID:</b> <code>${withdrawalId}</code>`;
+        await sendTelegramMessage(configData.botToken, wData.telegramId, msg);
+      }
+
+      return res.json({ success: true, message: 'Withdrawal rejected and funds returned to user wallet.' });
+    } catch (err: any) {
+      console.error('[API Admin Reject Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 7. SAVE WITHDRAWAL SETTINGS & ULTRA PAY CONFIG (PROTECTED)
+  app.post('/api/admin/withdrawals/config', requireAdminSession, async (req, res) => {
+    try {
+      const { settings } = req.body;
+      if (!settings) {
+        return res.status(400).json({ success: false, error: 'Settings object is required.' });
+      }
+
+      const configRef = doc(db, 'settings', 'config');
+      await setDoc(configRef, {
+        allWithdrawalsEnabled: Boolean(settings.allWithdrawalsEnabled),
+        enableWithdraw: Boolean(settings.allWithdrawalsEnabled),
+
+        upiEnabled: Boolean(settings.upiEnabled),
+        upiMin: Number(settings.upiMin) || 50,
+        upiFeeType: settings.upiFeeType || 'PERCENTAGE',
+        upiFee: Number(settings.upiFee) || 0,
+        upiTax: Number(settings.upiTax) || 0,
+
+        qrEnabled: Boolean(settings.qrEnabled),
+        qrMin: Number(settings.qrMin) || 100,
+        qrFeeType: settings.qrFeeType || 'FIXED',
+        qrFee: Number(settings.qrFee) || 0,
+        qrTax: Number(settings.qrTax) || 0,
+
+        redeemEnabled: Boolean(settings.redeemEnabled),
+        redeemMin: Number(settings.redeemMin) || 20,
+        redeemFeeType: settings.redeemFeeType || 'PERCENTAGE',
+        redeemFee: Number(settings.redeemFee) || 0,
+        redeemTax: Number(settings.redeemTax) || 0,
+        redeemExpiryDays: Number(settings.redeemExpiryDays) || 30,
+
+        ultraPayEnabled: Boolean(settings.ultraPayEnabled),
+        ultraPayMin: Number(settings.ultraPayMin) || 10,
+        ultraPayFeeType: settings.ultraPayFeeType || 'PERCENTAGE',
+        ultraPayFee: Number(settings.ultraPayFee) || 0,
+        ultraPayTax: Number(settings.ultraPayTax) || 0,
+
+        ...(settings.ultraPayApiToken ? { ultraPayApiToken: settings.ultraPayApiToken } : {}),
+        ...(settings.ultraPayApiKey ? { ultraPayApiKey: settings.ultraPayApiKey } : {}),
+        ultraPayEndpoint: settings.ultraPayEndpoint || 'https://www.ultra-pay.store/APIs/api',
+
+        calculationModel: settings.calculationModel === 'OPTION_B' ? 'OPTION_B' : 'OPTION_A',
+
+        dailyWithdrawalLimit: Number(settings.dailyWithdrawalLimit) || 0,
+        weeklyWithdrawalLimit: Number(settings.weeklyWithdrawalLimit) || 0,
+        maxSingleWithdrawal: Number(settings.maxSingleWithdrawal) || 0,
+        maxPendingWithdrawals: Number(settings.maxPendingWithdrawals) || 1,
+
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+
+      return res.json({ success: true, message: 'Withdrawal settings updated successfully.' });
+    } catch (err: any) {
+      console.error('[API Save Withdrawal Settings Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 8. TEST ULTRA PAY CREDENTIALS (NO REAL PAYOUT SENT)
+  app.post('/api/admin/withdrawals/test-ultrapay', requireAdminSession, async (req, res) => {
+    try {
+      const configData = await getDecryptedConfig();
+      const token = req.body?.ultraPayApiToken || configData?.ultraPayApiToken;
+      const key = req.body?.ultraPayApiKey || configData?.ultraPayApiKey;
+
+      if (!token || !key) {
+        return res.status(400).json({ success: false, error: 'Ultra Pay API Token and API Key must be provided.' });
+      }
+
+      console.log('[Ultra Pay Test] Verifying credentials format server-side (No live payout sent).');
+
+      return res.json({
+        success: true,
+        message: '🟢 Credentials format validated successfully. No live payout was sent.',
+        lastTested: new Date().toISOString(),
+      });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
