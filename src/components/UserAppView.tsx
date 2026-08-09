@@ -320,7 +320,11 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
       const data = await res.json();
       if (data.success && data.user) {
-        showToast(`🎉 Welcome to ${earningBotConfig?.botName || 'Earning Bot'}! Account activated!`, 'success');
+        if (data.isDuplicate) {
+          showToast('⚠️ Multi-account detected. Account active, but referral reward is rejected.', 'info');
+        } else {
+          showToast(`🎉 Welcome to ${earningBotConfig?.botName || 'Earning Bot'}! Account activated!`, 'success');
+        }
         setUser({
           ...data.user,
           userName: data.user.firstName || data.user.username || `User #${tgId}`,

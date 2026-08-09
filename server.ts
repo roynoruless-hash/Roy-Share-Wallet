@@ -9447,24 +9447,44 @@ Respond with a JSON object containing two properties:
       const referrerTgId = resolvedReferrer?.telegramId || '';
       const refDocId = resolvedReferrer?.docId || '';
 
-      // Duplicity and Device fingerprint constraints: ONE account per device/fingerprint if fingerprint supplied
+      // Duplicity and Device fingerprint/IP check: BOT-SPECIFIC (accountScope: EARNING_BOT, botId)
       const fingerprint = String(deviceFingerprint || '').trim();
+      const clientIp = String(req.body.ip || req.headers['x-forwarded-for'] || req.ip || req.socket?.remoteAddress || '').split(',')[0].trim();
+
+      let isDuplicateDeviceOrIp = false;
+      let duplicateReason = '';
+
       if (fingerprint) {
         const fpQuery = query(collection(db, 'users'), where('botId', '==', botId), where('deviceFingerprint', '==', fingerprint));
         const fpSnap = await getDocs(fpQuery);
-        if (!fpSnap.empty) {
-          const existingDoc = fpSnap.docs[0].data();
-          if (existingDoc.telegramId !== tgUserId) {
-            return res.status(400).json({ success: false, error: 'Only one account is permitted per device.' });
+        fpSnap.forEach((docSnap) => {
+          const existingDoc = docSnap.data();
+          if (String(existingDoc.telegramId) !== String(tgUserId)) {
+            isDuplicateDeviceOrIp = true;
+            duplicateReason = 'Same device fingerprint previously used on this bot';
           }
-        }
+        });
       }
 
-      // Build and Save User Document
+      if (!isDuplicateDeviceOrIp && clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1' && clientIp !== 'localhost') {
+        const ipQuery = query(collection(db, 'users'), where('botId', '==', botId), where('ip', '==', clientIp));
+        const ipSnap = await getDocs(ipQuery);
+        ipSnap.forEach((docSnap) => {
+          const existingDoc = docSnap.data();
+          if (String(existingDoc.telegramId) !== String(tgUserId)) {
+            isDuplicateDeviceOrIp = true;
+            duplicateReason = 'Same IP address previously used on this bot';
+          }
+        });
+      }
+
+      // Build and Save User Document - Account is ALWAYS ALLOWED and ACTIVE
       const nowIso = new Date().toISOString();
       const newUser = {
         id: userDocId,
         uid: userDocId,
+        accountScope: 'EARNING_BOT',
+        earningBotId: botId,
         botId,
         telegramId: tgUserId,
         username,
@@ -9483,6 +9503,8 @@ Respond with a JSON object containing two properties:
         totalReferralEarnings: 0,
         status: 'ACTIVE',
         deviceFingerprint: fingerprint,
+        ip: clientIp,
+        isDuplicateAccount: isDuplicateDeviceOrIp,
         createdAt: nowIso,
         lastActive: nowIso,
       };
@@ -9502,7 +9524,7 @@ Respond with a JSON object containing two properties:
         });
       }
 
-      // Referral reward logic
+      // Referral reward logic - PRE-CHECK DUPLICATE DEVICE/IP BEFORE MARKING VALID OR CREDITING
       if (referrerTgId && refDocId) {
         try {
           const referrerSnap = await getDoc(doc(db, 'users', refDocId));
@@ -9512,84 +9534,105 @@ Respond with a JSON object containing two properties:
             const refRecordRef = doc(db, 'botReferrals', refRecordId);
             const refRecordSnap = await getDoc(refRecordRef);
 
-            const isAlreadyValid = refRecordSnap.exists() && refRecordSnap.data()?.status === 'VALID';
+            if (isDuplicateDeviceOrIp) {
+              // ⚠️ MULTI-ACCOUNT / DUPLICATE DEVICE OR IP DETECTED:
+              // Account is ACTIVE, but Referral MUST BE IMMEDIATELY REJECTED. Referrer gets ₹0!
+              const rejectedRefRecord = {
+                id: refRecordId,
+                botId,
+                referrerTelegramId: referrerTgId,
+                referrerDocId: refDocId,
+                referredTelegramId: tgUserId,
+                referredName: firstName,
+                status: 'REJECTED',
+                rejectReason: duplicateReason || 'Duplicate Device/IP detected',
+                rewardAmount: 0,
+                rewardStatus: 'REJECTED',
+                createdAt: refRecordSnap.exists() ? (refRecordSnap.data()?.createdAt || nowIso) : nowIso,
+                registrationCompletedAt: nowIso,
+              };
 
-            if (!isAlreadyValid) {
-              const refReward = Number(bot.referralReward) || 0;
+              await setDoc(refRecordRef, rejectedRefRecord);
+              console.log(`[REFERRAL SECURITY REJECTED] Duplicate device/IP detected for user "${tgUserId}" on bot "${botId}". Referral REJECTED for referrer "${referrerTgId}". ₹0 reward granted.`);
+            } else {
+              // LEGITIMATE UNIQUE DEVICE/IP: Check if already valid
+              const isAlreadyValid = refRecordSnap.exists() && refRecordSnap.data()?.status === 'VALID';
 
-              // Enforce Daily Referral Limits (e.g. 50 per day)
-              const todayStr = nowIso.substring(0, 10);
-              const referralsTodayQuery = query(
-                collection(db, 'botReferrals'),
-                where('botId', '==', botId),
-                where('referrerTelegramId', '==', referrerTgId),
-                where('status', '==', 'VALID'),
-                where('registrationCompletedAt', '>=', todayStr)
-              );
-              const referralsTodaySnap = await getDocs(referralsTodayQuery);
+              if (!isAlreadyValid) {
+                const refReward = Number(bot.referralReward) || 0;
 
-              const dailyLimit = Number(bot.dailyReferralLimit) || 50;
-              if (referralsTodaySnap.size < dailyLimit) {
-                // 8. Log Referral Status Transition
-                console.log(`[REFERRAL DEBUG] 8. referral status transition: PENDING -> VALID for user "${tgUserId}", referrer "${referrerTgId}", reward: ₹${refReward}`);
+                // Enforce Daily Referral Limits (e.g. 50 per day)
+                const todayStr = nowIso.substring(0, 10);
+                const referralsTodayQuery = query(
+                  collection(db, 'botReferrals'),
+                  where('botId', '==', botId),
+                  where('referrerTelegramId', '==', referrerTgId),
+                  where('status', '==', 'VALID'),
+                  where('registrationCompletedAt', '>=', todayStr)
+                );
+                const referralsTodaySnap = await getDocs(referralsTodayQuery);
 
-                const validRefRecord = {
-                  id: refRecordId,
-                  botId,
-                  referrerTelegramId: referrerTgId,
-                  referrerDocId: refDocId,
-                  referredTelegramId: tgUserId,
-                  referredName: firstName,
-                  status: 'VALID',
-                  rewardAmount: refReward,
-                  rewardStatus: 'PAID',
-                  createdAt: refRecordSnap.exists() ? (refRecordSnap.data()?.createdAt || nowIso) : nowIso,
-                  registrationCompletedAt: nowIso,
-                };
+                const dailyLimit = Number(bot.dailyReferralLimit) || 50;
+                if (referralsTodaySnap.size < dailyLimit) {
+                  console.log(`[REFERRAL DEBUG] referral status transition: PENDING -> VALID for user "${tgUserId}", referrer "${referrerTgId}", reward: ₹${refReward}`);
 
-                await setDoc(refRecordRef, validRefRecord);
-
-                if (refReward > 0) {
-                  const currentBalance = Number(referrerData.walletBalance) || 0;
-                  const currentTotalRefs = Number(referrerData.totalReferrals) || 0;
-                  const currentRefEarnings = Number(referrerData.totalReferralEarnings) || 0;
-
-                  await updateDoc(doc(db, 'users', refDocId), {
-                    walletBalance: currentBalance + refReward,
-                    totalReferrals: currentTotalRefs + 1,
-                    successfulReferrals: Number(referrerData.successfulReferrals || 0) + 1,
-                    totalReferralEarnings: currentRefEarnings + refReward,
-                    lastActive: nowIso,
-                  });
-
-                  // 9. Log Reward Transaction Creation
-                  const txnId = `REF_${botId}_${tgUserId}`;
-                  await recordWalletTransaction({
-                    uid: refDocId,
+                  const validRefRecord = {
+                    id: refRecordId,
                     botId,
-                    type: 'REFERRAL_REWARD',
-                    amount: refReward,
-                    status: 'completed',
-                    description: `Referral Reward for user ${firstName}`,
-                    transactionId: txnId,
-                  });
-                  console.log(`[REFERRAL DEBUG] 9. reward transaction creation: TXN ID "${txnId}", amount ₹${refReward} for referrer "${referrerTgId}"`);
+                    referrerTelegramId: referrerTgId,
+                    referrerDocId: refDocId,
+                    referredTelegramId: tgUserId,
+                    referredName: firstName,
+                    status: 'VALID',
+                    rewardAmount: refReward,
+                    rewardStatus: 'PAID',
+                    createdAt: refRecordSnap.exists() ? (refRecordSnap.data()?.createdAt || nowIso) : nowIso,
+                    registrationCompletedAt: nowIso,
+                  };
 
-                  // Send Telegram Notification to Referrer
-                  try {
-                    await sendTelegramApi(bot.token, 'sendMessage', {
-                      chat_id: referrerTgId,
-                      text: `🎉 <b>New Referral Registered!</b>\n\n` +
-                        `User <b>${firstName}</b> completed sign-up.\n` +
-                        `💰 <b>Reward Credit:</b> ₹${refReward} credited to your wallet balance!`,
-                      parse_mode: 'HTML',
+                  await setDoc(refRecordRef, validRefRecord);
+
+                  if (refReward > 0) {
+                    const currentBalance = Number(referrerData.walletBalance) || 0;
+                    const currentTotalRefs = Number(referrerData.totalReferrals) || 0;
+                    const currentRefEarnings = Number(referrerData.totalReferralEarnings) || 0;
+
+                    await updateDoc(doc(db, 'users', refDocId), {
+                      walletBalance: currentBalance + refReward,
+                      totalReferrals: currentTotalRefs + 1,
+                      successfulReferrals: Number(referrerData.successfulReferrals || 0) + 1,
+                      totalReferralEarnings: currentRefEarnings + refReward,
+                      lastActive: nowIso,
                     });
-                  } catch (e) {
-                    console.warn('[REFERRAL DEBUG] Failed to send Telegram notification to referrer:', e);
+
+                    // Log Reward Transaction Creation
+                    const txnId = `REF_${botId}_${tgUserId}`;
+                    await recordWalletTransaction({
+                      uid: refDocId,
+                      botId,
+                      type: 'REFERRAL_REWARD',
+                      amount: refReward,
+                      status: 'completed',
+                      description: `Referral Reward for user ${firstName}`,
+                      transactionId: txnId,
+                    });
+
+                    // Send Telegram Notification to Referrer
+                    try {
+                      await sendTelegramApi(bot.token, 'sendMessage', {
+                        chat_id: referrerTgId,
+                        text: `🎉 <b>New Referral Registered!</b>\n\n` +
+                          `User <b>${firstName}</b> completed sign-up.\n` +
+                          `💰 <b>Reward Credit:</b> ₹${refReward} credited to your wallet balance!`,
+                        parse_mode: 'HTML',
+                      });
+                    } catch (e) {
+                      console.warn('[REFERRAL DEBUG] Failed to send Telegram notification to referrer:', e);
+                    }
                   }
+                } else {
+                  console.warn(`[REFERRAL DEBUG] Referrer ${referrerTgId} reached daily referral limit of ${dailyLimit}`);
                 }
-              } else {
-                console.warn(`[REFERRAL DEBUG] Referrer ${referrerTgId} reached daily referral limit of ${dailyLimit}`);
               }
             }
           }
@@ -9601,12 +9644,26 @@ Respond with a JSON object containing two properties:
       // Send Telegram Notification & Activate Bot Menu on user's Telegram Chat
       try {
         const regBonus = Number(bot.registrationBonus) || 0;
-        const successText =
-          `✅ <b>Account Verified Successfully!</b>\n\n` +
-          `🎉 Your account is now active.\n\n` +
-          `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` +
-          `💳 <b>Wallet Balance:</b> ₹${regBonus}\n\n` +
-          `You can now use the options below.`;
+        let successText = '';
+
+        if (isDuplicateDeviceOrIp) {
+          successText =
+            `⚠️ <b>You Have Created Multiple Accounts</b>\n\n` +
+            `Our security system detected that this device/IP has previously been used to create another account.\n\n` +
+            `Your account is still active and you can use the bot normally.\n\n` +
+            `However, this registration is not eligible for referral rewards.\n\n` +
+            `Referral Status: ❌ <b>REJECTED</b>\n\n` +
+            `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` +
+            `💳 <b>Wallet Balance:</b> ₹${regBonus}\n\n` +
+            `You can now use the options below.`;
+        } else {
+          successText =
+            `✅ <b>Account Verified Successfully!</b>\n\n` +
+            `🎉 Your account is now active.\n\n` +
+            `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` +
+            `💳 <b>Wallet Balance:</b> ₹${regBonus}\n\n` +
+            `You can now use the options below.`;
+        }
 
         await sendTelegramApi(bot.token, 'sendMessage', {
           chat_id: tgUserId,
@@ -9625,7 +9682,13 @@ Respond with a JSON object containing two properties:
         console.warn('[earning-bots/register] Failed to send activation message to user chat:', tgMsgErr);
       }
 
-      return res.json({ success: true, user: newUser, isNew: true });
+      return res.json({
+        success: true,
+        user: newUser,
+        isNew: true,
+        isDuplicate: isDuplicateDeviceOrIp,
+        referralStatus: isDuplicateDeviceOrIp ? 'REJECTED' : (referrerTgId ? 'VALID' : 'NONE')
+      });
     } catch (err: any) {
       console.error('[earning-bots/register Error]:', err);
       return res.status(500).json({ success: false, error: err.message });
