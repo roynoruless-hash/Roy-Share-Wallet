@@ -9598,6 +9598,33 @@ Respond with a JSON object containing two properties:
         }
       }
 
+      // Send Telegram Notification & Activate Bot Menu on user's Telegram Chat
+      try {
+        const regBonus = Number(bot.registrationBonus) || 0;
+        const successText =
+          `✅ <b>Account Verified Successfully!</b>\n\n` +
+          `🎉 Your account is now active.\n\n` +
+          `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` +
+          `💳 <b>Wallet Balance:</b> ₹${regBonus}\n\n` +
+          `You can now use the options below.`;
+
+        await sendTelegramApi(bot.token, 'sendMessage', {
+          chat_id: tgUserId,
+          text: successText,
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [{ text: '👤 ACCOUNT' }, { text: '💰 BALANCE' }],
+              [{ text: '🎁 REFER & EARN' }, { text: '💸 WITHDRAW' }],
+              [{ text: '📊 HISTORY' }, { text: '☎️ CONTACT US' }]
+            ],
+            resize_keyboard: true,
+          },
+        });
+      } catch (tgMsgErr) {
+        console.warn('[earning-bots/register] Failed to send activation message to user chat:', tgMsgErr);
+      }
+
       return res.json({ success: true, user: newUser, isNew: true });
     } catch (err: any) {
       console.error('[earning-bots/register Error]:', err);

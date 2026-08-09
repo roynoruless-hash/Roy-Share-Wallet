@@ -518,218 +518,46 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
     updatedAt: new Date().toISOString(),
   }, { merge: true });
 
-  const sessionSnap = await getDoc(sessionRef);
-  const sessionData = sessionSnap.exists() ? sessionSnap.data() as any : {};
-
-  // 1. SILENT BACKGROUND SECURITY CHECK LOGS & EXECUTION
   console.log(`[CONTACT_VERIFIED] botId: ${bot.botId} | userId: ${userId} | phone: ${phone}`);
-  console.log(`[SECURITY_CHECK_STARTED] botId: ${bot.botId} | userId: ${userId}`);
 
-  // IP Detection
-  console.log(`[IP_CHECK_COMPLETED] IP risk evaluation passed for botId: ${bot.botId} | userId: ${userId}`);
+  // Construct Mini App Verification URL
+  const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app').replace(/\/$/, '');
+  const miniAppUrl = bot.miniAppUrl || `${baseUrl}/?botId=${bot.botId}&tgId=${userId}`;
 
-  // Device Fingerprint
-  console.log(`[FINGERPRINT_CHECK_COMPLETED] Device fingerprint score 98/100 calculated for userId: ${userId}`);
-
-  const userDocId = `${bot.botId}_${userId}`;
-  const userRef = doc(db, 'users', userDocId);
-  const existingUserSnap = await getDoc(userRef);
-
-  // Check duplicate phone registration on this bot
-  const phoneQuery = query(
-    collection(db, 'users'),
-    where('botId', '==', bot.botId),
-    where('mobile', '==', phone)
-  );
-  const phoneSnap = await getDocs(phoneQuery);
-  let duplicatePhone = false;
-  phoneSnap.forEach((docSnap) => {
-    const data = docSnap.data();
-    if (data.telegramId && String(data.telegramId) !== userId) {
-      duplicatePhone = true;
+  // PROMPT USER TO OPEN TELEGRAM MINI APP FOR MANDATORY SECURITY VERIFICATION
+  await sendTelegramApi(bot.token, 'sendMessage', {
+    chat_id: chatId,
+    text: `📱 <b>Contact Verified Successfully!</b>\n\n` +
+      `🔒 <b>Final Step: Mandatory Security Verification Required</b>\n\n` +
+      `Please tap the button below to open the Telegram Mini App and complete automated device fingerprinting, IP risk check, and bot-specific security verification to activate your account and claim your <b>₹${bot.registrationBonus || 0} Registration Bonus</b>!`,
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🔒 COMPLETE SECURITY VERIFICATION', web_app: { url: miniAppUrl } }]
+      ]
     }
   });
+  console.log(`[SECURITY_VERIFICATION_PROMPTED] Mini App verification link sent for botId: ${bot.botId} | userId: ${userId}`);
+}
 
-  console.log(`[DUPLICATE_CHECK_COMPLETED] Duplicate check completed. Matches found: ${duplicatePhone ? 1 : 0}`);
-
-  // Check if account is in security review or rejected
-  const secReviewSnap = await getDoc(doc(db, 'securityReviews', userDocId));
-  const isRejected = secReviewSnap.exists() && secReviewSnap.data()?.status === 'REJECTED';
-
-  console.log(`[RISK_CHECK_COMPLETED] Fraud risk evaluation completed: ${duplicatePhone || isRejected ? 'HIGH_RISK' : 'SAFE'}`);
-
-  if (duplicatePhone || isRejected) {
-    console.log(`[SECURITY_CHECK_REJECTED] botId: ${bot.botId} | userId: ${userId} | phone: ${phone} | dupPhone: ${duplicatePhone} | rejected: ${isRejected}`);
-    await sendTelegramApi(bot.token, 'sendMessage', {
-      chat_id: chatId,
-      text: `❌ <b>Verification Failed</b>\n\nYour account could not be verified at this time.\n\nPlease contact support if you believe this is a mistake.`,
-      parse_mode: 'HTML',
-      reply_markup: {
-        remove_keyboard: true,
-      },
-    });
-    return;
-  }
-
-  console.log(`[SECURITY_STATUS_SAFE] botId: ${bot.botId} | userId: ${userId}`);
-
-  // 2. ACCOUNT CREATION & BONUS APPLICATION
-  let userWalletBalance = 0;
-  let regBonus = 0;
-  const nowIso = new Date().toISOString();
-
-  if (!existingUserSnap.exists()) {
-    regBonus = (bot.registrationBonus !== undefined && bot.registrationBonus !== null) ? Number(bot.registrationBonus) : 0;
-    userWalletBalance = regBonus;
-
-    const newUserRecord = {
-      id: userDocId,
-      docId: userDocId,
-      uid: userDocId,
-      accountScope: 'EARNING_BOT',
-      earningBotId: bot.botId,
-      botId: bot.botId,
-      telegramId: userId,
-      username: message.from?.username || sessionData.username || '',
-      firstName: message.from?.first_name || sessionData.firstName || 'User',
-      lastName: message.from?.last_name || '',
-      mobile: phone,
-      walletBalance: userWalletBalance,
-      lockedBalance: 0,
-      totalWithdrawn: 0,
-      channelVerified: true,
-      groupVerified: true,
-      contactVerified: true,
-      referrerUid: sessionData.referrerTelegramId || sessionData.referrerUid || '',
-      referrerDocId: sessionData.referrerDocId || '',
-      totalReferrals: 0,
-      successfulReferrals: 0,
-      totalReferralEarnings: 0,
-      status: 'ACTIVE',
-      security: {
-        status: 'SAFE',
-        deviceScore: 98,
-        riskFlags: [],
-        checkedAt: nowIso,
-      },
-      securityStatus: 'SAFE',
-      deviceScore: 98,
-      riskFlags: [],
-      createdAt: nowIso,
-      lastActive: nowIso,
-    };
-
-    await setDoc(userRef, newUserRecord);
-    console.log(`[ACCOUNT_CREATED] User doc created for botId: ${bot.botId} | userId: ${userId}`);
-
-    // Ledger entry for Registration Bonus
-    if (regBonus > 0) {
-      try {
-        await recordWalletTransaction({
-          uid: userDocId,
-          botId: bot.botId,
-          type: 'Registration Bonus',
-          amount: regBonus,
-          status: 'completed',
-          description: `Welcome registration bonus for ${bot.botName || 'Earning Bot'}`,
-          transactionId: `REG_BONUS_${bot.botId}_${userId}`,
-        });
-        console.log(`[REGISTRATION_BONUS_CREDITED] ₹${regBonus} registration bonus credited to userId: ${userId}`);
-      } catch (txErr) {
-        console.warn('[Ledger Warning] Registration bonus log warning:', txErr);
-      }
-    }
-
-    // 3. PROCESS REFERRAL ATTRIBUTION
-    const referrerTg = sessionData.referrerTelegramId || sessionData.referrerUid;
-    const referrerDocId = sessionData.referrerDocId || (referrerTg ? `${bot.botId}_${referrerTg}` : '');
-
-    if (referrerTg && referrerDocId && String(referrerTg) !== userId) {
-      const rewardAmount = Number(bot.referralReward) || 0;
-      const refRecordId = `REF_${bot.botId}_${userId}`;
-      const refRecordRef = doc(db, 'botReferrals', refRecordId);
-
-      await setDoc(refRecordRef, {
-        id: refRecordId,
-        botId: bot.botId,
-        referrerTelegramId: referrerTg,
-        referrerDocId: referrerDocId,
-        referredTelegramId: userId,
-        referredName: message.from?.first_name || sessionData.firstName || 'User',
-        status: 'VALID',
-        rewardAmount: rewardAmount,
-        rewardStatus: rewardAmount > 0 ? 'PAID' : 'NO_REWARD',
-        createdAt: sessionData.createdAt || nowIso,
-        registrationCompletedAt: nowIso,
-      }, { merge: true });
-
-      if (rewardAmount > 0) {
-        try {
-          const referrerUserRef = doc(db, 'users', referrerDocId);
-          await runTransaction(db, async (transaction) => {
-            const rSnap = await transaction.get(referrerUserRef);
-            if (rSnap.exists()) {
-              const rData = rSnap.data();
-              const oldBal = Number(rData.walletBalance) || 0;
-              const newBal = oldBal + rewardAmount;
-              const oldRefs = Number(rData.totalReferrals) || 0;
-              const oldSucc = Number(rData.successfulReferrals) || 0;
-              const oldEarn = Number(rData.totalReferralEarnings) || 0;
-
-              transaction.update(referrerUserRef, {
-                walletBalance: newBal,
-                totalReferrals: oldRefs + 1,
-                successfulReferrals: oldSucc + 1,
-                totalReferralEarnings: oldEarn + rewardAmount,
-                updatedAt: nowIso,
-              });
-            }
-          });
-
-          await recordWalletTransaction({
-            uid: referrerDocId,
-            botId: bot.botId,
-            type: 'Referral Bonus',
-            amount: rewardAmount,
-            status: 'completed',
-            description: `Referral reward for inviting @${message.from?.username || userId}`,
-            transactionId: `REF_REWARD_${bot.botId}_${userId}`,
-          });
-
-          await sendTelegramApi(bot.token, 'sendMessage', {
-            chat_id: referrerTg,
-            text: `🎉 <b>New Referral Joined!</b>\n\n` +
-              `<b>${message.from?.first_name || 'A user'}</b> completed verification using your referral link!\n\n` +
-              `🎁 <b>Referral Bonus Credited:</b> ₹${rewardAmount}`,
-            parse_mode: 'HTML',
-          });
-        } catch (refErr) {
-          console.error('[Earning Bot Referral Reward Error]:', refErr);
-        }
-      }
-    }
-  } else {
-    // Existing account
-    const uData = existingUserSnap.data();
-    userWalletBalance = Number(uData.walletBalance) || 0;
-    regBonus = 0; // Already claimed previously
-  }
-
-  // 4. TELEGRAM BOT SUCCESS NOTIFICATION & REPLY KEYBOARD
-  const successText =
-    `✅ <b>Account Verified Successfully!</b>\n\n` +
-    `🎉 Your account is now active.\n\n` +
-    (regBonus > 0 ? `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` : '') +
-    `💳 <b>Wallet Balance:</b> ₹${userWalletBalance}\n\n` +
-    `You can now use the options below.`;
+/**
+ * Prompt unverified user to complete Mini App security verification
+ */
+export async function promptUnverifiedUser(bot: any, chatId: string, userId: string) {
+  const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app').replace(/\/$/, '');
+  const miniAppUrl = bot.miniAppUrl || `${baseUrl}/?botId=${bot.botId}&tgId=${userId}`;
 
   await sendTelegramApi(bot.token, 'sendMessage', {
     chat_id: chatId,
-    text: successText,
+    text: `🔒 <b>Security Verification Required</b>\n\n` +
+      `Your account is not yet active. Please tap the button below to complete Telegram Mini App security verification to activate your account and claim your registration bonus.`,
     parse_mode: 'HTML',
-    reply_markup: buildUserMenuMarkup(),
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🔒 COMPLETE SECURITY VERIFICATION', web_app: { url: miniAppUrl } }]
+      ]
+    }
   });
-  console.log(`[BOT_MENU_ACTIVATED] Reply keyboard activated for botId: ${bot.botId} | userId: ${userId}`);
 }
 
 /**
@@ -747,12 +575,12 @@ export async function getEarningUser(botId: string, telegramId: string): Promise
 /**
  * Build professional bot keyboard menu markup
  */
-function buildUserMenuMarkup() {
+export function buildUserMenuMarkup() {
   return {
     keyboard: [
       [{ text: '👤 ACCOUNT' }, { text: '💰 BALANCE' }],
       [{ text: '🎁 REFER & EARN' }, { text: '💸 WITHDRAW' }],
-      [{ text: '📊 HISTORY' }, { text: '📞 CONTACT US' }]
+      [{ text: '📊 HISTORY' }, { text: '☎️ CONTACT US' }]
     ],
     resize_keyboard: true,
   };
@@ -763,7 +591,10 @@ function buildUserMenuMarkup() {
  */
 async function handleShowAccount(bot: any, userId: string) {
   const user = await getEarningUser(bot.botId, userId);
-  if (!user) return;
+  if (!user) {
+    await promptUnverifiedUser(bot, userId, userId);
+    return;
+  }
 
   const regDate = user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A';
   const maskedMobile = user.mobile ? `${user.mobile.substring(0, 4)}****${user.mobile.slice(-2)}` : 'N/A';
@@ -790,7 +621,10 @@ async function handleShowAccount(bot: any, userId: string) {
  */
 async function handleShowBalance(bot: any, userId: string) {
   const user = await getEarningUser(bot.botId, userId);
-  if (!user) return;
+  if (!user) {
+    await promptUnverifiedUser(bot, userId, userId);
+    return;
+  }
 
   // Query pending balance from referrals
   const refQuery = query(collection(db, 'botReferrals'), where('botId', '==', bot.botId), where('referrerTelegramId', '==', userId), where('status', '==', 'PENDING'));
@@ -822,7 +656,10 @@ async function handleShowBalance(bot: any, userId: string) {
  */
 async function handleShowReferEarn(bot: any, userId: string) {
   const user = await getEarningUser(bot.botId, userId);
-  if (!user) return;
+  if (!user) {
+    await promptUnverifiedUser(bot, userId, userId);
+    return;
+  }
 
   // Stats
   const refCol = collection(db, 'botReferrals');
@@ -931,7 +768,10 @@ async function handleShowHistory(bot: any, userId: string) {
  */
 async function handleInitiateWithdrawal(bot: any, userId: string) {
   const user = await getEarningUser(bot.botId, userId);
-  if (!user) return;
+  if (!user) {
+    await promptUnverifiedUser(bot, userId, userId);
+    return;
+  }
 
   const bal = user.walletBalance || 0;
   if (bal < bot.minWithdrawal) {
