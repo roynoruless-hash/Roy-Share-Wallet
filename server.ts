@@ -16,6 +16,56 @@ import { encrypt, decrypt } from './src/utils/encryption';
 import { execSync } from 'child_process';
 import { startContestScheduler } from './src/services/contestScheduler';
 
+export function ensureUserAccountScope(docId: string, data: any): { accountScope: 'ROY_SHARE_WALLET' | 'EARNING_BOT' | 'UNRESOLVED'; earningBotId: string | null } {
+  if (!data) return { accountScope: 'UNRESOLVED', earningBotId: null };
+  if (data.accountScope === 'ROY_SHARE_WALLET') return { accountScope: 'ROY_SHARE_WALLET', earningBotId: null };
+  if (data.accountScope === 'EARNING_BOT') {
+    const eBotId = String(data.earningBotId || data.botId || '').trim();
+    if (eBotId && eBotId !== 'ROY_SHARE_WALLET') {
+      return { accountScope: 'EARNING_BOT', earningBotId: eBotId };
+    }
+  }
+
+  const rawEarningBotId = String(data.earningBotId || '').trim();
+  if (rawEarningBotId && rawEarningBotId !== 'ROY_SHARE_WALLET') {
+    return { accountScope: 'EARNING_BOT', earningBotId: rawEarningBotId };
+  }
+
+  const rawBotId = String(data.botId || '').trim();
+  if (rawBotId && rawBotId !== 'ROY_SHARE_WALLET' && rawBotId !== 'main' && rawBotId !== 'official') {
+    return { accountScope: 'EARNING_BOT', earningBotId: rawBotId };
+  }
+
+  if (docId && docId.includes('_')) {
+    const parts = docId.split('_');
+    if (parts.length >= 2 && parts[0] && parts[1]) {
+      const prefix = parts[0].trim();
+      if (prefix !== 'ROY' && prefix !== 'ROY_SHARE' && prefix !== 'MAIN') {
+        return { accountScope: 'EARNING_BOT', earningBotId: prefix };
+      }
+    }
+  }
+
+  if (data.telegramId || data.appUid || data.uid || data.mobile) {
+    if (!rawBotId || rawBotId === 'ROY_SHARE_WALLET' || rawBotId === 'main' || rawBotId === 'official') {
+      return { accountScope: 'ROY_SHARE_WALLET', earningBotId: null };
+    }
+  }
+
+  return { accountScope: 'UNRESOLVED', earningBotId: null };
+}
+
+export function isRoyShareWalletUser(docId: string, data: any): boolean {
+  return ensureUserAccountScope(docId, data).accountScope === 'ROY_SHARE_WALLET';
+}
+
+export function isEarningBotUser(targetBotId: string, docId: string, data: any): boolean {
+  if (!targetBotId) return false;
+  const scope = ensureUserAccountScope(docId, data);
+  if (scope.accountScope !== 'EARNING_BOT') return false;
+  return String(scope.earningBotId || '').trim().toLowerCase() === String(targetBotId).trim().toLowerCase();
+}
+
 interface GoldenCodeItem {
   code: string;
   maxClaims: number;
@@ -5128,15 +5178,27 @@ Respond with a JSON object containing two properties:
           return res.status(400).json({ success: false, error: 'Withdrawals are currently paused for this bot.' });
         }
 
-        const min = Number(botData.minWithdrawal) || 10;
-        const tax = Number(botData.withdrawalTax) || 0;
+        const botConfigSnap = await getDoc(doc(db, 'withdrawalConfigs', botId));
+        const botConfigData = botConfigSnap.exists() ? botConfigSnap.data() : null;
+
+        let methodSpecificCfg: any = null;
+        if (botConfigData) {
+          if (normMethod === 'UPI') methodSpecificCfg = botConfigData.upi;
+          else if (normMethod === 'QR') methodSpecificCfg = botConfigData.qr;
+          else if (normMethod === 'REDEEM_CODE') methodSpecificCfg = botConfigData.redeem;
+          else if (normMethod === 'ULTRA_PAY') methodSpecificCfg = botConfigData.ultraPay;
+        }
+
+        const min = Number(methodSpecificCfg?.min ?? botData.minWithdrawal) || 5;
+        const tax = Number(methodSpecificCfg?.tax ?? botData.withdrawalTax) || 0;
+        const fee = Number(methodSpecificCfg?.fee ?? 0) || 0;
         const methods: string[] = Array.isArray(botData.withdrawalMethods) ? botData.withdrawalMethods : ['UPI'];
 
         let isAllowed = false;
-        if (normMethod === 'UPI' && methods.includes('UPI')) isAllowed = true;
-        if (normMethod === 'QR' && methods.includes('QR')) isAllowed = true;
-        if (normMethod === 'REDEEM_CODE' && methods.includes('REDEEM_CODE')) isAllowed = true;
-        if (normMethod === 'ULTRA_PAY' && methods.includes('ULTRA_PAY')) isAllowed = true;
+        if (normMethod === 'UPI' && (methods.includes('UPI') || methodSpecificCfg?.enabled)) isAllowed = true;
+        if (normMethod === 'QR' && (methods.includes('QR') || methodSpecificCfg?.enabled)) isAllowed = true;
+        if (normMethod === 'REDEEM_CODE' && (methods.includes('REDEEM_CODE') || methodSpecificCfg?.enabled)) isAllowed = true;
+        if (normMethod === 'ULTRA_PAY' && (methods.includes('ULTRA_PAY') || methodSpecificCfg?.enabled)) isAllowed = true;
 
         if (!isAllowed) {
           return res.status(400).json({ success: false, error: `Method ${normMethod} is not enabled for this Earning Bot.` });
@@ -5146,7 +5208,7 @@ Respond with a JSON object containing two properties:
           enabled: true,
           min,
           feeType: 'PERCENTAGE',
-          fee: 0,
+          fee,
           tax,
         };
       } else {
@@ -5469,7 +5531,8 @@ Respond with a JSON object containing two properties:
             const providerRef = resData.ref || resData.txn_id || resData.transaction_id || `UP_${Date.now()}`;
             // Finalize Deduction in User Balance
             await runTransaction(db, async (tx) => {
-              const uRef = doc(db, 'users', wData.telegramId);
+              const targetUserKey = wData.uid || (wData.earningBotId ? `${wData.earningBotId}_${wData.telegramId}` : wData.telegramId);
+              const uRef = doc(db, 'users', targetUserKey);
               const uSnap = await tx.get(uRef);
               if (uSnap.exists()) {
                 const u = uSnap.data();
@@ -5521,7 +5584,8 @@ Respond with a JSON object containing two properties:
             const totalD = Number(wData.totalDeduction) || Number(wData.amount) || 0;
             // Unlock Balance (Refund lock)
             await runTransaction(db, async (tx) => {
-              const uRef = doc(db, 'users', wData.telegramId);
+              const targetUserKey = wData.uid || (wData.earningBotId ? `${wData.earningBotId}_${wData.telegramId}` : wData.telegramId);
+              const uRef = doc(db, 'users', targetUserKey);
               const uSnap = await tx.get(uRef);
               if (uSnap.exists()) {
                 const u = uSnap.data();
@@ -5613,7 +5677,8 @@ Respond with a JSON object containing two properties:
         });
 
         await runTransaction(db, async (tx) => {
-          const uRef = doc(db, 'users', wData.telegramId);
+          const targetUserKey = wData.uid || (wData.earningBotId ? `${wData.earningBotId}_${wData.telegramId}` : wData.telegramId);
+          const uRef = doc(db, 'users', targetUserKey);
           const uSnap = await tx.get(uRef);
           if (uSnap.exists()) {
             const u = uSnap.data();
@@ -5649,7 +5714,8 @@ Respond with a JSON object containing two properties:
 
       // MANUAL UPI / QR APPROVAL
       await runTransaction(db, async (tx) => {
-        const uRef = doc(db, 'users', wData.telegramId);
+        const targetUserKey = wData.uid || (wData.earningBotId ? `${wData.earningBotId}_${wData.telegramId}` : wData.telegramId);
+        const uRef = doc(db, 'users', targetUserKey);
         const uSnap = await tx.get(uRef);
         if (uSnap.exists()) {
           const u = uSnap.data();
@@ -5714,7 +5780,8 @@ Respond with a JSON object containing two properties:
 
       // Atomic Release of Locked Balance
       await runTransaction(db, async (tx) => {
-        const uRef = doc(db, 'users', wData.telegramId);
+        const targetUserKey = wData.uid || (wData.earningBotId ? `${wData.earningBotId}_${wData.telegramId}` : wData.telegramId);
+        const uRef = doc(db, 'users', targetUserKey);
         const uSnap = await tx.get(uRef);
         if (uSnap.exists()) {
           const u = uSnap.data();
@@ -7371,6 +7438,7 @@ Respond with a JSON object containing two properties:
       ]);
 
       const users = usersSnap.docs
+        .filter(d => isRoyShareWalletUser(d.id, d.data()))
         .map(d => ({ id: d.id, ...d.data() as any }))
         .filter(u =>
           String(u.telegramId || '').toLowerCase().includes(q) ||
@@ -8280,7 +8348,9 @@ Respond with a JSON object containing two properties:
   app.get('/api/admin/fraud/investigate', requireAdminSession, async (req, res) => {
     try {
       const usersSnap = await getDocs(collection(db, 'users'));
-      const users = usersSnap.docs.map(d => ({ id: d.id, ...d.data() as any }));
+      const users = usersSnap.docs
+        .filter(d => isRoyShareWalletUser(d.id, d.data()))
+        .map(d => ({ id: d.id, ...d.data() as any }));
 
       // Generate or retrieve fraud reports
       const reports = users.map(u => {
@@ -8599,7 +8669,9 @@ Respond with a JSON object containing two properties:
   app.get('/api/admin/retention/inactive-users', requireAdminSession, async (req, res) => {
     try {
       const snap = await getDocs(collection(db, 'users'));
-      const users = snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
+      const users = snap.docs
+        .filter(d => isRoyShareWalletUser(d.id, d.data()))
+        .map(d => ({ id: d.id, ...d.data() as any }));
 
       const inactiveUsers = users.filter(u => u.isInactive || Math.random() < 0.25);
       const campaignsSnap = await getDocs(collection(db, 'retentionCampaigns'));
@@ -8965,12 +9037,13 @@ Respond with a JSON object containing two properties:
       const { id } = req.params;
 
       // Users Query
-      const usersSnap = await getDocs(query(collection(db, 'users'), where('botId', '==', id)));
-      const totalUsers = usersSnap.size;
+      const allUsersSnap = await getDocs(collection(db, 'users'));
+      const botUsersDocs = allUsersSnap.docs.filter(d => isEarningBotUser(id, d.id, d.data()));
+      const totalUsers = botUsersDocs.length;
 
       let todaysUsers = 0;
       const todayStr = new Date().toISOString().substring(0, 10);
-      usersSnap.forEach(d => {
+      botUsersDocs.forEach(d => {
         const cDate = d.data().createdAt;
         if (cDate && cDate.startsWith(todayStr)) {
           todaysUsers++;
@@ -9064,7 +9137,8 @@ Respond with a JSON object containing two properties:
       const { id } = req.params;
 
       // Users Query
-      const usersSnap = await getDocs(query(collection(db, 'users'), where('botId', '==', id)));
+      const allUsersSnap = await getDocs(collection(db, 'users'));
+      const usersSnap = allUsersSnap.docs.filter(d => isEarningBotUser(id, d.id, d.data()));
       const usersList: any[] = [];
       usersSnap.forEach(d => {
         const u = d.data();

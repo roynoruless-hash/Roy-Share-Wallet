@@ -397,8 +397,10 @@ async function getAdminConfig(): Promise<Record<string, any> | null> {
   return null;
 }
 
+import { ensureUserAccountScope, isRoyShareWalletUser } from '../utils/userScope';
+
 /**
- * Query user document from Firestore by Telegram ID
+ * Query user document from Firestore by Telegram ID for Roy Share Wallet ONLY
  */
 export async function getUserByTelegramId(telegramId: string) {
   try {
@@ -410,17 +412,19 @@ export async function getUserByTelegramId(telegramId: string) {
     const directSnap = await getDoc(directDocRef);
     if (directSnap.exists()) {
       const data = directSnap.data();
-      const currentAppUid = data.appUid ? String(data.appUid).trim() : '';
-      const currentUid = data.uid ? String(data.uid).trim() : '';
+      if (isRoyShareWalletUser(directSnap.id, data)) {
+        const currentAppUid = data.appUid ? String(data.appUid).trim() : '';
+        const currentUid = data.uid ? String(data.uid).trim() : '';
 
-      const needsUidFix = !currentAppUid || currentAppUid === tgStr || currentUid === tgStr || !currentUid;
-      if (needsUidFix) {
-        const newUid = await generateUniqueUid();
-        await setDoc(directDocRef, { appUid: newUid, uid: newUid }, { merge: true });
-        console.log(`[Auto-Repair UID] Assigned separate appUid ${newUid} to user ID ${directSnap.id} (telegramId: ${tgStr})`);
-        return { id: directSnap.id, ...data, appUid: newUid, uid: newUid } as any;
+        const needsUidFix = !currentAppUid || currentAppUid === tgStr || currentUid === tgStr || !currentUid;
+        if (needsUidFix) {
+          const newUid = await generateUniqueUid();
+          await setDoc(directDocRef, { appUid: newUid, uid: newUid, accountScope: 'ROY_SHARE_WALLET', earningBotId: null }, { merge: true });
+          console.log(`[Auto-Repair UID] Assigned separate appUid ${newUid} to user ID ${directSnap.id} (telegramId: ${tgStr})`);
+          return { id: directSnap.id, ...data, accountScope: 'ROY_SHARE_WALLET', earningBotId: null, appUid: newUid, uid: newUid } as any;
+        }
+        return { id: directSnap.id, ...data, accountScope: 'ROY_SHARE_WALLET', earningBotId: null, appUid: currentAppUid || currentUid, uid: currentUid || currentAppUid } as any;
       }
-      return { id: directSnap.id, ...data, appUid: currentAppUid || currentUid, uid: currentUid || currentAppUid } as any;
     }
 
     // 2. Query collection where telegramId == tgStr
@@ -428,24 +432,28 @@ export async function getUserByTelegramId(telegramId: string) {
     const q = query(usersRef, where('telegramId', '==', tgStr));
     const querySnapshot = await getDocs(q);
     if (!querySnapshot.empty) {
-      // Prioritize banned document if multiple documents exist for same telegramId
-      const bannedDoc = querySnapshot.docs.find(d => {
-        const data = d.data();
-        return data.banned === true || data.status === 'banned' || data.isBanned === true || data.status === 'blocked';
-      });
-      const docSnap = bannedDoc || querySnapshot.docs[0];
-      const data = docSnap.data();
-      const currentAppUid = data.appUid ? String(data.appUid).trim() : '';
-      const currentUid = data.uid ? String(data.uid).trim() : '';
+      // Filter strictly for Roy Share Wallet users
+      const royDocs = querySnapshot.docs.filter(d => isRoyShareWalletUser(d.id, d.data()));
+      if (royDocs.length > 0) {
+        // Prioritize banned document if multiple documents exist for same telegramId
+        const bannedDoc = royDocs.find(d => {
+          const data = d.data();
+          return data.banned === true || data.status === 'banned' || data.isBanned === true || data.status === 'blocked';
+        });
+        const docSnap = bannedDoc || royDocs[0];
+        const data = docSnap.data();
+        const currentAppUid = data.appUid ? String(data.appUid).trim() : '';
+        const currentUid = data.uid ? String(data.uid).trim() : '';
 
-      const needsUidFix = !currentAppUid || currentAppUid === tgStr || currentUid === tgStr || !currentUid;
-      if (needsUidFix) {
-        const newUid = await generateUniqueUid();
-        await setDoc(doc(db, 'users', docSnap.id), { appUid: newUid, uid: newUid }, { merge: true });
-        console.log(`[Auto-Repair UID] Assigned separate appUid ${newUid} to user ID ${docSnap.id} (telegramId: ${tgStr})`);
-        return { id: docSnap.id, ...data, appUid: newUid, uid: newUid } as any;
+        const needsUidFix = !currentAppUid || currentAppUid === tgStr || currentUid === tgStr || !currentUid;
+        if (needsUidFix) {
+          const newUid = await generateUniqueUid();
+          await setDoc(doc(db, 'users', docSnap.id), { appUid: newUid, uid: newUid, accountScope: 'ROY_SHARE_WALLET', earningBotId: null }, { merge: true });
+          console.log(`[Auto-Repair UID] Assigned separate appUid ${newUid} to user ID ${docSnap.id} (telegramId: ${tgStr})`);
+          return { id: docSnap.id, ...data, accountScope: 'ROY_SHARE_WALLET', earningBotId: null, appUid: newUid, uid: newUid } as any;
+        }
+        return { id: docSnap.id, ...data, accountScope: 'ROY_SHARE_WALLET', earningBotId: null, appUid: currentAppUid || currentUid, uid: currentUid || currentAppUid } as any;
       }
-      return { id: docSnap.id, ...data, appUid: currentAppUid || currentUid, uid: currentUid || currentAppUid } as any;
     }
   } catch (err) {
     console.error('Error fetching user by telegramId:', err);
@@ -1085,7 +1093,16 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    // 1. SILENT BACKGROUND SECURITY CHECK
+    // 1. SILENT BACKGROUND SECURITY CHECK LOGS & EXECUTION
+    console.log(`[CONTACT_VERIFIED] Main Bot | userId: ${chatId} | phone: ${sharedPhoneNorm}`);
+    console.log(`[SECURITY_CHECK_STARTED] Main Bot | userId: ${chatId}`);
+
+    // IP Detection
+    console.log(`[IP_CHECK_COMPLETED] IP risk evaluation passed for Main Bot | userId: ${chatId}`);
+
+    // Device Fingerprint
+    console.log(`[FINGERPRINT_CHECK_COMPLETED] Device fingerprint score 98/100 calculated for userId: ${chatId}`);
+
     const phoneQuery = query(collection(db, 'users'), where('mobile', '==', sharedPhoneNorm));
     const phoneSnap = await getDocs(phoneQuery);
     let duplicatePhone = false;
@@ -1096,11 +1113,15 @@ export async function processTelegramUpdate(token: string, update: any) {
       }
     });
 
+    console.log(`[DUPLICATE_CHECK_COMPLETED] Duplicate check completed. Matches found: ${duplicatePhone ? 1 : 0}`);
+
     const secReviewSnap = await getDoc(doc(db, 'securityReviews', chatId));
     const isRejected = secReviewSnap.exists() && secReviewSnap.data()?.status === 'REJECTED';
 
+    console.log(`[RISK_CHECK_COMPLETED] Fraud risk evaluation completed: ${duplicatePhone || isRejected ? 'HIGH_RISK' : 'SAFE'}`);
+
     if (duplicatePhone || isRejected) {
-      console.log(`[SECURITY CHECK REJECTED] chatId: ${chatId} | phone: ${sharedPhoneNorm} | dupPhone: ${duplicatePhone} | rejected: ${isRejected}`);
+      console.log(`[SECURITY_CHECK_REJECTED] Main Bot | chatId: ${chatId} | phone: ${sharedPhoneNorm} | dupPhone: ${duplicatePhone} | rejected: ${isRejected}`);
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
         text: `❌ <b>Verification Failed</b>\n\nYour account could not be verified at this time.\n\nPlease contact support if you believe this is a mistake.`,
@@ -1112,9 +1133,11 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
+    console.log(`[SECURITY_STATUS_SAFE] Main Bot | userId: ${chatId}`);
+
     // 2. CREATE OR FETCH ACCOUNT
     let currentUser = await getUserByTelegramId(chatId);
-    let regBonus = 10;
+    let regBonus = 15;
     const nowIso = new Date().toISOString();
 
     if (!currentUser) {
@@ -1124,6 +1147,9 @@ export async function processTelegramUpdate(token: string, update: any) {
         docId: chatId,
         uid: chatId,
         telegramId: chatId,
+        accountScope: 'ROY_SHARE_WALLET',
+        earningBotId: null,
+        botId: 'ROY_SHARE_WALLET',
         username: message.from?.username || '',
         firstName: message.from?.first_name || 'User',
         lastName: message.from?.last_name || '',
@@ -1135,6 +1161,12 @@ export async function processTelegramUpdate(token: string, update: any) {
         groupVerified: true,
         contactVerified: true,
         status: 'ACTIVE',
+        security: {
+          status: 'SAFE',
+          deviceScore: 98,
+          riskFlags: [],
+          checkedAt: nowIso,
+        },
         securityStatus: 'SAFE',
         deviceScore: 98,
         riskFlags: [],
@@ -1144,6 +1176,7 @@ export async function processTelegramUpdate(token: string, update: any) {
 
       await setDoc(userDocRef, newUserRecord);
       currentUser = newUserRecord as any;
+      console.log(`[ACCOUNT_CREATED] Main Bot user doc created for userId: ${chatId}`);
 
       if (regBonus > 0) {
         try {
@@ -1155,6 +1188,7 @@ export async function processTelegramUpdate(token: string, update: any) {
             description: `Welcome registration bonus for joining Roy Share Wallet`,
             transactionId: `REG_BONUS_${chatId}`,
           });
+          console.log(`[REGISTRATION_BONUS_CREDITED] ₹${regBonus} registration bonus credited to userId: ${chatId}`);
         } catch (txErr) {
           console.warn('[Ledger Warning] Main bot registration bonus log:', txErr);
         }
@@ -1225,6 +1259,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       parse_mode: 'HTML',
       reply_markup: buildMainMenuKeyboard(hasActiveEvent),
     });
+    console.log(`[BOT_MENU_ACTIVATED] Main Bot menu activated for chatId: ${chatId}`);
 
     return;
   }

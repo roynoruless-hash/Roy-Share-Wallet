@@ -1,9 +1,10 @@
-import { collection, query, where, getDocs, doc, runTransaction, addDoc, deleteDoc, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, runTransaction, addDoc, deleteDoc, orderBy, limit, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { BotUser, WalletTransaction } from '../types';
+import { ensureUserAccountScope, isRoyShareWalletUser } from '../utils/userScope';
 
 /**
- * Fetch all registered users from Firestore users collection
+ * Fetch all registered users from Firestore users collection belonging strictly to Roy Share Wallet
  */
 export async function fetchUsersFromDb(): Promise<BotUser[]> {
   try {
@@ -12,6 +13,21 @@ export async function fetchUsersFromDb(): Promise<BotUser[]> {
     const users: BotUser[] = [];
     querySnapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      const scopeInfo = ensureUserAccountScope(docSnap.id, data);
+
+      // Backfill accountScope in Firestore if missing
+      if (!data.accountScope) {
+        setDoc(doc(db, 'users', docSnap.id), {
+          accountScope: scopeInfo.accountScope,
+          earningBotId: scopeInfo.earningBotId
+        }, { merge: true }).catch(() => {});
+      }
+
+      // Filter strictly for Roy Share Wallet users
+      if (scopeInfo.accountScope !== 'ROY_SHARE_WALLET') {
+        return;
+      }
+
       const tgId = String(data.telegramId || '').trim();
       const rawAppUid = data.appUid ? String(data.appUid).trim() : '';
       const rawUid = data.uid ? String(data.uid).trim() : '';

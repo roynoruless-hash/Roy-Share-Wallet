@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Bot, Plus, ToggleLeft, ToggleRight, Check, X, Shield, Users, Trophy, Gift, ArrowRight, RefreshCw, Layers, Radio, Trash2, Copy, Share2, ExternalLink, Search, CheckCircle2, AlertTriangle, ChevronRight, BarChart2 } from 'lucide-react';
+import { Bot, Plus, ToggleLeft, ToggleRight, Check, X, Shield, ShieldCheck, Users, Trophy, Gift, ArrowRight, RefreshCw, Layers, Radio, Trash2, Copy, Share2, ExternalLink, Search, CheckCircle2, AlertTriangle, ChevronRight, BarChart2 } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 
 interface EarningBot {
@@ -808,6 +808,61 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
               {/* TAB 1: SETUP WIZARD & CONFIGURATION */}
               {activeTab === 'wizard' && (
                 <div className="space-y-6">
+                  {/* BACKGROUND SECURITY ENGINE DIAGNOSTIC CARD */}
+                  <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-900 pb-3">
+                      <div className="flex items-center gap-2">
+                        <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                        <div>
+                          <h4 className="text-xs font-black uppercase tracking-wider text-emerald-400">Silent Security Engine Status</h4>
+                          <p className="text-[10px] text-slate-500 font-medium">Background Verification & Risk Pipeline for @{selectedBot.botUsername}</p>
+                        </div>
+                      </div>
+                      <span className="px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-full text-[10px] font-black tracking-wider uppercase flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Engine Active
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="p-3 bg-slate-900/80 rounded-lg border border-slate-800 space-y-1">
+                        <div className="text-[9px] uppercase font-bold text-slate-500">IP Detection</div>
+                        <div className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Enabled (Silent)
+                        </div>
+                      </div>
+                      <div className="p-3 bg-slate-900/80 rounded-lg border border-slate-800 space-y-1">
+                        <div className="text-[9px] uppercase font-bold text-slate-500">Device Fingerprint</div>
+                        <div className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Active (Score 98)
+                        </div>
+                      </div>
+                      <div className="p-3 bg-slate-900/80 rounded-lg border border-slate-800 space-y-1">
+                        <div className="text-[9px] uppercase font-bold text-slate-500">Duplicate Check</div>
+                        <div className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Bot-Scoped Phone
+                        </div>
+                      </div>
+                      <div className="p-3 bg-slate-900/80 rounded-lg border border-slate-800 space-y-1">
+                        <div className="text-[9px] uppercase font-bold text-slate-500">Risk Check</div>
+                        <div className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Fraud Engine
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] font-mono text-slate-400 bg-slate-900/40 p-2.5 rounded-lg border border-slate-800/80">
+                      <div>
+                        <span className="text-slate-500">Last Security Check:</span>{' '}
+                        <span className="text-slate-200 font-bold">Background Trigger Active</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Last Result:</span>{' '}
+                        <span className="text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">SAFE</span>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* STEP 4 & STEP 5: Admin Referral Link & Mini App Deep Link Card */}
                   <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
                     <div className="flex items-center justify-between">

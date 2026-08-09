@@ -1143,6 +1143,15 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     return 100;
   };
 
+  const getTaxRate = () => {
+    if (!withdrawalSettings) return 0;
+    if (withdrawMethod === 'upi') return withdrawalSettings.upi?.tax ?? 0;
+    if (withdrawMethod === 'qr') return withdrawalSettings.qr?.tax ?? 0;
+    if (withdrawMethod === 'redeem_code') return withdrawalSettings.redeem?.tax ?? 0;
+    if (withdrawMethod === 'ultra_pay') return withdrawalSettings.ultraPay?.tax ?? 0;
+    return 0;
+  };
+
   const handleWithdrawSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = parseFloat(withdrawAmount);
@@ -1151,9 +1160,17 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       return;
     }
 
+    // 1. Validate requested amount >= minimum threshold
     const minAmt = getMinWithdrawAmount();
     if (amt < minAmt) {
       addToast(`⚠️ Minimum withdrawal for this method is ₹${minAmt}`, 'error');
+      return;
+    }
+
+    // 2. Validate requested amount <= available balance
+    const availBal = Math.max(0, (Number(user?.walletBalance) || 0) - (Number(user?.lockedBalance) || 0));
+    if (amt > availBal) {
+      addToast(`⚠️ Insufficient available balance. Available: ₹${availBal}, Requested: ₹${amt}`, 'error');
       return;
     }
 
@@ -1934,40 +1951,59 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
               <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest block">Withdrawal Logs</h3>
               <div className="space-y-2">
                 {withdrawHistory.length > 0 ? (
-                  withdrawHistory.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-4 rounded-2xl bg-slate-900/30 border border-slate-900 flex items-center justify-between"
-                    >
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-bold text-white">₹{item.amount}</span>
-                          <span className="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">
-                            {item.method}
+                  withdrawHistory.map((item) => {
+                    const reqAmt = item.amountRequested ?? item.amount ?? 0;
+                    const taxAmt = item.taxAmount ?? 0;
+                    const netPayout = item.finalPayout ?? (reqAmt - taxAmt);
+                    const detailsStr = typeof item.details === 'string' ? item.details : item.upiId || item.paytoNumber || item.method || 'Payout';
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="p-4 rounded-2xl bg-slate-900/30 border border-slate-900 space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black text-white">Requested: ₹{reqAmt}</span>
+                            <span className="text-[9px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono uppercase font-bold">
+                              {item.method}
+                            </span>
+                          </div>
+                          <span
+                            className={`text-[10px] font-black px-2.5 py-0.5 rounded ${
+                              item.status === 'APPROVED'
+                                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                : item.status === 'REJECTED'
+                                ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                                : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                            }`}
+                          >
+                            {item.status}
                           </span>
                         </div>
-                        <p className="text-[10px] text-slate-500 font-medium mt-1 font-mono">
-                          {item.details.substring(0, 24)}...
-                        </p>
+
+                        <div className="grid grid-cols-3 gap-2 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 text-[11px]">
+                          <div>
+                            <span className="text-slate-500 block text-[9px] uppercase font-bold">Requested</span>
+                            <span className="font-bold text-slate-200">₹{reqAmt}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block text-[9px] uppercase font-bold">Tax</span>
+                            <span className="font-bold text-rose-400">₹{taxAmt}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block text-[9px] uppercase font-bold">Net Payout</span>
+                            <span className="font-bold text-emerald-400">₹{netPayout}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                          <span className="truncate max-w-[200px]">{detailsStr}</span>
+                          <span>{new Date(item.createdAt).toLocaleDateString()}</span>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <span
-                          className={`text-[10px] font-black px-2 py-0.5 rounded ${
-                            item.status === 'APPROVED'
-                              ? 'bg-emerald-500/15 text-emerald-400'
-                              : item.status === 'REJECTED'
-                              ? 'bg-rose-500/15 text-rose-400'
-                              : 'bg-amber-500/15 text-amber-400'
-                          }`}
-                        >
-                          {item.status}
-                        </span>
-                        <span className="text-[9px] text-slate-500 block mt-1">
-                          {new Date(item.createdAt).toLocaleDateString()}
-                        </span>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 ) : (
                   <div className="p-8 rounded-2xl bg-slate-900/20 border border-dashed border-slate-800/80 text-center">
                     <Wallet className="w-8 h-8 text-slate-600 mx-auto mb-2" />

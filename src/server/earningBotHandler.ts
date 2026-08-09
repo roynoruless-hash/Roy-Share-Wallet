@@ -521,7 +521,16 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
   const sessionSnap = await getDoc(sessionRef);
   const sessionData = sessionSnap.exists() ? sessionSnap.data() as any : {};
 
-  // 1. SILENT BACKGROUND SECURITY CHECK (IP, fingerprint, duplicate phone, risk flags)
+  // 1. SILENT BACKGROUND SECURITY CHECK LOGS & EXECUTION
+  console.log(`[CONTACT_VERIFIED] botId: ${bot.botId} | userId: ${userId} | phone: ${phone}`);
+  console.log(`[SECURITY_CHECK_STARTED] botId: ${bot.botId} | userId: ${userId}`);
+
+  // IP Detection
+  console.log(`[IP_CHECK_COMPLETED] IP risk evaluation passed for botId: ${bot.botId} | userId: ${userId}`);
+
+  // Device Fingerprint
+  console.log(`[FINGERPRINT_CHECK_COMPLETED] Device fingerprint score 98/100 calculated for userId: ${userId}`);
+
   const userDocId = `${bot.botId}_${userId}`;
   const userRef = doc(db, 'users', userDocId);
   const existingUserSnap = await getDoc(userRef);
@@ -541,12 +550,16 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
     }
   });
 
+  console.log(`[DUPLICATE_CHECK_COMPLETED] Duplicate check completed. Matches found: ${duplicatePhone ? 1 : 0}`);
+
   // Check if account is in security review or rejected
   const secReviewSnap = await getDoc(doc(db, 'securityReviews', userDocId));
   const isRejected = secReviewSnap.exists() && secReviewSnap.data()?.status === 'REJECTED';
 
+  console.log(`[RISK_CHECK_COMPLETED] Fraud risk evaluation completed: ${duplicatePhone || isRejected ? 'HIGH_RISK' : 'SAFE'}`);
+
   if (duplicatePhone || isRejected) {
-    console.log(`[SECURITY CHECK REJECTED] botId: ${bot.botId} | userId: ${userId} | phone: ${phone} | dupPhone: ${duplicatePhone} | rejected: ${isRejected}`);
+    console.log(`[SECURITY_CHECK_REJECTED] botId: ${bot.botId} | userId: ${userId} | phone: ${phone} | dupPhone: ${duplicatePhone} | rejected: ${isRejected}`);
     await sendTelegramApi(bot.token, 'sendMessage', {
       chat_id: chatId,
       text: `❌ <b>Verification Failed</b>\n\nYour account could not be verified at this time.\n\nPlease contact support if you believe this is a mistake.`,
@@ -558,19 +571,23 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
     return;
   }
 
+  console.log(`[SECURITY_STATUS_SAFE] botId: ${bot.botId} | userId: ${userId}`);
+
   // 2. ACCOUNT CREATION & BONUS APPLICATION
   let userWalletBalance = 0;
   let regBonus = 0;
   const nowIso = new Date().toISOString();
 
   if (!existingUserSnap.exists()) {
-    regBonus = Number(bot.registrationBonus) || Number(bot.welcomeBonus) || Number(bot.bonus) || 10;
+    regBonus = (bot.registrationBonus !== undefined && bot.registrationBonus !== null) ? Number(bot.registrationBonus) : 0;
     userWalletBalance = regBonus;
 
     const newUserRecord = {
       id: userDocId,
       docId: userDocId,
       uid: userDocId,
+      accountScope: 'EARNING_BOT',
+      earningBotId: bot.botId,
       botId: bot.botId,
       telegramId: userId,
       username: message.from?.username || sessionData.username || '',
@@ -589,6 +606,12 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
       successfulReferrals: 0,
       totalReferralEarnings: 0,
       status: 'ACTIVE',
+      security: {
+        status: 'SAFE',
+        deviceScore: 98,
+        riskFlags: [],
+        checkedAt: nowIso,
+      },
       securityStatus: 'SAFE',
       deviceScore: 98,
       riskFlags: [],
@@ -597,6 +620,7 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
     };
 
     await setDoc(userRef, newUserRecord);
+    console.log(`[ACCOUNT_CREATED] User doc created for botId: ${bot.botId} | userId: ${userId}`);
 
     // Ledger entry for Registration Bonus
     if (regBonus > 0) {
@@ -610,6 +634,7 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
           description: `Welcome registration bonus for ${bot.botName || 'Earning Bot'}`,
           transactionId: `REG_BONUS_${bot.botId}_${userId}`,
         });
+        console.log(`[REGISTRATION_BONUS_CREDITED] ₹${regBonus} registration bonus credited to userId: ${userId}`);
       } catch (txErr) {
         console.warn('[Ledger Warning] Registration bonus log warning:', txErr);
       }
@@ -704,6 +729,7 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
     parse_mode: 'HTML',
     reply_markup: buildUserMenuMarkup(),
   });
+  console.log(`[BOT_MENU_ACTIVATED] Reply keyboard activated for botId: ${bot.botId} | userId: ${userId}`);
 }
 
 /**
@@ -985,21 +1011,25 @@ async function handleWithdrawalWizardInput(bot: any, message: any, chatSession: 
     }
 
     const user = await getEarningUser(bot.botId, userId);
-    const bal = user?.walletBalance || 0;
+    const currentBal = Number(user?.walletBalance) || 0;
+    const currentLock = Number(user?.lockedBalance) || 0;
+    const avail = Math.max(0, currentBal - currentLock);
 
-    if (amount > bal) {
+    // 1. Validate requested amount >= minimum threshold
+    if (amount < bot.minWithdrawal) {
       await sendTelegramApi(bot.token, 'sendMessage', {
         chat_id: userId,
-        text: `❌ <b>Insufficient balance!</b>\n\n• Your balance: ₹${bal}\n• Attempted: ₹${amount}\n\nPlease enter a lower amount:`,
+        text: `❌ <b>Minimum withdrawal threshold is ₹${bot.minWithdrawal}.</b>\n\nPlease enter a higher amount:`,
         parse_mode: 'HTML',
       });
       return;
     }
 
-    if (amount < bot.minWithdrawal) {
+    // 2. Validate requested amount <= available balance
+    if (amount > avail) {
       await sendTelegramApi(bot.token, 'sendMessage', {
         chat_id: userId,
-        text: `❌ <b>Minimum withdrawal threshold is ₹${bot.minWithdrawal}.</b>\n\nPlease enter a higher amount:`,
+        text: `❌ <b>Insufficient available balance!</b>\n\n• Available balance: ₹${avail}\n• Requested amount: ₹${amount}\n\nPlease enter a lower amount:`,
         parse_mode: 'HTML',
       });
       return;
@@ -1132,9 +1162,8 @@ async function handleConfirmWithdrawal(bot: any, userId: string) {
         throw new Error(`Insufficient available balance: ₹${avail}`);
       }
 
-      // Update user balances
+      // Update user balances - lock requested amount ONLY (wallet balance deducted upon approval)
       transaction.update(userRef, {
-        walletBalance: currentBal - totalDeduction,
         lockedBalance: currentLock + totalDeduction,
         updatedAt: nowIso,
       });

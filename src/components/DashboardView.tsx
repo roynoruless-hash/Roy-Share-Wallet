@@ -25,6 +25,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { collection, onSnapshot, query, limit, orderBy } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { AdminConfig, TabType } from '../types';
+import { isRoyShareWalletUser } from '../utils/userScope';
 
 interface DashboardViewProps {
   config: AdminConfig;
@@ -100,8 +101,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
         const registrationsByDay: Record<string, number> = {};
 
         const docs = snapshot?.docs || [];
+        let totalRoyUsers = 0;
         docs.forEach((doc) => {
           const data = doc.data() || {};
+          if (!isRoyShareWalletUser(doc.id, data)) return;
+
+          totalRoyUsers++;
           totalBal += Number(data.walletBalance) || Number(data.balance) || 0;
           totalCoins += Number(data.coinsBalance) || 0;
 
@@ -151,7 +156,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
 
         setRealtimeStats((prev) => ({
           ...prev,
-          totalUsers: snapshot ? snapshot.size : 0,
+          totalUsers: totalRoyUsers,
           todayUsers: countToday,
           onlineEstimate: Math.max(1, countOnline),
           walletBalance: totalBal,
@@ -160,7 +165,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
 
         setDiag5A({
           status: 'success',
-          count: snapshot ? snapshot.size : 0,
+          count: totalRoyUsers,
           latency
         });
       } catch (err: any) {
