@@ -70,6 +70,39 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
   const [loadingReferrals, setLoadingReferrals] = useState(false);
   const [userSearchQuery, setUserSearchQuery] = useState('');
 
+  // Reset Earning Bot Modal State
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetConfirmationInput, setResetConfirmationInput] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
+  const [resetResult, setResetResult] = useState<any | null>(null);
+
+  const handleResetEarningBot = async () => {
+    if (!selectedBot) return;
+    setIsResetting(true);
+    try {
+      const res = await apiFetch(`/api/admin/earning-bots/${selectedBot.id}/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmationText: resetConfirmationInput }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`🔄 Earning Bot @${selectedBot.botUsername} reset successfully!`, 'success');
+        setResetResult(data);
+        setShowResetModal(false);
+        setResetConfirmationInput('');
+        fetchBots();
+        fetchBotReferralsData(selectedBot.id);
+      } else {
+        showToast(data.error || 'Failed to reset Earning Bot', 'error');
+      }
+    } catch (err) {
+      showToast('Error resetting Earning Bot', 'error');
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
   // Load Earning Bots on mount
   const fetchBots = async () => {
     setIsLoading(true);
@@ -730,7 +763,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
                     <p className="text-[10px] text-slate-400 font-mono mt-0.5">Bot ID: {selectedBot.botId} | Admin Chat ID: {selectedBot.adminChatId}</p>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => setActiveTab('wizard')}
                       className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 flex items-center gap-1.5 ${
@@ -752,6 +785,17 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
                     >
                       <Users className="w-3.5 h-3.5" />
                       <span>Referrals & Users ({botUsers.length})</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowResetModal(true);
+                        setResetConfirmationInput('');
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-black tracking-wider uppercase transition-all duration-200 flex items-center gap-1.5 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/30 shrink-0"
+                      title="Permanently delete all user and earning data for this bot only"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                      <span>🗑️ DELETE ALL USERS</span>
                     </button>
                   </div>
                 </div>
@@ -1147,6 +1191,146 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
           )}
         </div>
       </div>
+
+      {/* 5. DELETE ALL USERS CONFIRMATION MODAL */}
+      {showResetModal && selectedBot && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-2xl p-6 max-w-md w-full space-y-5 shadow-2xl shadow-rose-950/50">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-rose-400 font-extrabold text-base">
+                <AlertTriangle className="w-5 h-5 text-rose-500" />
+                <span>🗑️ DELETE ALL USERS</span>
+              </div>
+              <button
+                onClick={() => setShowResetModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1">
+                <p className="font-bold text-white text-sm">{selectedBot.botName}</p>
+                <p className="text-orange-400 font-mono">@{selectedBot.botUsername}</p>
+                <p className="text-[10px] text-slate-500 font-mono">Bot ID: {selectedBot.botId}</p>
+              </div>
+
+              <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 font-medium leading-relaxed space-y-1">
+                <p className="font-extrabold text-rose-400 text-xs">
+                  ⚠️ This will permanently delete all users and their personal/earning data from this Earning Bot. The bot configuration will NOT be deleted.
+                </p>
+                <ul className="list-disc pl-4 space-y-0.5 text-[11px] pt-1 text-slate-300">
+                  <li>User accounts, balances & registration bonuses</li>
+                  <li>Referrals, earnings & withdrawal history</li>
+                  <li>Device fingerprints & tracking logs</li>
+                </ul>
+              </div>
+
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-300 text-[11px] font-medium">
+                ✅ <strong>Preserved Data:</strong> Bot token, channel configuration, withdrawal settings, and bot infrastructure remain 100% active. Roy Share Wallet users are completely unaffected.
+              </div>
+
+              <div className="space-y-1.5 pt-1">
+                <label className="block text-[10px] font-black uppercase text-slate-300">
+                  To confirm, type: <code className="text-orange-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 font-mono">DELETE USERS</code>
+                </label>
+                <input
+                  type="text"
+                  placeholder="DELETE USERS"
+                  value={resetConfirmationInput}
+                  onChange={(e) => setResetConfirmationInput(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-rose-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono placeholder-slate-600 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowResetModal(false)}
+                className="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl text-xs transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={
+                  isResetting ||
+                  (
+                    resetConfirmationInput.trim().toUpperCase() !== 'DELETE USERS' &&
+                    resetConfirmationInput.trim().toUpperCase() !== 'RESET USERS' &&
+                    resetConfirmationInput.trim().toUpperCase() !== `RESET ${selectedBot.botUsername ? selectedBot.botUsername.replace('@', '').toUpperCase() : selectedBot.botId.toUpperCase()}`
+                  )
+                }
+                onClick={handleResetEarningBot}
+                className="flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-600/20 transition-all"
+              >
+                <Trash2 className={`w-4 h-4 ${isResetting ? 'animate-spin' : ''}`} />
+                <span>{isResetting ? 'Deleting...' : '🗑️ DELETE ALL USERS'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6. RESET RESULT SUMMARY MODAL */}
+      {resetResult && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-6 max-w-md w-full space-y-5 shadow-2xl shadow-emerald-950/50">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-emerald-400 font-extrabold text-base">
+                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                <span>✅ All Earning Bot Users Deleted</span>
+              </div>
+              <button
+                onClick={() => setResetResult(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
+                <p className="font-bold text-white text-sm">{resetResult.botName}</p>
+                <p className="text-orange-400 font-mono text-xs">{resetResult.botUsername}</p>
+              </div>
+
+              <div className="space-y-2 font-mono">
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 font-sans text-xs">Deleted Users:</span>
+                  <span className="text-base font-bold text-rose-400">{resetResult.usersDeleted}</span>
+                </div>
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 font-sans text-xs">Bot Configuration:</span>
+                  <span className="text-xs font-bold text-emerald-400">PRESERVED</span>
+                </div>
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 font-sans text-xs">Bot Status:</span>
+                  <span className="text-xs font-bold text-emerald-400">ACTIVE</span>
+                </div>
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                  <span className="text-slate-400 font-sans text-xs">Roy Share Wallet:</span>
+                  <span className="text-xs font-bold text-emerald-400">NOT AFFECTED</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-300 text-xs space-y-1">
+                <p className="font-bold">🎉 Fresh Start Ready!</p>
+                <p className="text-[11px]">New users joining via {resetResult.botUsername} will register as completely fresh users.</p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setResetResult(null)}
+              className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider transition-colors"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

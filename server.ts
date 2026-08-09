@@ -9177,6 +9177,166 @@ Respond with a JSON object containing two properties:
     }
   });
 
+  // 6d. RESET EARNING BOT DATA ONLY
+  app.post('/api/admin/earning-bots/:id/reset', requireAdminSession, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { confirmationText } = req.body || {};
+
+      const botDocRef = doc(db, 'earningBots', id);
+      const botSnap = await getDoc(botDocRef);
+      if (!botSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Earning Bot not found.' });
+      }
+
+      const botData = botSnap.data();
+      const rawUsername = String(botData.botUsername || botData.username || id).replace('@', '').trim();
+      const providedText = String(confirmationText || '').trim().toUpperCase();
+
+      const validConfirmations = [
+        'DELETE USERS',
+        'RESET USERS',
+        `RESET ${rawUsername.toUpperCase()}`,
+        `RESET ${id.toUpperCase()}`,
+        `DELETE ${rawUsername.toUpperCase()}`
+      ];
+
+      if (!validConfirmations.includes(providedText)) {
+        return res.status(400).json({
+          success: false,
+          error: `Confirmation text mismatch. Please type "DELETE USERS" to confirm.`
+        });
+      }
+
+      console.log(`[EARNING BOT RESET] Initiating full reset for Earning Bot ID: ${id} (@${rawUsername})...`);
+
+      // 1. Find all users belonging strictly to this Earning Bot
+      const allUsersSnap = await getDocs(collection(db, 'users'));
+      const deletedUserIds = new Set<string>();
+      const deletedUserUids = new Set<string>();
+
+      let usersDeleted = 0;
+      for (const userDoc of allUsersSnap.docs) {
+        if (isEarningBotUser(id, userDoc.id, userDoc.data())) {
+          deletedUserIds.add(userDoc.id);
+          const uData = userDoc.data();
+          if (uData.uid) deletedUserUids.add(String(uData.uid));
+          if (uData.appUid) deletedUserUids.add(String(uData.appUid));
+          if (uData.telegramId) deletedUserUids.add(String(uData.telegramId));
+
+          await deleteDoc(doc(db, 'users', userDoc.id));
+          usersDeleted++;
+        }
+      }
+
+      // 2. Delete withdrawals & withdraw_requests for this bot
+      let withdrawalsDeleted = 0;
+      const withdrawalsSnap = await getDocs(collection(db, 'withdrawals'));
+      for (const wDoc of withdrawalsSnap.docs) {
+        const w = wDoc.data();
+        if (w.botId === id || w.earningBotId === id || (w.uid && deletedUserUids.has(String(w.uid)))) {
+          await deleteDoc(doc(db, 'withdrawals', wDoc.id));
+          withdrawalsDeleted++;
+        }
+      }
+
+      const withdrawReqsSnap = await getDocs(collection(db, 'withdraw_requests'));
+      for (const wrDoc of withdrawReqsSnap.docs) {
+        const wr = wrDoc.data();
+        if (wr.botId === id || wr.earningBotId === id || (wr.uid && deletedUserUids.has(String(wr.uid)))) {
+          await deleteDoc(doc(db, 'withdraw_requests', wrDoc.id));
+          withdrawalsDeleted++;
+        }
+      }
+
+      // 3. Delete transactions (wallet_transactions & walletTransactions) for this bot
+      let transactionsDeleted = 0;
+      const walletTxSnap = await getDocs(collection(db, 'wallet_transactions'));
+      for (const txDoc of walletTxSnap.docs) {
+        const tx = txDoc.data();
+        if (tx.botId === id || tx.earningBotId === id || (tx.uid && deletedUserUids.has(String(tx.uid)))) {
+          await deleteDoc(doc(db, 'wallet_transactions', txDoc.id));
+          transactionsDeleted++;
+        }
+      }
+
+      const walletTxSnap2 = await getDocs(collection(db, 'walletTransactions'));
+      for (const txDoc of walletTxSnap2.docs) {
+        const tx = txDoc.data();
+        if (tx.botId === id || tx.earningBotId === id || (tx.uid && deletedUserUids.has(String(tx.uid)))) {
+          await deleteDoc(doc(db, 'walletTransactions', txDoc.id));
+          transactionsDeleted++;
+        }
+      }
+
+      // 4. Delete bot referrals & logs
+      let referralsDeleted = 0;
+      const refSnap = await getDocs(collection(db, 'botReferrals'));
+      for (const rDoc of refSnap.docs) {
+        const r = rDoc.data();
+        if (r.botId === id || r.earningBotId === id || (r.referrerUid && deletedUserUids.has(String(r.referrerUid)))) {
+          await deleteDoc(doc(db, 'botReferrals', rDoc.id));
+          referralsDeleted++;
+        }
+      }
+
+      const refLogsSnap = await getDocs(collection(db, 'referralLogs'));
+      for (const rlDoc of refLogsSnap.docs) {
+        const rl = rlDoc.data();
+        if (rl.botId === id || rl.earningBotId === id || (rl.referrerUid && deletedUserUids.has(String(rl.referrerUid)))) {
+          await deleteDoc(doc(db, 'referralLogs', rlDoc.id));
+          referralsDeleted++;
+        }
+      }
+
+      // 5. Delete device fingerprints / tracking logs for this bot
+      let fingerprintsDeleted = 0;
+      const fingerprintsSnap = await getDocs(collection(db, 'deviceFingerprints'));
+      for (const fpDoc of fingerprintsSnap.docs) {
+        const fp = fpDoc.data();
+        if (fp.botId === id || fp.earningBotId === id || (fp.uid && deletedUserUids.has(String(fp.uid)))) {
+          await deleteDoc(doc(db, 'deviceFingerprints', fpDoc.id));
+          fingerprintsDeleted++;
+        }
+      }
+
+      const fingerprintLogsSnap = await getDocs(collection(db, 'fingerprintLogs'));
+      for (const fplDoc of fingerprintLogsSnap.docs) {
+        const fpl = fplDoc.data();
+        if (fpl.botId === id || fpl.earningBotId === id || (fpl.uid && deletedUserUids.has(String(fpl.uid)))) {
+          await deleteDoc(doc(db, 'fingerprintLogs', fplDoc.id));
+          fingerprintsDeleted++;
+        }
+      }
+
+      // 6. Clear sessions for this bot
+      const earningSessionsSnap = await getDocs(collection(db, 'earningSessions'));
+      for (const esDoc of earningSessionsSnap.docs) {
+        const es = esDoc.data();
+        if (es.botId === id || es.earningBotId === id || (es.uid && deletedUserUids.has(String(es.uid)))) {
+          await deleteDoc(doc(db, 'earningSessions', esDoc.id));
+        }
+      }
+
+      console.log(`[EARNING BOT RESET COMPLETE] Bot ID ${id}: ${usersDeleted} users, ${withdrawalsDeleted} withdrawals, ${transactionsDeleted} transactions, ${referralsDeleted} referrals, ${fingerprintsDeleted} fingerprints deleted.`);
+
+      return res.json({
+        success: true,
+        botName: botData.botName || botData.botFirstName || id,
+        botUsername: `@${rawUsername}`,
+        usersDeleted,
+        withdrawalsDeleted,
+        transactionsDeleted,
+        referralsDeleted,
+        fingerprintsDeleted,
+        message: 'Earning Bot reset successfully. All user & earning data cleared while preserving bot configuration.'
+      });
+    } catch (err: any) {
+      console.error('Error resetting earning bot:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // 7. PUBLIC BOT CONFIGURATION
   app.get('/api/earning-bots/config/:botId', async (req, res) => {
     try {
