@@ -19,6 +19,7 @@ interface UserSession {
   verificationVersion?: number;
   lastJoinMessageSentTime?: number;
   pendingVote?: { contestId: string; contestantId: string };
+  pendingTaskId?: string;
   referrerUid?: string;
 }
 
@@ -110,15 +111,99 @@ export async function sendCreateAccountPrompt(token: string, chatId: string | nu
 
 export function buildMainMenuKeyboard(hasActiveLiveEvent: boolean = false) {
   const keyboard: any[][] = [
-    [{ text: '👤 ACCOUNT' }, { text: '💰 BALANCE' }],
-    [{ text: '🎁 REFER & EARN' }, { text: '💸 WITHDRAW' }],
-    [{ text: '📊 HISTORY' }, { text: '📞 CONTACT US' }],
+    [{ text: '💰 Wallet' }, { text: '🪙 Earn Tasks' }],
+    [{ text: '🎁 Refer & Earn' }, { text: '☎️ Contact Us' }],
+    [{ text: '🎉 Lucky Draw' }],
   ];
 
   return {
     keyboard,
     resize_keyboard: true,
   };
+}
+
+export async function sendSingleTaskCard(token: string, chatId: string | number, task: any) {
+  const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
+  const taskMiniAppUrl = `${baseUrl}/?taskId=${task.id}&action=task`;
+  const taskText =
+    `📋 <b>${task.title}</b>\n\n` +
+    `💰 <b>Cash Reward:</b> ₹${task.reward}\n` +
+    `🪙 <b>Coins:</b> +${task.coins || 0}\n\n` +
+    (task.description ? `${task.description}\n\n` : '') +
+    `👇 Click below to start and complete this task:`;
+
+  const inline_keyboard = [
+    [
+      {
+        text: '🪙 START TASK',
+        web_app: { url: taskMiniAppUrl },
+      },
+    ],
+  ];
+
+  if (task.taskImage) {
+    try {
+      await sendTelegramApi(token, 'sendPhoto', {
+        chat_id: chatId,
+        photo: task.taskImage,
+        caption: taskText,
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard },
+      });
+      return;
+    } catch (err) {
+      console.warn('Failed to send task photo, falling back to text message:', err);
+    }
+  }
+
+  await sendTelegramApi(token, 'sendMessage', {
+    chat_id: chatId,
+    text: taskText,
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard },
+  });
+}
+
+export async function sendAvailableTasksList(token: string, chatId: string | number, user?: any) {
+  try {
+    const tasksRef = collection(db, 'tasks');
+    const snap = await getDocs(tasksRef);
+    const availableTasks: any[] = [];
+
+    snap.forEach((d) => {
+      const t = { id: d.id, ...d.data() } as any;
+      if (t.active !== false && t.published !== false && t.status !== 'INACTIVE') {
+        availableTasks.push(t);
+      }
+    });
+
+    if (availableTasks.length === 0) {
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `🪙 <b>EARN CASH & COINS</b>\n\nNo active tasks available right now. Please check back later!`,
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    const headerText = `🪙 <b>EARN CASH & COINS</b>\n\nComplete tasks and earn rewards.`;
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: headerText,
+      parse_mode: 'HTML',
+    });
+
+    for (const task of availableTasks) {
+      await sendSingleTaskCard(token, chatId, task);
+    }
+  } catch (err) {
+    console.error('Error in sendAvailableTasksList:', err);
+    await sendTelegramApi(token, 'sendMessage', {
+      chat_id: chatId,
+      text: `❌ Error loading tasks. Please try again later.`,
+      parse_mode: 'HTML',
+    });
+  }
 }
 
 export async function checkLiveEventActive(): Promise<{
@@ -1261,6 +1346,21 @@ export async function processTelegramUpdate(token: string, update: any) {
     });
     console.log(`[BOT_MENU_ACTIVATED] Main Bot menu activated for chatId: ${chatId}`);
 
+    // Check if user had a pending deep link task request
+    const pendingSess = userSessions.get(chatId);
+    if (pendingSess?.pendingTaskId) {
+      const pTaskId = pendingSess.pendingTaskId;
+      userSessions.delete(chatId);
+      try {
+        const tSnap = await getDoc(doc(db, 'tasks', pTaskId));
+        if (tSnap.exists() && tSnap.data()?.active !== false) {
+          await sendSingleTaskCard(token, chatId, { id: tSnap.id, ...tSnap.data() });
+        }
+      } catch (pErr) {
+        console.error('Error auto-delivering pending deep link task:', pErr);
+      }
+    }
+
     return;
   }
 
@@ -1393,6 +1493,45 @@ export async function processTelegramUpdate(token: string, update: any) {
           return;
         } else {
           await sendCreateAccountPrompt(token, chatId);
+          return;
+        }
+      }
+
+      // 2. TASK DEEP LINK FLOW
+      if (startParam.startsWith('task_')) {
+        const taskId = startParam.replace(/^task_/, '').trim();
+        console.log('PAYLOAD TYPE: TASK_DEEP_LINK | taskId:', taskId, '| userId:', chatId);
+
+        try {
+          const taskDocSnap = await getDoc(doc(db, 'tasks', taskId));
+          if (!taskDocSnap.exists() || taskDocSnap.data()?.active === false) {
+            await sendTelegramApi(token, 'sendMessage', {
+              chat_id: chatId,
+              text: `⚠️ <b>Invalid or Expired Task</b>\n\nThe task you requested is no longer active or does not exist.`,
+              parse_mode: 'HTML',
+            });
+            return;
+          }
+
+          const taskData = { id: taskDocSnap.id, ...taskDocSnap.data() };
+
+          if (existingUser) {
+            await sendSingleTaskCard(token, chatId, taskData);
+            return;
+          } else {
+            const sess = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
+            sess.pendingTaskId = taskId;
+            userSessions.set(chatId, sess);
+            await sendCreateAccountPrompt(token, chatId);
+            return;
+          }
+        } catch (taskErr) {
+          console.error('Error handling task deep link:', taskErr);
+          await sendTelegramApi(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `❌ <b>Failed to load task.</b> Please try again.`,
+            parse_mode: 'HTML',
+          });
           return;
         }
       }
@@ -1665,8 +1804,13 @@ export async function processTelegramUpdate(token: string, update: any) {
     }
 
     // Reset active withdrawal session if user clicks a main menu button
-    if (text === '👛 Wallet' || text === '👤 ACCOUNT' || text === '💰 BALANCE' || text === '📊 HISTORY' || text === '💸 Withdraw' || text === '🎁 Refer & Earn' || text === '☎ Contact Us' || text === '📞 CONTACT US' || text === '🎁 Lucky Draw') {
+    if (text === '💰 Wallet' || text === '👛 Wallet' || text === '👤 ACCOUNT' || text === '💰 BALANCE' || text === '🪙 Earn Tasks' || text === '🪙 EARN TASKS' || text === 'Earn Tasks' || text === 'Tasks' || text === '📊 HISTORY' || text === '💸 Withdraw' || text === '🎁 Refer & Earn' || text === '🎁 REFER & EARN' || text === '☎️ Contact Us' || text === '☎ Contact Us' || text === '📞 CONTACT US' || text === '🎁 Lucky Draw') {
       userSessions.delete(chatId);
+    }
+
+    if (text === '🪙 Earn Tasks' || text === '🪙 EARN TASKS' || text === 'Earn Tasks' || text === 'Tasks' || text === '/tasks') {
+      await sendAvailableTasksList(token, chatId, existingUser);
+      return;
     }
 
     if (text === '/contests' || text === '/vote' || text === '🏆 Contests' || text.startsWith('/contests') || text.startsWith('/vote')) {
@@ -1709,7 +1853,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    if (text === '👛 Wallet' || text === '👤 ACCOUNT' || text === '💰 BALANCE') {
+    if (text === '💰 Wallet' || text === '👛 Wallet' || text === '👤 ACCOUNT' || text === '💰 BALANCE' || text === '/wallet') {
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
         text: `👤 <b>Account Details</b>\n\n` +
@@ -1829,7 +1973,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    if (text === '☎ Contact Us') {
+    if (text === '☎️ Contact Us' || text === '☎ Contact Us' || text === '📞 CONTACT US' || text === 'Contact Us' || text === '/support') {
       const supportUsername = (adminConfig?.supportUsername || '').replace(/^@/, '');
       const supportGroup = (adminConfig?.supportGroup || '').replace(/^@/, '');
 

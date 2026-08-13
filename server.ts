@@ -1444,6 +1444,484 @@ async function startServer() {
     }
   });
 
+  // 3.6 ROY SHARE WALLET — TASK PUBLISH & PROMOTION CHANNELS ENDPOINTS
+  app.post('/api/admin/publish-task', requireAdminSession, async (req, res) => {
+    try {
+      const { taskId, distributionSettings } = req.body;
+      if (!taskId) {
+        return res.status(400).json({ success: false, error: 'taskId is required.' });
+      }
+
+      const sysConfig = await getDecryptedConfig();
+      const botToken = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN;
+      if (!botToken) {
+        return res.status(400).json({ success: false, error: 'Roy Share Wallet Bot Token is not configured.' });
+      }
+
+      // Fetch Bot info
+      const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+      const meData = await meRes.json();
+      const botUsername = (meData.ok && meData.result?.username) ? meData.result.username.replace(/^@/, '') : 'Roy_wallett_bot';
+
+      const taskRef = doc(db, 'tasks', String(taskId));
+      const taskSnap = await getDoc(taskRef);
+      if (!taskSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Task not found in database.' });
+      }
+
+      const taskData = { id: taskSnap.id, ...taskSnap.data() } as any;
+      const botDeepLink = `https://t.me/${botUsername}?start=task_${taskSnap.id}`;
+
+      const nowIso = new Date().toISOString();
+      await updateDoc(taskRef, {
+        published: true,
+        active: true,
+        status: 'ACTIVE',
+        botDeepLink,
+        publishedAt: nowIso,
+        updatedAt: nowIso,
+      });
+
+      const notifyActiveUsers = distributionSettings?.notifyActiveUsers !== false;
+      const postToConnectedChannels = distributionSettings?.postToConnectedChannels !== false;
+      const useTaskImage = distributionSettings?.useTaskImage !== false;
+
+      let channelSuccessCount = 0;
+      let channelFailedCount = 0;
+      let channelsTargeted = 0;
+
+      // CHANNEL BROADCAST
+      if (postToConnectedChannels) {
+        const channelsSnap = await getDocs(collection(db, 'telegramChannels'));
+        const channelsList: any[] = [];
+        channelsSnap.forEach(d => {
+          const cData = d.data();
+          if (cData.active !== false) {
+            channelsList.push({ id: d.id, ...cData });
+          }
+        });
+
+        channelsTargeted = channelsList.length;
+
+        const postText =
+          `📢 <b>NEW EARNING TASK AVAILABLE!</b>\n\n` +
+          `📋 <b>${taskData.title}</b>\n\n` +
+          `💰 <b>Cash Reward:</b> ₹${taskData.reward}\n` +
+          `🪙 <b>Coins:</b> +${taskData.coins || 0}\n\n` +
+          (taskData.description ? `${taskData.description}\n\n` : '') +
+          `👇 Click below to start the task in Roy Share Wallet Bot:`;
+
+        const inline_keyboard = [
+          [
+            {
+              text: '🪙 START TASK',
+              url: botDeepLink,
+            },
+          ],
+        ];
+
+        for (const ch of channelsList) {
+          const chChatId = ch.chatId || ch.telegramChatId || ch.id;
+          try {
+            let sendRes: any = null;
+            if (useTaskImage && taskData.taskImage) {
+              const photoRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: chChatId,
+                  photo: taskData.taskImage,
+                  caption: postText,
+                  parse_mode: 'HTML',
+                  reply_markup: { inline_keyboard },
+                }),
+              });
+              sendRes = await photoRes.json();
+            }
+
+            if (!sendRes || !sendRes.ok) {
+              const msgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: chChatId,
+                  text: postText,
+                  parse_mode: 'HTML',
+                  reply_markup: { inline_keyboard },
+                }),
+              });
+              sendRes = await msgRes.json();
+            }
+
+            if (sendRes && sendRes.ok) {
+              channelSuccessCount++;
+              const msgId = sendRes.result?.message_id;
+              await setDoc(doc(db, 'taskChannelPosts', `${taskSnap.id}_${ch.id}`), {
+                taskId: taskSnap.id,
+                channelId: ch.id,
+                channelChatId: chChatId,
+                telegramMessageId: msgId,
+                status: 'SUCCESS',
+                postedAt: new Date().toISOString(),
+              });
+              await updateDoc(doc(db, 'telegramChannels', ch.id), {
+                lastPostTime: new Date().toISOString(),
+                lastError: null,
+              });
+            } else {
+              channelFailedCount++;
+              const errorMsg = sendRes?.description || 'Failed to post message to channel.';
+              await setDoc(doc(db, 'taskChannelPosts', `${taskSnap.id}_${ch.id}`), {
+                taskId: taskSnap.id,
+                channelId: ch.id,
+                channelChatId: chChatId,
+                status: 'FAILED',
+                lastError: errorMsg,
+                failedAt: new Date().toISOString(),
+              });
+              await updateDoc(doc(db, 'telegramChannels', ch.id), {
+                lastError: errorMsg,
+              });
+            }
+          } catch (chErr: any) {
+            channelFailedCount++;
+            await updateDoc(doc(db, 'telegramChannels', ch.id), {
+              lastError: chErr.message || 'Channel posting exception',
+            });
+          }
+        }
+      }
+
+      // ASYNCHRONOUS USER BROADCAST
+      let usersNotified = 0;
+      if (notifyActiveUsers) {
+        (async () => {
+          try {
+            const usersQuery = query(
+              collection(db, 'users'),
+              where('accountScope', '==', 'ROY_SHARE_WALLET')
+            );
+            const userSnap = await getDocs(usersQuery);
+            const activeUsers: any[] = [];
+            userSnap.forEach(u => {
+              const uData = u.data();
+              if (uData.status !== 'banned' && uData.banned !== true && uData.telegramId) {
+                activeUsers.push(uData);
+              }
+            });
+
+            const userText =
+              `🆕 <b>NEW EARNING TASK!</b>\n\n` +
+              `📋 <b>${taskData.title}</b>\n\n` +
+              `💰 <b>Reward:</b> ₹${taskData.reward} | 🪙 <b>Coins:</b> +${taskData.coins || 0}\n\n` +
+              (taskData.description ? `${taskData.description}\n\n` : '') +
+              `👇 Tap below to start now:`;
+
+            const inline_keyboard = [
+              [
+                {
+                  text: '🪙 START TASK',
+                  url: botDeepLink,
+                },
+              ],
+            ];
+
+            for (const u of activeUsers) {
+              try {
+                const bRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: u.telegramId,
+                    text: userText,
+                    parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard },
+                  }),
+                });
+                const bData = await bRes.json();
+                if (bData.ok) usersNotified++;
+                await new Promise(r => setTimeout(r, 40));
+              } catch (uErr) {
+                console.error(`Error notifying user ${u.telegramId}:`, uErr);
+              }
+            }
+            console.log(`[TASK_BROADCAST_COMPLETED] Notified ${usersNotified} users for task ${taskSnap.id}`);
+          } catch (bgErr) {
+            console.error('Error in background user broadcast:', bgErr);
+          }
+        })();
+      }
+
+      return res.json({
+        success: true,
+        taskId: taskSnap.id,
+        botDeepLink,
+        channelsTargeted,
+        channelsSuccess: channelSuccessCount,
+        channelsFailed: channelFailedCount,
+        message: 'Task published successfully!',
+      });
+    } catch (err: any) {
+      console.error('Error publishing task:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Failed to publish task' });
+    }
+  });
+
+  // GET PROMOTION CHANNELS
+  app.get('/api/admin/promotion-channels', requireAdminSession, async (req, res) => {
+    try {
+      const sysConfig = await getDecryptedConfig();
+      const botToken = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN;
+
+      const snap = await getDocs(collection(db, 'telegramChannels'));
+      const list: any[] = [];
+
+      for (const d of snap.docs) {
+        const data = d.data();
+        const chItem = {
+          id: d.id,
+          chatId: data.chatId || data.telegramChatId || d.id,
+          title: data.title || data.channelName || 'Untitled Channel',
+          username: data.username || data.channelUsername || '',
+          active: data.active !== false,
+          type: data.type || 'channel',
+          lastPostTime: data.lastPostTime || null,
+          lastError: data.lastError || null,
+          isAdmin: false,
+          canPost: false,
+        };
+
+        if (botToken && chItem.chatId) {
+          try {
+            const chRes = await fetch(`https://api.telegram.org/bot${botToken}/getChat?chat_id=${encodeURIComponent(chItem.chatId)}`);
+            const chData = await chRes.json();
+            if (chData.ok) {
+              if (chData.result.title) chItem.title = chData.result.title;
+              if (chData.result.username) chItem.username = chData.result.username;
+
+              const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+              const meData = await meRes.json();
+              if (meData.ok && meData.result?.id) {
+                const memberRes = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${encodeURIComponent(chItem.chatId)}&user_id=${meData.result.id}`);
+                const memberData = await memberRes.json();
+                if (memberData.ok && memberData.result) {
+                  const status = memberData.result.status;
+                  chItem.isAdmin = status === 'administrator' || status === 'creator';
+                  chItem.canPost = chItem.isAdmin && (memberData.result.can_post_messages !== false);
+                }
+              }
+            }
+          } catch (e) {
+            console.warn(`Error checking bot status in channel ${chItem.chatId}:`, e);
+          }
+        }
+
+        list.push(chItem);
+      }
+
+      return res.json({ success: true, channels: list });
+    } catch (err: any) {
+      console.error('Error fetching promotion channels:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Error loading channels' });
+    }
+  });
+
+  // ADD PROMOTION CHANNEL
+  app.post('/api/admin/promotion-channels/add', requireAdminSession, async (req, res) => {
+    try {
+      const { chatId, title, username } = req.body;
+      if (!chatId) {
+        return res.status(400).json({ success: false, error: 'Chat ID or Username is required.' });
+      }
+
+      const sysConfig = await getDecryptedConfig();
+      const botToken = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN;
+      if (!botToken) {
+        return res.status(400).json({ success: false, error: 'Roy Share Wallet Bot Token is not configured.' });
+      }
+
+      let cleanChatId = String(chatId).trim();
+      if (!cleanChatId.startsWith('-') && !cleanChatId.startsWith('@')) {
+        cleanChatId = '@' + cleanChatId;
+      }
+
+      const chRes = await fetch(`https://api.telegram.org/bot${botToken}/getChat?chat_id=${encodeURIComponent(cleanChatId)}`);
+      const chData = await chRes.json();
+
+      if (!chData.ok) {
+        return res.status(400).json({
+          success: false,
+          error: `Telegram Error: ${chData.description || 'Channel not found or bot is not a member.'}`
+        });
+      }
+
+      const chatInfo = chData.result;
+      const channelTitle = title || chatInfo.title || 'Connected Channel';
+      const channelUsername = chatInfo.username ? `@${chatInfo.username}` : (username || '');
+      const realChatId = String(chatInfo.id);
+
+      const docId = `ch_${realChatId.replace(/^-/, '')}`;
+      await setDoc(doc(db, 'telegramChannels', docId), {
+        chatId: realChatId,
+        title: channelTitle,
+        username: channelUsername,
+        active: true,
+        type: 'channel',
+        createdAt: new Date().toISOString(),
+      });
+
+      return res.json({
+        success: true,
+        channel: {
+          id: docId,
+          chatId: realChatId,
+          title: channelTitle,
+          username: channelUsername,
+          active: true,
+        },
+        message: 'Promotion channel added successfully!',
+      });
+    } catch (err: any) {
+      console.error('Error adding promotion channel:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Failed to add channel' });
+    }
+  });
+
+  // TOGGLE PROMOTION CHANNEL
+  app.post('/api/admin/promotion-channels/toggle', requireAdminSession, async (req, res) => {
+    try {
+      const { channelId, active } = req.body;
+      if (!channelId) {
+        return res.status(400).json({ success: false, error: 'channelId is required.' });
+      }
+
+      await updateDoc(doc(db, 'telegramChannels', String(channelId)), {
+        active: Boolean(active),
+        updatedAt: new Date().toISOString(),
+      });
+
+      return res.json({ success: true, message: 'Channel status updated successfully.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Failed to toggle channel' });
+    }
+  });
+
+  // DELETE PROMOTION CHANNEL
+  app.post('/api/admin/promotion-channels/delete', requireAdminSession, async (req, res) => {
+    try {
+      const { channelId } = req.body;
+      if (!channelId) {
+        return res.status(400).json({ success: false, error: 'channelId is required.' });
+      }
+
+      await deleteDoc(doc(db, 'telegramChannels', String(channelId)));
+      return res.json({ success: true, message: 'Promotion channel deleted successfully.' });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Failed to delete channel' });
+    }
+  });
+
+  // TEST POST TO PROMOTION CHANNEL
+  app.post('/api/admin/promotion-channels/test', requireAdminSession, async (req, res) => {
+    try {
+      const { channelId } = req.body;
+      if (!channelId) {
+        return res.status(400).json({ success: false, error: 'channelId is required.' });
+      }
+
+      const chDoc = await getDoc(doc(db, 'telegramChannels', String(channelId)));
+      if (!chDoc.exists()) {
+        return res.status(404).json({ success: false, error: 'Channel not found.' });
+      }
+
+      const sysConfig = await getDecryptedConfig();
+      const botToken = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN;
+      if (!botToken) {
+        return res.status(400).json({ success: false, error: 'Roy Share Wallet Bot Token is not configured.' });
+      }
+
+      const chData = chDoc.data();
+      const targetChatId = chData.chatId || chData.telegramChatId || channelId;
+
+      const testText =
+        `🧪 <b>ROY SHARE WALLET PROMOTION TEST</b>\n\n` +
+        `✅ Connected successfully to <b>${chData.title || 'Channel'}</b>!\n` +
+        `This channel is ready to broadcast auto-promoted tasks.`;
+
+      const tRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: targetChatId,
+          text: testText,
+          parse_mode: 'HTML',
+        }),
+      });
+
+      const tData = await tRes.json();
+      if (tData.ok) {
+        await updateDoc(doc(db, 'telegramChannels', String(channelId)), {
+          lastPostTime: new Date().toISOString(),
+          lastError: null,
+        });
+        return res.json({ success: true, message: 'Test message sent successfully!' });
+      } else {
+        const errorMsg = tData.description || 'Failed to send test message.';
+        await updateDoc(doc(db, 'telegramChannels', String(channelId)), {
+          lastError: errorMsg,
+        });
+        return res.status(400).json({ success: false, error: errorMsg });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Error testing channel' });
+    }
+  });
+
+  // TASK DISTRIBUTION ANALYTICS
+  app.get('/api/admin/task-distribution-analytics', requireAdminSession, async (req, res) => {
+    try {
+      const tasksSnap = await getDocs(collection(db, 'tasks'));
+      const tasksList = tasksSnap.docs.map(d => ({ id: d.id, ...d.data() })) as any[];
+
+      const subSnap = await getDocs(collection(db, 'manualTaskSubmissions'));
+      const subsList = subSnap.docs.map(d => d.data()) as any[];
+
+      const usersSnap = await getDocs(query(collection(db, 'users'), where('accountScope', '==', 'ROY_SHARE_WALLET')));
+      const usersCount = usersSnap.size;
+
+      const channelsSnap = await getDocs(collection(db, 'telegramChannels'));
+      const channelsCount = channelsSnap.size;
+
+      const totalPublished = tasksList.filter(t => t.published === true).length;
+      const totalStarts = tasksList.reduce((acc, t) => acc + (Number(t.startsCount) || 0), 0);
+      const totalSubmissions = subsList.length;
+      const totalPending = subsList.filter(s => s.status === 'PENDING_APPROVAL').length;
+      const totalApproved = subsList.filter(s => s.status === 'APPROVED').length;
+      const totalRejected = subsList.filter(s => s.status === 'REJECTED').length;
+      const totalPaidOut = subsList
+        .filter(s => s.status === 'APPROVED')
+        .reduce((acc, s) => acc + (Number(s.reward) || 0), 0);
+
+      return res.json({
+        success: true,
+        stats: {
+          totalTasks: tasksList.length,
+          totalPublished,
+          eligibleUsersCount: usersCount,
+          connectedChannelsCount: channelsCount,
+          totalStarts,
+          totalSubmissions,
+          totalPending,
+          totalApproved,
+          totalRejected,
+          totalPaidOut,
+        },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Error loading analytics' });
+    }
+  });
+
   // 4. TEST BOT ENDPOINT
   app.post('/api/telegram/test-bot', async (req, res) => {
     try {

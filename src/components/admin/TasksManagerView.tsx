@@ -57,11 +57,31 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   config,
   showToast
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'tasks' | 'submissions' | 'campaigns' | 'suspicious' | 'analytics'>('tasks');
+  const [activeSubTab, setActiveSubTab] = useState<'tasks' | 'submissions' | 'channels' | 'analytics'>('tasks');
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [submissions, setSubmissions] = useState<ManualTaskSubmission[]>([]);
   const [campaigns, setCampaigns] = useState<TaskCampaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Promotion Channels states
+  const [channels, setChannels] = useState<any[]>([]);
+  const [isLoadingChannels, setIsLoadingChannels] = useState(false);
+  const [showAddChannelModal, setShowAddChannelModal] = useState(false);
+  const [newChannelChatId, setNewChannelChatId] = useState('');
+  const [newChannelTitle, setNewChannelTitle] = useState('');
+  const [isAddingChannel, setIsAddingChannel] = useState(false);
+
+  // Task Publishing Modal states
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [publishingTask, setPublishingTask] = useState<TaskItem | null>(null);
+  const [notifyUsersCheck, setNotifyUsersCheck] = useState(true);
+  const [postChannelsCheck, setPostChannelsCheck] = useState(true);
+  const [includeImageCheck, setIncludeImageCheck] = useState(true);
+  const [isPublishing, setIsPublishing] = useState(false);
+
+  // Distribution Analytics states
+  const [overallStats, setOverallStats] = useState<any>(null);
+  const [isLoadingOverallStats, setIsLoadingOverallStats] = useState(false);
 
   // Task Form states
   const [showForm, setShowForm] = useState(false);
@@ -119,6 +139,162 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   const [rejectionReason, setRejectionReason] = useState('Screenshot does not match the required proof.');
   const [customReasonText, setCustomReasonText] = useState('');
   const [isProcessingAction, setIsProcessingAction] = useState(false);
+
+  const loadPromotionChannels = async () => {
+    setIsLoadingChannels(true);
+    try {
+      const res = await apiFetch('/api/admin/promotion-channels');
+      const data = await res.json();
+      if (data.success) {
+        setChannels(data.channels || []);
+      }
+    } catch (err: any) {
+      showToast('Error loading promotion channels: ' + err.message, 'error');
+    } finally {
+      setIsLoadingChannels(false);
+    }
+  };
+
+  const handleAddChannel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newChannelChatId.trim()) {
+      showToast('Channel Chat ID or Username is required', 'error');
+      return;
+    }
+    setIsAddingChannel(true);
+    try {
+      const res = await apiFetch('/api/admin/promotion-channels/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId: newChannelChatId.trim(),
+          title: newChannelTitle.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('✅ ' + data.message, 'success');
+        setShowAddChannelModal(false);
+        setNewChannelChatId('');
+        setNewChannelTitle('');
+        loadPromotionChannels();
+      } else {
+        showToast('❌ ' + (data.error || 'Failed to add channel'), 'error');
+      }
+    } catch (err: any) {
+      showToast('Error adding channel: ' + err.message, 'error');
+    } finally {
+      setIsAddingChannel(false);
+    }
+  };
+
+  const handleToggleChannel = async (channelId: string, currentActive: boolean) => {
+    try {
+      const res = await apiFetch('/api/admin/promotion-channels/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, active: !currentActive }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Updated channel status', 'success');
+        setChannels(prev => prev.map(c => c.id === channelId ? { ...c, active: !currentActive } : c));
+      }
+    } catch (err: any) {
+      showToast('Error updating channel', 'error');
+    }
+  };
+
+  const handleDeleteChannel = async (channelId: string) => {
+    if (!window.confirm('Are you sure you want to remove this promotion channel?')) return;
+    try {
+      const res = await apiFetch('/api/admin/promotion-channels/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Channel deleted', 'success');
+        setChannels(prev => prev.filter(c => c.id !== channelId));
+      }
+    } catch (err: any) {
+      showToast('Error deleting channel', 'error');
+    }
+  };
+
+  const handleTestChannel = async (channelId: string) => {
+    try {
+      const res = await apiFetch('/api/admin/promotion-channels/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('✅ ' + data.message, 'success');
+        loadPromotionChannels();
+      } else {
+        showToast('❌ ' + (data.error || 'Test failed'), 'error');
+      }
+    } catch (err: any) {
+      showToast('Error testing channel: ' + err.message, 'error');
+    }
+  };
+
+  const handleOpenPublishModal = (task: TaskItem) => {
+    setPublishingTask(task);
+    setNotifyUsersCheck(true);
+    setPostChannelsCheck(true);
+    setIncludeImageCheck(!!task.taskImage);
+    setShowPublishModal(true);
+  };
+
+  const handleExecutePublish = async () => {
+    if (!publishingTask) return;
+    setIsPublishing(true);
+    try {
+      const res = await apiFetch('/api/admin/publish-task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: publishingTask.id,
+          distributionSettings: {
+            notifyActiveUsers: notifyUsersCheck,
+            postToConnectedChannels: postChannelsCheck,
+            useTaskImage: includeImageCheck,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`🎉 Published! Channels Target: ${data.channelsTargeted}, Success: ${data.channelsSuccess}`, 'success');
+        setShowPublishModal(false);
+        loadData();
+      } else {
+        showToast('❌ ' + (data.error || 'Failed to publish task'), 'error');
+      }
+    } catch (err: any) {
+      showToast('Error publishing task: ' + err.message, 'error');
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const loadOverallStats = async () => {
+    setIsLoadingOverallStats(true);
+    try {
+      const res = await apiFetch('/api/admin/task-distribution-analytics');
+      const data = await res.json();
+      if (data.success) {
+        setOverallStats(data.stats);
+      }
+    } catch (err: any) {
+      showToast('Error loading analytics stats', 'error');
+    } finally {
+      setIsLoadingOverallStats(false);
+    }
+  };
 
   const iconsList = [
     { name: 'CheckSquare', icon: CheckSquare, desc: 'Generic Check' },
@@ -529,6 +705,34 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                   {pendingCount}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => {
+                setActiveSubTab('channels');
+                loadPromotionChannels();
+              }}
+              className={`py-2 px-4 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                activeSubTab === 'channels'
+                  ? 'bg-amber-500 text-slate-950 shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Tv className="w-3.5 h-3.5" />
+              <span>Connected Channels</span>
+            </button>
+            <button
+              onClick={() => {
+                setActiveSubTab('analytics');
+                loadOverallStats();
+              }}
+              className={`py-2 px-4 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                activeSubTab === 'analytics'
+                  ? 'bg-amber-500 text-slate-950 shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Analytics</span>
             </button>
           </div>
 
@@ -1046,6 +1250,14 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
                       <div className="flex items-center gap-2">
                         <button
+                          onClick={() => handleOpenPublishModal(task)}
+                          className="flex items-center gap-1 py-1 px-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-black transition"
+                          title="Publish & Auto Promote Task"
+                        >
+                          <Megaphone className="w-3.5 h-3.5" />
+                          <span>Publish & Promote</span>
+                        </button>
+                        <button
                           onClick={() => handleEdit(task)}
                           className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
                           title="Edit task"
@@ -1360,6 +1572,319 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* SUBTAB 3: CONNECTED PROMOTION CHANNELS */}
+      {activeSubTab === 'channels' && (
+        <div className="space-y-5">
+          <div className="flex items-center justify-between p-5 rounded-3xl bg-slate-900/60 border border-slate-800">
+            <div>
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <Tv className="w-4 h-4 text-amber-400" />
+                <span>Connected Promotion Channels</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Auto-post published tasks directly to these connected Telegram channels.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowAddChannelModal(true)}
+              className="flex items-center gap-1.5 py-2 px-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl transition"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Connect Channel</span>
+            </button>
+          </div>
+
+          {isLoadingChannels ? (
+            <div className="p-8 rounded-3xl bg-slate-900/40 border border-slate-800 text-center text-xs text-slate-400">
+              Loading promotion channels...
+            </div>
+          ) : channels.length === 0 ? (
+            <div className="p-8 rounded-3xl bg-slate-900/40 border border-slate-800 text-center space-y-2">
+              <p className="text-xs text-slate-400">No promotion channels connected yet.</p>
+              <button
+                onClick={() => setShowAddChannelModal(true)}
+                className="text-xs text-amber-400 hover:underline font-bold inline-flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add your first Telegram channel
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {channels.map((ch) => (
+                <div
+                  key={ch.id}
+                  className={`p-5 rounded-3xl border transition space-y-3 ${
+                    ch.active
+                      ? 'bg-slate-900/60 border-slate-800'
+                      : 'bg-slate-950/40 border-slate-900 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-black text-white">{ch.title}</h4>
+                      <p className="text-xs text-sky-400 font-mono">{ch.username || ch.chatId}</p>
+                    </div>
+                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${
+                      ch.canPost
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                    }`}>
+                      {ch.canPost ? 'Admin & Can Post' : ch.isAdmin ? 'Admin' : 'Member'}
+                    </span>
+                  </div>
+
+                  {ch.lastError && (
+                    <p className="text-[11px] text-rose-400 bg-rose-500/10 border border-rose-500/20 p-2 rounded-xl">
+                      ⚠️ {ch.lastError}
+                    </p>
+                  )}
+
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-800 text-xs">
+                    <button
+                      onClick={() => handleToggleChannel(ch.id, ch.active)}
+                      className={`flex items-center gap-1 font-bold ${
+                        ch.active ? 'text-emerald-400' : 'text-slate-500'
+                      }`}
+                    >
+                      {ch.active ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
+                      <span>{ch.active ? 'Active' : 'Disabled'}</span>
+                    </button>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleTestChannel(ch.id)}
+                        className="py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-lg transition"
+                      >
+                        Test Post
+                      </button>
+                      <button
+                        onClick={() => handleDeleteChannel(ch.id)}
+                        className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SUBTAB 4: DISTRIBUTION ANALYTICS */}
+      {activeSubTab === 'analytics' && (
+        <div className="space-y-5">
+          <div className="p-5 rounded-3xl bg-slate-900/60 border border-slate-800">
+            <h3 className="text-sm font-black text-white flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-amber-400" />
+              <span>Task & Promotion Distribution Analytics</span>
+            </h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Performance metrics for Roy Share Wallet task system and promotion channel broadcasts.
+            </p>
+          </div>
+
+          {isLoadingOverallStats ? (
+            <div className="p-8 rounded-3xl bg-slate-900/40 border border-slate-800 text-center text-xs text-slate-400">
+              Loading distribution analytics...
+            </div>
+          ) : overallStats ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Total Tasks</span>
+                <p className="text-xl font-black text-amber-400">{overallStats.totalTasks || 0}</p>
+                <span className="text-[10px] text-slate-500">{overallStats.totalPublished || 0} Published</span>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Eligible Users</span>
+                <p className="text-xl font-black text-sky-400">{overallStats.eligibleUsersCount || 0}</p>
+                <span className="text-[10px] text-slate-500">Roy Share Wallet</span>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Channels</span>
+                <p className="text-xl font-black text-purple-400">{overallStats.connectedChannelsCount || 0}</p>
+                <span className="text-[10px] text-slate-500">Connected</span>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Audits Approved</span>
+                <p className="text-xl font-black text-emerald-400">{overallStats.totalApproved || 0}</p>
+                <span className="text-[10px] text-slate-500">{overallStats.totalPending || 0} Pending</span>
+              </div>
+              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Total Paid Out</span>
+                <p className="text-xl font-black text-amber-400">₹{overallStats.totalPaidOut || 0}</p>
+                <span className="text-[10px] text-slate-500">Rewards</span>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* PUBLISH & PROMOTIONS MODAL */}
+      {showPublishModal && publishingTask && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <Megaphone className="w-4 h-4 text-amber-400" />
+                <span>Publish & Broadcast Task</span>
+              </h3>
+              <button
+                onClick={() => setShowPublishModal(false)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-850 space-y-2">
+              <h4 className="text-sm font-black text-amber-400">{publishingTask.title}</h4>
+              <div className="flex items-center gap-3 text-xs font-bold text-slate-300">
+                <span>Reward: ₹{publishingTask.reward}</span>
+                <span>Coins: +{publishingTask.coins || 0}</span>
+              </div>
+              <p className="text-[11px] text-sky-400 font-mono break-all pt-1">
+                Link: https://t.me/Roy_wallett_bot?start=task_{publishingTask.id}
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <span className="text-xs font-bold text-slate-300 block">Distribution Settings:</span>
+
+              <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                <div className="space-y-0.5">
+                  <span className="text-xs font-bold text-white block">Auto Broadcast to Eligible Users</span>
+                  <span className="text-[10px] text-slate-400 block">Send task notification to all Roy Share Wallet users</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={notifyUsersCheck}
+                  onChange={(e) => setNotifyUsersCheck(e.target.checked)}
+                  className="w-4 h-4 accent-amber-500 rounded"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                <div className="space-y-0.5">
+                  <span className="text-xs font-bold text-white block">Post to Promotion Channels</span>
+                  <span className="text-[10px] text-slate-400 block">Auto-post task card with Start Task deep link to connected channels</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={postChannelsCheck}
+                  onChange={(e) => setPostChannelsCheck(e.target.checked)}
+                  className="w-4 h-4 accent-amber-500 rounded"
+                />
+              </label>
+
+              {publishingTask.taskImage && (
+                <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-bold text-white block">Include Task Image</span>
+                    <span className="text-[10px] text-slate-400 block">Send task photo card in channel posts and messages</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={includeImageCheck}
+                    onChange={(e) => setIncludeImageCheck(e.target.checked)}
+                    className="w-4 h-4 accent-amber-500 rounded"
+                  />
+                </label>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowPublishModal(false)}
+                className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExecutePublish}
+                disabled={isPublishing}
+                className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition flex items-center gap-1.5"
+              >
+                {isPublishing ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Send className="w-3.5 h-3.5" />
+                )}
+                <span>Confirm Publish & Broadcast Now</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD CHANNEL MODAL */}
+      {showAddChannelModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <form onSubmit={handleAddChannel} className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <Tv className="w-4 h-4 text-amber-400" />
+                <span>Connect Promotion Channel</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAddChannelModal(false)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Telegram Channel Chat ID or Username *</label>
+                <input
+                  type="text"
+                  placeholder="e.g. @royshare_announcements or -1001234567890"
+                  value={newChannelChatId}
+                  onChange={(e) => setNewChannelChatId(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
+                  required
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Channel Label / Title (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Roy Share Official Channel"
+                  value={newChannelTitle}
+                  onChange={(e) => setNewChannelTitle(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
+                />
+              </div>
+              <p className="text-[10px] text-amber-400 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
+                📌 Note: Make sure the Roy Share Wallet Bot is added as an <b>Admin</b> in the channel with permission to post messages.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowAddChannelModal(false)}
+                className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isAddingChannel}
+                className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
+              >
+                {isAddingChannel ? 'Connecting...' : 'Connect Channel'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>
