@@ -880,6 +880,7 @@ export interface TaskItem {
   detailedInstructions?: string; // Detailed Step-by-Step Instructions
   proofDemoImage?: string; // Proof Screenshot Demo Image
   privateAdminGroupChatId?: string; // Private Telegram Admin Group Chat ID e.g. -100xxxxxxxxxx
+  telegramAdminChatId?: string; // Telegram Admin/Review Chat ID e.g. -100xxxxxxxxxx
   allowResubmission?: boolean; // Allow Resubmission After Rejection: ON / OFF
   maxResubmissions?: number; // Maximum resubmissions allowed (default 2)
   maxSubmissionsPerUser?: number; // Maximum submissions per user (default 1)

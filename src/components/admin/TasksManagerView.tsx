@@ -78,6 +78,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   const [detailedInstructions, setDetailedInstructions] = useState('');
   const [proofDemoImage, setProofDemoImage] = useState('');
   const [privateAdminGroupChatId, setPrivateAdminGroupChatId] = useState('');
+  const [telegramAdminChatId, setTelegramAdminChatId] = useState('');
   const [allowResubmission, setAllowResubmission] = useState<boolean>(true);
   const [maxResubmissions, setMaxResubmissions] = useState<number>(2);
   const [maxSubmissionsPerUser, setMaxSubmissionsPerUser] = useState<number>(1);
@@ -152,7 +153,25 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
   useEffect(() => {
     loadData();
-  }, []);
+    const fetchBotTelegramConfig = async () => {
+      try {
+        const botId = config?.botId || 'roy_share_wallet';
+        const res = await apiFetch(`/api/admin/get-telegram-config?botId=${botId}`);
+        const data = await res.json();
+        if (data.success && data.config) {
+          if (data.config.privateReviewGroupChatId) {
+            setPrivateAdminGroupChatId(data.config.privateReviewGroupChatId);
+          }
+          if (data.config.telegramAdminChatId) {
+            setTelegramAdminChatId(data.config.telegramAdminChatId);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching bot telegram config:', err);
+      }
+    };
+    fetchBotTelegramConfig();
+  }, [config?.botId]);
 
   const handleEdit = (task: TaskItem) => {
     setEditingId(task.id);
@@ -167,6 +186,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     setDescription(task.description || '');
     setProofDemoImage(task.proofDemoImage || '');
     setPrivateAdminGroupChatId(task.privateAdminGroupChatId || '');
+    setTelegramAdminChatId(task.telegramAdminChatId || '');
     setAllowResubmission(task.allowResubmission !== false);
     setMaxSubmissionsPerUser(task.maxSubmissionsPerUser || 1);
     setActive(task.active);
@@ -188,6 +208,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     setDescription('');
     setProofDemoImage('');
     setPrivateAdminGroupChatId('');
+    setTelegramAdminChatId('');
     setAllowResubmission(true);
     setMaxSubmissionsPerUser(1);
     setActive(true);
@@ -217,7 +238,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
   const handleVerifyTelegramGroup = async () => {
     if (!privateAdminGroupChatId.trim()) {
-      showToast('Please enter a Private Telegram Admin Group Chat ID (e.g. -100xxxxxxxxxx)', 'error');
+      showToast('Please enter PRIVATE REVIEW GROUP CHAT ID (e.g. -1001234567890)', 'error');
       return;
     }
 
@@ -227,28 +248,32 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
       const res = await apiFetch('/api/admin/verify-telegram-group', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupChatId: privateAdminGroupChatId.trim() })
+        body: JSON.stringify({
+          privateReviewGroupChatId: privateAdminGroupChatId.trim(),
+          telegramAdminChatId: telegramAdminChatId.trim(),
+          botId: config?.botId || 'roy_share_wallet'
+        })
       });
       const data = await res.json();
       if (data.success) {
         setGroupVerifyStatus({
           success: true,
-          msg: `Verified! Bot connected to ${data.chatTitle || 'Admin Group'}`
+          msg: data.message || '✅ Telegram configuration verified successfully.'
         });
-        showToast('✓ Telegram Private Admin Group verified successfully!', 'success');
+        showToast('✅ Telegram configuration verified successfully.', 'success');
       } else {
         setGroupVerifyStatus({
           success: false,
-          msg: data.error || 'Failed to verify. Ensure bot is added as admin to the group.'
+          msg: data.error || '❌ Bot is not a member/admin of this Telegram group.'
         });
-        showToast('Group verification failed: ' + (data.error || 'Bot cannot send messages to this chat ID'), 'error');
+        showToast(data.error || '❌ Bot is not a member/admin of this Telegram group.', 'error');
       }
     } catch (err: any) {
       setGroupVerifyStatus({
         success: false,
-        msg: 'Connection error verifying group chat ID.'
+        msg: '❌ Bot is not a member/admin of this Telegram group.'
       });
-      showToast('Error verifying group chat ID', 'error');
+      showToast('❌ Bot is not a member/admin of this Telegram group.', 'error');
     } finally {
       setIsVerifyingGroup(false);
     }
@@ -263,7 +288,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
     if (verificationType === 'manual') {
       if (!privateAdminGroupChatId.trim()) {
-        showToast('Private Telegram Admin Group Chat ID is required for manual audit tasks', 'error');
+        showToast('PRIVATE REVIEW GROUP CHAT ID is required for manual audit tasks', 'error');
         return;
       }
     }
@@ -282,6 +307,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
         description: description.trim(),
         proofDemoImage,
         privateAdminGroupChatId: privateAdminGroupChatId.trim(),
+        telegramAdminChatId: telegramAdminChatId.trim(),
         allowResubmission,
         maxSubmissionsPerUser: Number(maxSubmissionsPerUser) || 1,
         active,
@@ -660,28 +686,54 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Private Telegram Admin Group Chat ID */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-300 block">Private Telegram Admin Group Chat ID *</label>
-                      <div className="flex items-center gap-2">
+                    {/* Telegram Audit Configurations */}
+                    <div className="space-y-3 p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-amber-400">Telegram Manual Verification Settings</span>
+                        <span className="text-[10px] text-slate-400 font-medium">Scoped to Bot ID: {config?.botId || 'roy_share_wallet'}</span>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-300 block">
+                          1. PRIVATE REVIEW GROUP CHAT ID *
+                        </label>
                         <input
                           type="text"
-                          placeholder="-100xxxxxxxxxx"
+                          placeholder="e.g. -1001234567890"
                           value={privateAdminGroupChatId}
                           onChange={(e) => setPrivateAdminGroupChatId(e.target.value)}
                           className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-mono text-amber-400 outline-none"
                           required
                         />
+                        <p className="text-[11px] text-slate-400">User proof submissions will be sent to this group.</p>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-300 block">
+                          2. TELEGRAM ADMIN/REVIEW CHAT ID *
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. -1009876543210"
+                          value={telegramAdminChatId}
+                          onChange={(e) => setTelegramAdminChatId(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-mono text-amber-400 outline-none"
+                        />
+                        <p className="text-[11px] text-slate-400">Admin review notifications will be received here.</p>
+                      </div>
+
+                      <div className="pt-1 flex items-center justify-between">
                         <button
                           type="button"
                           onClick={handleVerifyTelegramGroup}
                           disabled={isVerifyingGroup}
-                          className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-bold rounded-xl shrink-0 transition flex items-center gap-1.5"
+                          className="py-2.5 px-4 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
                         >
                           {isVerifyingGroup ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
-                          <span>VERIFY & SAVE GROUP</span>
+                          <span>VERIFY & SAVE TELEGRAM CONFIG</span>
                         </button>
                       </div>
+
                       {groupVerifyStatus && (
                         <p className={`text-[11px] font-bold ${groupVerifyStatus.success ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {groupVerifyStatus.msg}

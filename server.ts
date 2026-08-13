@@ -475,18 +475,24 @@ async function startServer() {
     }
   });
 
-  // 3.1. VERIFY TELEGRAM ADMIN GROUP CHAT ID
+  // 3.1. VERIFY TELEGRAM ADMIN GROUP CHAT ID & REVIEW CONFIG
   app.post('/api/admin/verify-telegram-group', async (req, res) => {
     try {
-      const { groupChatId, botId } = req.body;
-      const cleanGroupId = String(groupChatId || '').trim();
-      if (!cleanGroupId) {
-        return res.status(400).json({ success: false, error: 'Group Chat ID is required.' });
+      const { privateReviewGroupChatId, telegramAdminChatId, groupChatId, botId } = req.body;
+      const reviewGroupId = String(privateReviewGroupChatId || groupChatId || '').trim();
+      const adminChatId = String(telegramAdminChatId || '').trim();
+      const eBotId = String(botId || 'roy_share_wallet').trim();
+
+      if (!reviewGroupId) {
+        return res.status(400).json({
+          success: false,
+          error: 'PRIVATE REVIEW GROUP CHAT ID is required.'
+        });
       }
 
       let token = process.env.TELEGRAM_BOT_TOKEN || '';
-      if (botId) {
-        const botSnap = await getDoc(doc(db, 'earningBots', botId));
+      if (eBotId) {
+        const botSnap = await getDoc(doc(db, 'earningBots', eBotId));
         if (botSnap.exists() && botSnap.data().token) {
           token = botSnap.data().token;
         }
@@ -503,27 +509,120 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'No active Telegram bot token found to test connection.' });
       }
 
-      const tgRes = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: cleanGroupId })
-      });
-      const data = await tgRes.json();
-
-      if (data.ok) {
-        return res.json({
-          success: true,
-          chatTitle: data.result?.title || data.result?.username || cleanGroupId,
-          chatType: data.result?.type,
-        });
-      } else {
-        return res.status(400).json({
-          success: false,
-          error: data.description || 'Bot cannot reach this group chat ID. Make sure bot is added as admin to the group.'
-        });
+      // Get Bot Info for checking user membership status
+      const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const meData = await meRes.json();
+      if (!meData.ok || !meData.result?.id) {
+        return res.status(400).json({ success: false, error: 'Failed to verify bot token with Telegram.' });
       }
+      const botUserId = meData.result.id;
+
+      // Helper function to verify chat & admin membership
+      const verifySingleChat = async (chatId: string) => {
+        const chatRes = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId })
+        });
+        const chatData = await chatRes.json();
+        if (!chatData.ok) {
+          return { ok: false, error: '❌ Bot is not a member/admin of this Telegram group.' };
+        }
+
+        const memberRes = await fetch(`https://api.telegram.org/bot${token}/getChatMember`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, user_id: botUserId })
+        });
+        const memberData = await memberRes.json();
+        if (!memberData.ok) {
+          return { ok: false, error: '❌ Bot is not a member/admin of this Telegram group.' };
+        }
+
+        const status = memberData.result?.status;
+        if (status !== 'administrator' && status !== 'creator') {
+          return { ok: false, error: '❌ Bot is not a member/admin of this Telegram group.' };
+        }
+
+        return {
+          ok: true,
+          title: chatData.result?.title || chatData.result?.username || chatId,
+          type: chatData.result?.type
+        };
+      };
+
+      // 1. Verify Private Review Group
+      const reviewGroupRes = await verifySingleChat(reviewGroupId);
+      if (!reviewGroupRes.ok) {
+        return res.status(400).json({ success: false, error: reviewGroupRes.error });
+      }
+
+      // 2. Verify Telegram Admin Chat ID if provided
+      let adminChatRes = null;
+      if (adminChatId) {
+        adminChatRes = await verifySingleChat(adminChatId);
+        if (!adminChatRes.ok) {
+          return res.status(400).json({ success: false, error: adminChatRes.error });
+        }
+      }
+
+      // Save strictly scoped configuration for this earningBotId
+      await setDoc(doc(db, 'earningBotReviewConfigs', eBotId), {
+        earningBotId: eBotId,
+        privateReviewGroupChatId: reviewGroupId,
+        telegramAdminChatId: adminChatId || '',
+        verifiedAt: new Date().toISOString(),
+        verified: true
+      }, { merge: true });
+
+      // Also update earningBots document
+      const botRef = doc(db, 'earningBots', eBotId);
+      const botSnap = await getDoc(botRef);
+      if (botSnap.exists()) {
+        await setDoc(botRef, {
+          privateReviewGroupChatId: reviewGroupId,
+          telegramAdminChatId: adminChatId || ''
+        }, { merge: true });
+      }
+
+      return res.json({
+        success: true,
+        message: '✅ Telegram configuration verified successfully.',
+        privateReviewGroupTitle: reviewGroupRes.title,
+        telegramAdminChatTitle: adminChatRes?.title || null
+      });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message || 'Error verifying group' });
+    }
+  });
+
+  // 3.1.2 GET TELEGRAM REVIEW CONFIG FOR EARNING BOT
+  app.get('/api/admin/get-telegram-config', async (req, res) => {
+    try {
+      const eBotId = String(req.query.botId || 'roy_share_wallet').trim();
+      const configRef = doc(db, 'earningBotReviewConfigs', eBotId);
+      const configSnap = await getDoc(configRef);
+      if (configSnap.exists()) {
+        return res.json({ success: true, config: configSnap.data() });
+      }
+
+      const botRef = doc(db, 'earningBots', eBotId);
+      const botSnap = await getDoc(botRef);
+      if (botSnap.exists()) {
+        const bd = botSnap.data();
+        return res.json({
+          success: true,
+          config: {
+            earningBotId: eBotId,
+            privateReviewGroupChatId: bd.privateReviewGroupChatId || bd.privateAdminGroupChatId || '',
+            telegramAdminChatId: bd.telegramAdminChatId || ''
+          }
+        });
+      }
+
+      return res.json({ success: true, config: null });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Error fetching telegram config' });
     }
   });
 
@@ -675,10 +774,20 @@ async function startServer() {
         return res.status(404).json({ success: false, error: 'Task not found' });
       }
       const task = taskDoc.data();
-      const adminGroupChatId = task.privateAdminGroupChatId;
+      let adminGroupChatId = task.privateAdminGroupChatId;
+      let telegramAdminChatId = task.telegramAdminChatId;
+
+      if (!adminGroupChatId || !telegramAdminChatId) {
+        const configSnap = await getDoc(doc(db, 'earningBotReviewConfigs', eBotId));
+        if (configSnap.exists()) {
+          const cfg = configSnap.data();
+          if (!adminGroupChatId) adminGroupChatId = cfg.privateReviewGroupChatId;
+          if (!telegramAdminChatId) telegramAdminChatId = cfg.telegramAdminChatId;
+        }
+      }
 
       if (!adminGroupChatId) {
-        return res.status(400).json({ success: false, error: 'Private Admin Group Chat ID is not configured for this task.' });
+        return res.status(400).json({ success: false, error: 'Private Review Group Chat ID is not configured for this bot/task.' });
       }
 
       // Check Task Capacity
@@ -792,17 +901,15 @@ async function startServer() {
       const flagBadge = suspiciousFlag === 'SUSPICIOUS' ? '\n\n⚠️ <b>SUSPICIOUS FLAG DETECTED!</b>' : (suspiciousFlag === 'REVIEW' ? '\n\n🔍 <b>FLAGGED FOR REVIEW</b>' : '');
 
       const captionText =
-        `📋 <b>TASK PROOF SUBMISSION (v${submissionVer})</b>\n\n` +
-        `🎯 Task: <b>${task.title}</b>\n` +
-        (campaignName ? `🏆 Campaign: <b>${campaignName}</b>\n` : '') +
-        `💰 Reward: <b>₹${task.reward}</b>\n\n` +
-        `📱 <b>Registration Mobile:</b>\n<code>${cleanMobile}</code>\n\n` +
-        `👤 <b>Telegram Username:</b>\n@${telegramUsername || 'N/A'}\n\n` +
-        `🆔 <b>Telegram ID:</b>\n<code>${tgUserIdStr}</code>\n\n` +
-        `👤 <b>Full Name:</b>\n${userFullName || 'User'}\n\n` +
-        `🆔 <b>User UID:</b>\n<code>${userAppUid || userId}</code>\n\n` +
-        `🕐 <b>Submitted:</b> ${formattedDate}\n\n` +
-        `📌 <b>Status:</b> ⏳ PENDING APPROVAL` +
+        `🆕 <b>NEW TASK SUBMISSION</b>\n\n` +
+        `🎯 <b>Task:</b> ${task.title}\n` +
+        `💰 <b>Reward:</b> ₹${task.reward}\n\n` +
+        `👤 <b>Name:</b> ${userFullName || 'User'}\n` +
+        `📱 <b>Registration Mobile:</b> <code>${cleanMobile}</code>\n` +
+        `🔗 <b>Username:</b> @${telegramUsername || 'N/A'}\n` +
+        `🆔 <b>Telegram ID:</b> <code>${tgUserIdStr}</code>\n` +
+        `🧾 <b>Submission ID:</b> <code>${submissionId}</code>\n\n` +
+        `📌 <b>Status:</b> ⏳ PENDING REVIEW` +
         flagBadge;
 
       const inlineKeyboard = [
@@ -846,6 +953,20 @@ async function startServer() {
             });
             const msgData = await msgRes.json();
             telegramMsgId = msgData.result?.message_id;
+          }
+
+          // Send duplicate review notification to telegramAdminChatId if configured and different
+          if (telegramAdminChatId && String(telegramAdminChatId).trim() !== String(adminGroupChatId).trim()) {
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: String(telegramAdminChatId).trim(),
+                text: `🆕 <b>NEW TASK SUBMISSION FOR REVIEW</b>\n\n🎯 Task: ${task.title}\n💰 Reward: ₹${task.reward}\n\n👤 Name: ${userFullName || 'User'}\n📱 Registration Mobile: <code>${cleanMobile}</code>\n🔗 Username: @${telegramUsername || 'N/A'}\n🆔 Telegram ID: <code>${tgUserIdStr}</code>\n🧾 Submission ID: <code>${submissionId}</code>\n\nStatus: ⏳ PENDING REVIEW`,
+                parse_mode: 'HTML',
+                reply_markup: JSON.stringify({ inline_keyboard: inlineKeyboard })
+              })
+            }).catch(() => {});
           }
         } catch (tgErr) {
           console.error('Error sending proof to Telegram Admin Group:', tgErr);
