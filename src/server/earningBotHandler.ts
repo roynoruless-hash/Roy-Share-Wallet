@@ -1,4 +1,4 @@
-import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction, setDoc, limit, deleteDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction, setDoc, limit, deleteDoc, updateDoc, arrayUnion } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
 import { sendTelegramApi } from './botHandler';
@@ -108,19 +108,42 @@ export async function processEarningBotUpdate(bot: any, update: any) {
     } else if (update.callback_query) {
       const callback = update.callback_query;
       const chatType = String(callback.message?.chat?.type || '');
+      const data = String(callback.data || '');
 
       await sendTelegramApi(bot.token, 'answerCallbackQuery', {
         callback_query_id: callback.id,
       }).catch(() => {});
 
-      // Reject callback queries from non-private chats
+      // Handle Admin Task Proof Approval & Rejection from Private Admin Group Chat
+      if (data.startsWith('approve_task:') || data.startsWith('reject_task:')) {
+        const adminUser = callback.from?.username ? `@${callback.from.username}` : (callback.from?.first_name || 'Admin');
+        if (data.startsWith('approve_task:')) {
+          const subId = data.replace('approve_task:', '').trim();
+          const res = await handleManualTaskApproval(bot, subId, adminUser);
+          await sendTelegramApi(bot.token, 'answerCallbackQuery', {
+            callback_query_id: callback.id,
+            text: res.success ? '✅ Task Approved & Reward Credited!' : (res.error || 'Approval failed'),
+            show_alert: true,
+          }).catch(() => {});
+        } else if (data.startsWith('reject_task:')) {
+          const subId = data.replace('reject_task:', '').trim();
+          const res = await handleManualTaskRejection(bot, subId, 'Screenshot does not match the required proof.', adminUser);
+          await sendTelegramApi(bot.token, 'answerCallbackQuery', {
+            callback_query_id: callback.id,
+            text: res.success ? '❌ Task Rejected' : (res.error || 'Rejection failed'),
+            show_alert: true,
+          }).catch(() => {});
+        }
+        return;
+      }
+
+      // Reject other callback queries from non-private chats
       if (chatType !== 'private') {
         return;
       }
 
       const chatId = String(callback.message?.chat?.id || callback.from?.id);
       const userId = String(callback.from?.id || chatId);
-      const data = String(callback.data);
 
       const sessionRef = doc(db, 'pendingBotSessions', `${bot.botId}_${userId}`);
 
@@ -1087,5 +1110,326 @@ async function handleConfirmWithdrawal(bot: any, userId: string) {
       text: `❌ <b>Failed to process withdrawal:</b> ${err.message || 'Server error'}`,
       parse_mode: 'HTML',
     });
+  }
+}
+
+/**
+ * Handle Manual Audit Task Approval
+ */
+export async function handleManualTaskApproval(
+  bot: any,
+  submissionId: string,
+  adminUsername: string,
+  adminNote?: string
+): Promise<{ success: boolean; newBalance?: number; error?: string }> {
+  try {
+    const subRef = doc(db, 'manualTaskSubmissions', submissionId);
+    const subSnap = await getDoc(subRef);
+    if (!subSnap.exists()) {
+      return { success: false, error: 'Submission record not found' };
+    }
+
+    const sub = subSnap.data();
+    if (sub.status === 'APPROVED') {
+      return { success: false, error: 'Submission has already been approved and rewarded' };
+    }
+    if (sub.status !== 'PENDING_APPROVAL') {
+      return { success: false, error: `Submission cannot be approved (current status: ${sub.status})` };
+    }
+
+    const botId = sub.earningBotId || bot?.botId || '';
+    const tgUserId = String(sub.telegramUserId || '');
+    const userDocId = `${botId}_${tgUserId}`;
+    const userRef = doc(db, 'users', userDocId);
+    const taskRef = doc(db, 'tasks', sub.taskId);
+    const attemptId = `${botId}_${tgUserId}_${sub.taskId}`;
+    const attemptRef = doc(db, 'taskAttempts', attemptId);
+    const idempotentTxnId = `TASK_REWARD_${botId}_${submissionId}`;
+    const idempotentTxnRef = doc(db, 'transactions', idempotentTxnId);
+
+    let newBalance = 0;
+
+    await runTransaction(db, async (transaction) => {
+      // Check idempotent transaction first
+      const existingTxnSnap = await transaction.get(idempotentTxnRef);
+      if (existingTxnSnap.exists()) {
+        throw new Error('Reward transaction has already been credited.');
+      }
+
+      const freshSubSnap = await transaction.get(subRef);
+      if (!freshSubSnap.exists()) {
+        throw new Error('Submission not found');
+      }
+      const freshSub = freshSubSnap.data();
+      if (freshSub.status !== 'PENDING_APPROVAL') {
+        throw new Error(`Submission is already ${freshSub.status}`);
+      }
+
+      const userSnap = await transaction.get(userRef);
+      if (!userSnap.exists()) {
+        throw new Error('User account not found');
+      }
+
+      const taskSnap = await transaction.get(taskRef);
+
+      const userData = userSnap.data();
+      const currentWallet = Number(userData.walletBalance || userData.balance || 0);
+      const currentCoins = Number(userData.coinsBalance || 0);
+      const rewardAmt = Number(freshSub.reward || 0);
+      const coinsAmt = Number(freshSub.coins || 0);
+      const completedTasks = Array.isArray(userData.completedTasks) ? userData.completedTasks : [];
+
+      if (completedTasks.includes(freshSub.taskId)) {
+        throw new Error('Task reward has already been credited to this user');
+      }
+
+      newBalance = currentWallet + rewardAmt;
+
+      // 1. Update Submission status
+      transaction.update(subRef, {
+        status: 'APPROVED',
+        reviewedAt: new Date().toISOString(),
+        reviewedBy: adminUsername,
+        adminNote: adminNote || '',
+      });
+
+      // 2. Update User Wallet
+      transaction.update(userRef, {
+        walletBalance: newBalance,
+        coinsBalance: currentCoins + coinsAmt,
+        completedTasks: [...completedTasks, freshSub.taskId]
+      });
+
+      // 3. Create Idempotent Transaction Entry
+      transaction.set(idempotentTxnRef, {
+        transactionId: idempotentTxnId,
+        uid: userDocId,
+        telegramId: tgUserId,
+        userName: userData.userName || userData.firstName || sub.userFullName || `User #${tgUserId}`,
+        amount: rewardAmt,
+        type: 'TASK_REWARD',
+        status: 'completed',
+        description: `Task: ${freshSub.taskTitle}`,
+        createdAt: new Date().toISOString()
+      });
+
+      // 4. Update Task Attempt
+      transaction.set(attemptRef, {
+        id: attemptId,
+        earningBotId: botId,
+        taskId: sub.taskId,
+        telegramUserId: tgUserId,
+        userId: sub.userId || userDocId,
+        status: 'APPROVED',
+        submissionId,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+
+      // 5. Update Task Capacity / Approved Count
+      if (taskSnap.exists()) {
+        const taskData = taskSnap.data();
+        const currentApproved = Number(taskData.approvedCount || 0) + 1;
+        const maxApproved = Number(taskData.maxApprovedUsers || 0);
+        const isFull = maxApproved > 0 && currentApproved >= maxApproved;
+
+        transaction.update(taskRef, {
+          approvedCount: currentApproved,
+          isFull: isFull
+        });
+
+        // 6. Update Campaign if linked
+        if (taskData.campaignId) {
+          const campaignRef = doc(db, 'taskCampaigns', taskData.campaignId);
+          const campaignSnap = await transaction.get(campaignRef);
+          if (campaignSnap.exists()) {
+            const campData = campaignSnap.data();
+            const currentSpent = Number(campData.spentBudget || 0) + rewardAmt;
+            const currentUsers = Number(campData.approvedUsersCount || 0) + 1;
+            const totalBudget = Number(campData.totalBudget || 0);
+            const maxUsers = Number(campData.maxApprovedUsers || 0);
+
+            let newStatus = campData.status || 'ACTIVE';
+            if ((totalBudget > 0 && currentSpent >= totalBudget) || (maxUsers > 0 && currentUsers >= maxUsers)) {
+              newStatus = 'COMPLETED';
+            }
+
+            transaction.update(campaignRef, {
+              spentBudget: currentSpent,
+              approvedUsersCount: currentUsers,
+              status: newStatus
+            });
+          }
+        }
+      }
+    });
+
+    // Send Telegram Notification to user
+    if (bot && bot.token && tgUserId) {
+      await sendTelegramApi(bot.token, 'sendMessage', {
+        chat_id: tgUserId,
+        text: `🎉 <b>TASK APPROVED!</b>\n\n` +
+          `Task: <b>${sub.taskTitle}</b>\n` +
+          `💰 Reward: <b>₹${sub.reward}</b>\n\n` +
+          `✅ <b>₹${sub.reward} has been credited to your wallet.</b>\n\n` +
+          `💰 <b>New Wallet Balance: ₹${newBalance}</b>`,
+        parse_mode: 'HTML',
+      }).catch(() => {});
+    }
+
+    // Update Telegram Admin Group message caption/text if available
+    if (bot && bot.token && sub.adminGroupChatId && sub.adminGroupMessageId) {
+      const updatedCaption =
+        `📋 <b>TASK PROOF SUBMISSION (APPROVED ✅)</b>\n\n` +
+        `Task: ${sub.taskTitle}\n` +
+        `💰 Reward: ₹${sub.reward}\n` +
+        `📱 Registration Mobile: ${sub.registrationMobile}\n` +
+        `👤 Telegram Username: @${sub.telegramUsername || 'N/A'}\n` +
+        `🆔 Telegram ID: ${sub.telegramUserId}\n` +
+        `👤 Full Name: ${sub.userFullName || 'N/A'}\n` +
+        `🆔 User UID: ${sub.userAppUid || sub.userId}\n\n` +
+        `📌 <b>Status: APPROVED ✅ by ${adminUsername}</b>` +
+        (adminNote ? `\n📝 <b>Note:</b> ${adminNote}` : '');
+
+      await sendTelegramApi(bot.token, 'editMessageCaption', {
+        chat_id: sub.adminGroupChatId,
+        message_id: sub.adminGroupMessageId,
+        caption: updatedCaption,
+        parse_mode: 'HTML',
+        reply_markup: JSON.stringify({
+          inline_keyboard: [[{ text: '✅ APPROVED', callback_data: 'none' }]]
+        })
+      }).catch(async () => {
+        await sendTelegramApi(bot.token, 'editMessageText', {
+          chat_id: sub.adminGroupChatId,
+          message_id: sub.adminGroupMessageId,
+          text: updatedCaption,
+          parse_mode: 'HTML',
+          reply_markup: JSON.stringify({
+            inline_keyboard: [[{ text: '✅ APPROVED', callback_data: 'none' }]]
+          })
+        }).catch(() => {});
+      });
+    }
+
+    return { success: true, newBalance };
+  } catch (err: any) {
+    console.error('Error approving manual task submission:', err);
+    return { success: false, error: err.message || 'Failed to approve submission' };
+  }
+}
+
+/**
+ * Handle Manual Audit Task Rejection
+ */
+export async function handleManualTaskRejection(
+  bot: any,
+  submissionId: string,
+  reason: string,
+  adminUsername: string,
+  adminNote?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const subRef = doc(db, 'manualTaskSubmissions', submissionId);
+    const subSnap = await getDoc(subRef);
+    if (!subSnap.exists()) {
+      return { success: false, error: 'Submission record not found' };
+    }
+
+    const sub = subSnap.data();
+    if (sub.status !== 'PENDING_APPROVAL') {
+      return { success: false, error: `Submission cannot be rejected (status: ${sub.status})` };
+    }
+
+    const botId = sub.earningBotId || bot?.botId || '';
+    const tgUserId = String(sub.telegramUserId || '');
+    const rejectionReason = reason || 'Screenshot does not match the required proof.';
+
+    // Check task settings for resubmission
+    const taskRef = doc(db, 'tasks', sub.taskId);
+    const taskSnap = await getDoc(taskRef);
+    const taskData = taskSnap.exists() ? taskSnap.data() : null;
+
+    const allowResubmission = taskData ? (taskData.allowResubmission !== false) : true;
+    const maxResubmissions = taskData ? Number(taskData.maxResubmissions || 2) : 2;
+    const currentVersion = Number(sub.submissionVersion || 1);
+
+    const canResubmit = allowResubmission && currentVersion <= maxResubmissions;
+
+    await updateDoc(subRef, {
+      status: 'REJECTED',
+      rejectionReason,
+      adminNote: adminNote || '',
+      reviewedAt: new Date().toISOString(),
+      reviewedBy: adminUsername
+    });
+
+    // Update attempt status
+    const attemptId = `${botId}_${tgUserId}_${sub.taskId}`;
+    const attemptRef = doc(db, 'taskAttempts', attemptId);
+    await setDoc(attemptRef, {
+      id: attemptId,
+      earningBotId: botId,
+      taskId: sub.taskId,
+      telegramUserId: tgUserId,
+      userId: sub.userId,
+      status: canResubmit ? 'RESUBMISSION_AVAILABLE' : 'REJECTED',
+      submissionId,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+
+    // Send Telegram Notification to user
+    if (bot && bot.token && tgUserId) {
+      const resubmitNotice = canResubmit ? `\n\n🔄 <b>Resubmission Available:</b> You can upload a new proof screenshot from the app.` : '';
+      await sendTelegramApi(bot.token, 'sendMessage', {
+        chat_id: tgUserId,
+        text: `❌ <b>TASK REJECTED</b>\n\n` +
+          `Task: <b>${sub.taskTitle}</b>\n\n` +
+          `<b>Reason:</b>\n${rejectionReason}\n` +
+          (adminNote ? `<b>Admin Note:</b> ${adminNote}\n` : '') +
+          `No reward was credited.${resubmitNotice}`,
+        parse_mode: 'HTML',
+      }).catch(() => {});
+    }
+
+    // Update Telegram Admin Group message caption
+    if (bot && bot.token && sub.adminGroupChatId && sub.adminGroupMessageId) {
+      const updatedCaption =
+        `📋 <b>TASK PROOF SUBMISSION (REJECTED ❌)</b>\n\n` +
+        `Task: ${sub.taskTitle}\n` +
+        `💰 Reward: ₹${sub.reward}\n` +
+        `📱 Registration Mobile: ${sub.registrationMobile}\n` +
+        `👤 Telegram Username: @${sub.telegramUsername || 'N/A'}\n` +
+        `🆔 Telegram ID: ${sub.telegramUserId}\n` +
+        `👤 Full Name: ${sub.userFullName || 'N/A'}\n` +
+        `🆔 User UID: ${sub.userAppUid || sub.userId}\n\n` +
+        `📌 <b>Status: REJECTED ❌ by ${adminUsername}</b>\n` +
+        `<b>Reason:</b> ${rejectionReason}` +
+        (adminNote ? `\n📝 <b>Note:</b> ${adminNote}` : '');
+
+      await sendTelegramApi(bot.token, 'editMessageCaption', {
+        chat_id: sub.adminGroupChatId,
+        message_id: sub.adminGroupMessageId,
+        caption: updatedCaption,
+        parse_mode: 'HTML',
+        reply_markup: JSON.stringify({
+          inline_keyboard: [[{ text: '❌ REJECTED', callback_data: 'none' }]]
+        })
+      }).catch(async () => {
+        await sendTelegramApi(bot.token, 'editMessageText', {
+          chat_id: sub.adminGroupChatId,
+          message_id: sub.adminGroupMessageId,
+          text: updatedCaption,
+          parse_mode: 'HTML',
+          reply_markup: JSON.stringify({
+            inline_keyboard: [[{ text: '❌ REJECTED', callback_data: 'none' }]]
+          })
+        }).catch(() => {});
+      });
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error rejecting manual task submission:', err);
+    return { success: false, error: err.message || 'Failed to reject submission' };
   }
 }

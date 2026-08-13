@@ -2,7 +2,11 @@ import React, { useState, useEffect } from 'react';
 import {
   fetchTasksFromDb,
   saveTaskToDb,
-  deleteTaskFromDb
+  deleteTaskFromDb,
+  fetchManualSubmissionsFromDb,
+  fetchCampaignsFromDb,
+  saveCampaignToDb,
+  deleteCampaignFromDb
 } from '../../services/taskService';
 import {
   Plus,
@@ -22,9 +26,26 @@ import {
   ToggleRight,
   Eye,
   EyeOff,
-  ExternalLink
+  ExternalLink,
+  Upload,
+  Image as ImageIcon,
+  ShieldCheck,
+  Search,
+  Filter,
+  AlertCircle,
+  FileText,
+  Phone,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Layers,
+  BarChart3,
+  Megaphone,
+  AlertTriangle,
+  Lock
 } from 'lucide-react';
-import { TaskItem } from '../../types';
+import { TaskItem, ManualTaskSubmission, TaskCampaign, TaskAnalytics } from '../../types';
+import { apiFetch } from '../../utils/api';
 
 interface TasksManagerViewProps {
   config: any;
@@ -35,20 +56,67 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   config,
   showToast
 }) => {
+  const [activeSubTab, setActiveSubTab] = useState<'tasks' | 'submissions' | 'campaigns' | 'suspicious' | 'analytics'>('tasks');
   const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [submissions, setSubmissions] = useState<ManualTaskSubmission[]>([]);
+  const [campaigns, setCampaigns] = useState<TaskCampaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Form states
+  // Task Form states
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [reward, setReward] = useState<number>(10);
+  const [rewardType, setRewardType] = useState<'fixed' | 'custom'>('fixed');
   const [coins, setCoins] = useState<number>(25);
   const [verificationType, setVerificationType] = useState<'automatic' | 'manual' | 'none'>('none');
   const [icon, setIcon] = useState('CheckSquare');
   const [sortOrder, setSortOrder] = useState<number>(10);
   const [url, setUrl] = useState('');
+  const [taskImage, setTaskImage] = useState('');
+  const [description, setDescription] = useState('');
+  const [detailedInstructions, setDetailedInstructions] = useState('');
+  const [proofDemoImage, setProofDemoImage] = useState('');
+  const [privateAdminGroupChatId, setPrivateAdminGroupChatId] = useState('');
+  const [allowResubmission, setAllowResubmission] = useState<boolean>(true);
+  const [maxResubmissions, setMaxResubmissions] = useState<number>(2);
+  const [maxSubmissionsPerUser, setMaxSubmissionsPerUser] = useState<number>(1);
+  const [deadlineEnabled, setDeadlineEnabled] = useState<boolean>(false);
+  const [deadlineMinutes, setDeadlineMinutes] = useState<number>(1440);
+  const [maxApprovedUsers, setMaxApprovedUsers] = useState<number>(0);
+  const [campaignId, setCampaignId] = useState<string>('');
   const [active, setActive] = useState<boolean>(true);
+
+  // Campaign Form states
+  const [showCampaignForm, setShowCampaignForm] = useState(false);
+  const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
+  const [campName, setCampName] = useState('');
+  const [campDesc, setCampDesc] = useState('');
+  const [campBudget, setCampBudget] = useState<number>(1000);
+  const [campReward, setCampReward] = useState<number>(10);
+  const [campMaxUsers, setCampMaxUsers] = useState<number>(100);
+  const [campStartDate, setCampStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [campEndDate, setCampEndDate] = useState('');
+  const [campStatus, setCampStatus] = useState<'DRAFT' | 'ACTIVE' | 'PAUSED'>('ACTIVE');
+
+  // Analytics states
+  const [selectedTaskForAnalytics, setSelectedTaskForAnalytics] = useState<string>('');
+  const [taskAnalytics, setTaskAnalytics] = useState<TaskAnalytics | null>(null);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
+
+  // Group Verification State
+  const [isVerifyingGroup, setIsVerifyingGroup] = useState(false);
+  const [groupVerifyStatus, setGroupVerifyStatus] = useState<{ success?: boolean; msg?: string } | null>(null);
+
+  // Submissions Audit Filter & Modal States
+  const [submissionStatusFilter, setSubmissionStatusFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSubmissionForModal, setSelectedSubmissionForModal] = useState<ManualTaskSubmission | null>(null);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectingSubId, setRejectingSubId] = useState<string | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('Screenshot does not match the required proof.');
+  const [customReasonText, setCustomReasonText] = useState('');
+  const [isProcessingAction, setIsProcessingAction] = useState(false);
 
   const iconsList = [
     { name: 'CheckSquare', icon: CheckSquare, desc: 'Generic Check' },
@@ -57,20 +125,33 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     { name: 'Share2', icon: Share2, desc: 'Share / Social' },
   ];
 
-  const loadTasks = async () => {
+  const presetRejectionReasons = [
+    'Screenshot does not match the required proof.',
+    'Wrong mobile number entered.',
+    'Invalid or blurry screenshot.',
+    'Duplicate submission detected.',
+    'Account registration was not completed on target website.',
+    'Other'
+  ];
+
+  const loadData = async () => {
     setIsLoading(true);
     try {
-      const list = await fetchTasksFromDb();
-      setTasks(list);
+      const [taskList, subList] = await Promise.all([
+        fetchTasksFromDb(),
+        fetchManualSubmissionsFromDb()
+      ]);
+      setTasks(taskList);
+      setSubmissions(subList);
     } catch (err: any) {
-      showToast('Error loading tasks: ' + err.message, 'error');
+      showToast('Error loading task data: ' + err.message, 'error');
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    loadTasks();
+    loadData();
   }, []);
 
   const handleEdit = (task: TaskItem) => {
@@ -81,8 +162,15 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     setVerificationType(task.verificationType);
     setIcon(task.icon);
     setSortOrder(task.sortOrder);
-    setUrl(task.url || '');
+    setUrl(task.url || task.externalDestinationUrl || '');
+    setTaskImage(task.taskImage || '');
+    setDescription(task.description || '');
+    setProofDemoImage(task.proofDemoImage || '');
+    setPrivateAdminGroupChatId(task.privateAdminGroupChatId || '');
+    setAllowResubmission(task.allowResubmission !== false);
+    setMaxSubmissionsPerUser(task.maxSubmissionsPerUser || 1);
     setActive(task.active);
+    setGroupVerifyStatus(null);
     setShowForm(true);
   };
 
@@ -96,8 +184,74 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     const nextOrder = tasks.length > 0 ? Math.max(...tasks.map(t => t.sortOrder)) + 10 : 10;
     setSortOrder(nextOrder);
     setUrl('');
+    setTaskImage('');
+    setDescription('');
+    setProofDemoImage('');
+    setPrivateAdminGroupChatId('');
+    setAllowResubmission(true);
+    setMaxSubmissionsPerUser(1);
     setActive(true);
+    setGroupVerifyStatus(null);
     setShowForm(true);
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, setter: (val: string) => void) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.type)) {
+      showToast('Please select a valid JPG, PNG, or WEBP image file', 'error');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('Image size should be less than 5MB', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reader.result) {
+        setter(String(reader.result));
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleVerifyTelegramGroup = async () => {
+    if (!privateAdminGroupChatId.trim()) {
+      showToast('Please enter a Private Telegram Admin Group Chat ID (e.g. -100xxxxxxxxxx)', 'error');
+      return;
+    }
+
+    setIsVerifyingGroup(true);
+    setGroupVerifyStatus(null);
+    try {
+      const res = await apiFetch('/api/admin/verify-telegram-group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupChatId: privateAdminGroupChatId.trim() })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setGroupVerifyStatus({
+          success: true,
+          msg: `Verified! Bot connected to ${data.chatTitle || 'Admin Group'}`
+        });
+        showToast('✓ Telegram Private Admin Group verified successfully!', 'success');
+      } else {
+        setGroupVerifyStatus({
+          success: false,
+          msg: data.error || 'Failed to verify. Ensure bot is added as admin to the group.'
+        });
+        showToast('Group verification failed: ' + (data.error || 'Bot cannot send messages to this chat ID'), 'error');
+      }
+    } catch (err: any) {
+      setGroupVerifyStatus({
+        success: false,
+        msg: 'Connection error verifying group chat ID.'
+      });
+      showToast('Error verifying group chat ID', 'error');
+    } finally {
+      setIsVerifyingGroup(false);
+    }
   };
 
   const handleSaveTask = async (e: React.FormEvent) => {
@@ -105,6 +259,13 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     if (!title.trim()) {
       showToast('Task title is required', 'error');
       return;
+    }
+
+    if (verificationType === 'manual') {
+      if (!privateAdminGroupChatId.trim()) {
+        showToast('Private Telegram Admin Group Chat ID is required for manual audit tasks', 'error');
+        return;
+      }
     }
 
     try {
@@ -116,6 +277,13 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
         icon,
         sortOrder: Number(sortOrder) || 10,
         url: url.trim(),
+        externalDestinationUrl: url.trim(),
+        taskImage,
+        description: description.trim(),
+        proofDemoImage,
+        privateAdminGroupChatId: privateAdminGroupChatId.trim(),
+        allowResubmission,
+        maxSubmissionsPerUser: Number(maxSubmissionsPerUser) || 1,
         active,
       };
 
@@ -126,13 +294,13 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
       await saveTaskToDb(taskData);
       showToast(editingId ? 'Task updated successfully' : 'Task created successfully', 'success');
       setShowForm(false);
-      loadTasks();
+      loadData();
     } catch (err: any) {
       showToast('Error saving task: ' + err.message, 'error');
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDeleteTask = async (id: string) => {
     if (!window.confirm('Are you absolutely sure you want to delete this task? This is irreversible.')) {
       return;
     }
@@ -140,7 +308,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     try {
       await deleteTaskFromDb(id);
       showToast('Task deleted successfully', 'success');
-      loadTasks();
+      loadData();
     } catch (err: any) {
       showToast('Error deleting task: ' + err.message, 'error');
     }
@@ -153,309 +321,923 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
         active: !task.active
       });
       showToast(`Task ${!task.active ? 'enabled' : 'disabled'} successfully`, 'success');
-      loadTasks();
+      loadData();
     } catch (err: any) {
       showToast('Error toggling task status: ' + err.message, 'error');
     }
   };
 
+  // Submissions Audit Handlers
+  const handleApproveSubmission = async (subId: string) => {
+    if (!window.confirm('Approve this task proof submission? Wallet reward will be credited.')) {
+      return;
+    }
+
+    setIsProcessingAction(true);
+    try {
+      const res = await apiFetch('/api/tasks/approve-submission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submissionId: subId, adminName: 'Admin' })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🎉 Submission APPROVED! Task reward credited to user wallet.', 'success');
+        setSelectedSubmissionForModal(null);
+        loadData();
+      } else {
+        showToast(data.error || 'Failed to approve submission', 'error');
+      }
+    } catch (err) {
+      showToast('Error approving submission', 'error');
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  const handleConfirmRejection = async () => {
+    if (!rejectingSubId) return;
+
+    const finalReason = rejectionReason === 'Other' ? customReasonText.trim() : rejectionReason;
+    if (!finalReason) {
+      showToast('Please specify a rejection reason', 'error');
+      return;
+    }
+
+    setIsProcessingAction(true);
+    try {
+      const res = await apiFetch('/api/tasks/reject-submission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          submissionId: rejectingSubId,
+          reason: finalReason,
+          adminName: 'Admin'
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('❌ Submission REJECTED. User has been notified.', 'info');
+        setShowRejectModal(false);
+        setRejectingSubId(null);
+        setSelectedSubmissionForModal(null);
+        loadData();
+      } else {
+        showToast(data.error || 'Failed to reject submission', 'error');
+      }
+    } catch (err) {
+      showToast('Error rejecting submission', 'error');
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  // Filtered Submissions
+  const filteredSubmissions = submissions.filter((s) => {
+    if (submissionStatusFilter !== 'ALL') {
+      if (submissionStatusFilter === 'PENDING' && s.status !== 'PENDING_APPROVAL') return false;
+      if (submissionStatusFilter === 'APPROVED' && s.status !== 'APPROVED') return false;
+      if (submissionStatusFilter === 'REJECTED' && s.status !== 'REJECTED') return false;
+    }
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const matchMobile = (s.registrationMobile || '').toLowerCase().includes(q);
+      const matchUser = (s.userFullName || '').toLowerCase().includes(q) || (s.telegramUsername || '').toLowerCase().includes(q);
+      const matchUid = (s.userAppUid || s.userId || '').toLowerCase().includes(q);
+      const matchTask = (s.taskTitle || '').toLowerCase().includes(q);
+      const matchTgId = (s.telegramUserId || '').toLowerCase().includes(q);
+      return matchMobile || matchUser || matchUid || matchTask || matchTgId;
+    }
+
+    return true;
+  });
+
+  const pendingCount = submissions.filter(s => s.status === 'PENDING_APPROVAL').length;
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-slate-900/40 border border-slate-800/60">
+    <div className="space-y-6 max-w-full overflow-x-hidden">
+      {/* Top Header & Tab Switcher */}
+      <div className="p-5 rounded-3xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-black text-white flex items-center gap-2">
             <ListTodo className="w-5 h-5 text-amber-500" />
             <span>Task Management Suite</span>
           </h2>
           <p className="text-xs text-slate-400 mt-1">
-            Create, manage, and monitor custom, real-time user tasks credited with custom cash and coins.
+            Configure dynamic app tasks, manual screenshot audit workflows, and admin group approvals.
           </p>
         </div>
+
         <div className="flex items-center gap-2">
+          <div className="p-1 rounded-2xl bg-slate-950 border border-slate-800 flex items-center gap-1">
+            <button
+              onClick={() => setActiveSubTab('tasks')}
+              className={`py-2 px-4 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                activeSubTab === 'tasks'
+                  ? 'bg-amber-500 text-slate-950 shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Tasks Config</span>
+            </button>
+            <button
+              onClick={() => setActiveSubTab('submissions')}
+              className={`py-2 px-4 rounded-xl text-xs font-bold transition flex items-center gap-1.5 relative ${
+                activeSubTab === 'submissions'
+                  ? 'bg-amber-500 text-slate-950 shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Manual Audits</span>
+              {pendingCount > 0 && (
+                <span className="ml-1 px-1.5 py-0.2 text-[9px] font-black rounded-full bg-rose-500 text-white animate-pulse">
+                  {pendingCount}
+                </span>
+              )}
+            </button>
+          </div>
+
           <button
-            onClick={loadTasks}
+            onClick={loadData}
             className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition"
             title="Refresh list"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-amber-400' : ''}`} />
           </button>
-          <button
-            onClick={handleCreateNew}
-            className="flex items-center gap-1.5 py-2.5 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg shadow-amber-500/10 transition"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add New Task</span>
-          </button>
+
+          {activeSubTab === 'tasks' && (
+            <button
+              onClick={handleCreateNew}
+              className="flex items-center gap-1.5 py-2.5 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg shadow-amber-500/10 transition shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add New Task</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {showForm && (
-        <form onSubmit={handleSaveTask} className="p-5 sm:p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-            <span className="text-sm font-black text-white">
-              {editingId ? '✏️ Edit Task Details' : '➕ Create Dynamic Task'}
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowForm(false)}
-              className="p-1 rounded bg-slate-800 text-slate-400 hover:text-white"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
+      {/* SUBTAB 1: TASKS CONFIGURATION */}
+      {activeSubTab === 'tasks' && (
+        <>
+          {showForm && (
+            <form onSubmit={handleSaveTask} className="p-5 sm:p-6 rounded-3xl bg-slate-900/90 border border-slate-800 space-y-5 backdrop-blur-md">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <span className="text-sm font-black text-white flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-amber-400" />
+                  {editingId ? 'Edit Task Configuration' : 'Create Dynamic Task'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowForm(false)}
+                  className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5 sm:col-span-2">
-              <label className="text-xs font-bold text-slate-400 block">Task Title / Instruction</label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Task Title */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-xs font-bold text-slate-300 block">1. Task Title / Headline *</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Complete Account Registration"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
+                    required
+                  />
+                </div>
+
+                {/* Rewards */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 block">2. Cash Reward (₹) *</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 10"
+                    value={reward}
+                    onChange={(e) => setReward(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
+                    min="0"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 block">Coins Reward</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 25"
+                    value={coins}
+                    onChange={(e) => setCoins(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
+                    min="0"
+                  />
+                </div>
+
+                {/* Verification Type */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-xs font-bold text-slate-300 block">Verification Type *</label>
+                  <select
+                    value={verificationType}
+                    onChange={(e) => setVerificationType(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3 text-xs font-bold text-amber-400 outline-none"
+                  >
+                    <option value="none">None (Instant User Reward)</option>
+                    <option value="automatic">Automatic System Verification</option>
+                    <option value="manual">Manual Admin Audit Approval (Screenshot Proof Workflow)</option>
+                  </select>
+                </div>
+
+                {/* Additional Manual Audit Configuration Fields */}
+                {verificationType === 'manual' && (
+                  <div className="md:col-span-2 space-y-4 p-4 rounded-2xl bg-amber-500/5 border border-amber-500/20">
+                    <div className="flex items-center gap-2 text-xs font-black text-amber-400">
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>MANUAL ADMIN AUDIT APPROVAL CONFIGURATION</span>
+                    </div>
+
+                    {/* Task Image */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-300 block">Task Image (Displayed on user task card)</label>
+                      <div className="flex items-center gap-3">
+                        {taskImage ? (
+                          <div className="relative w-16 h-16 rounded-xl border border-slate-700 overflow-hidden shrink-0">
+                            <img src={taskImage} alt="Task Visual" className="w-full h-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => setTaskImage('')}
+                              className="absolute top-0.5 right-0.5 bg-slate-950/80 text-rose-400 p-0.5 rounded"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="w-16 h-16 rounded-xl border border-dashed border-slate-700 bg-slate-950 flex flex-col items-center justify-center cursor-pointer hover:border-amber-500 shrink-0">
+                            <Upload className="w-4 h-4 text-slate-500" />
+                            <span className="text-[9px] text-slate-500 mt-1">Upload</span>
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              className="hidden"
+                              onChange={(e) => handleImageUpload(e, setTaskImage)}
+                            />
+                          </label>
+                        )}
+                        <input
+                          type="url"
+                          placeholder="Or paste Task Image URL (https://...)"
+                          value={taskImage}
+                          onChange={(e) => setTaskImage(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs text-white outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Short Description */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-300 block">Short Description / Instructions</label>
+                      <textarea
+                        rows={2}
+                        placeholder="Open the website, complete your account registration and submit the required proof screenshot."
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs text-white outline-none"
+                      />
+                    </div>
+
+                    {/* External Destination URL */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-300 block">External Destination URL *</label>
+                      <input
+                        type="url"
+                        placeholder="https://example.com/register"
+                        value={url}
+                        onChange={(e) => setUrl(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-mono text-sky-400 outline-none"
+                        required
+                      />
+                    </div>
+
+                    {/* Proof Screenshot Demo Image */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-300 block">Proof Screenshot Demo Image (Example for Users)</label>
+                      <div className="flex items-center gap-3">
+                        {proofDemoImage ? (
+                          <div className="relative w-20 h-20 rounded-xl border border-slate-700 overflow-hidden shrink-0">
+                            <img src={proofDemoImage} alt="Demo Proof" className="w-full h-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => setProofDemoImage('')}
+                              className="absolute top-0.5 right-0.5 bg-slate-950/80 text-rose-400 p-0.5 rounded"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="w-20 h-20 rounded-xl border border-dashed border-slate-700 bg-slate-950 flex flex-col items-center justify-center cursor-pointer hover:border-amber-500 shrink-0">
+                            <ImageIcon className="w-5 h-5 text-slate-500" />
+                            <span className="text-[9px] text-slate-500 mt-1">Demo Image</span>
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              className="hidden"
+                              onChange={(e) => handleImageUpload(e, setProofDemoImage)}
+                            />
+                          </label>
+                        )}
+                        <input
+                          type="url"
+                          placeholder="Or paste Proof Demo Image URL (https://...)"
+                          value={proofDemoImage}
+                          onChange={(e) => setProofDemoImage(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs text-white outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Private Telegram Admin Group Chat ID */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-300 block">Private Telegram Admin Group Chat ID *</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="-100xxxxxxxxxx"
+                          value={privateAdminGroupChatId}
+                          onChange={(e) => setPrivateAdminGroupChatId(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-mono text-amber-400 outline-none"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={handleVerifyTelegramGroup}
+                          disabled={isVerifyingGroup}
+                          className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-bold rounded-xl shrink-0 transition flex items-center gap-1.5"
+                        >
+                          {isVerifyingGroup ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                          <span>VERIFY & SAVE GROUP</span>
+                        </button>
+                      </div>
+                      {groupVerifyStatus && (
+                        <p className={`text-[11px] font-bold ${groupVerifyStatus.success ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {groupVerifyStatus.msg}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Settings: Resubmission & Limits */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800">
+                      <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-850">
+                        <span className="text-xs font-bold text-slate-300">Allow Resubmission After Rejection</span>
+                        <button
+                          type="button"
+                          onClick={() => setAllowResubmission(!allowResubmission)}
+                          className={`text-xs font-black px-3 py-1 rounded-lg transition ${
+                            allowResubmission ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-500'
+                          }`}
+                        >
+                          {allowResubmission ? 'ON' : 'OFF'}
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-850">
+                        <span className="text-xs font-bold text-slate-300">Max Submissions Per User</span>
+                        <select
+                          value={maxSubmissionsPerUser}
+                          onChange={(e) => setMaxSubmissionsPerUser(Number(e.target.value))}
+                          className="bg-slate-900 border border-slate-800 text-xs font-bold text-amber-400 rounded-lg px-2.5 py-1 outline-none"
+                        >
+                          <option value={1}>1 Submissions</option>
+                          <option value={2}>2 Submissions</option>
+                          <option value={3}>3 Submissions</option>
+                          <option value={999}>Unlimited</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* External URL for non-manual tasks */}
+                {verificationType !== 'manual' && (
+                  <div className="space-y-1.5 md:col-span-2">
+                    <label className="text-xs font-bold text-slate-300 block">External Link (URL - Optional)</label>
+                    <input
+                      type="url"
+                      placeholder="e.g. https://t.me/news_channel"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-mono text-white outline-none"
+                    />
+                  </div>
+                )}
+
+                {/* Sort Order & Icon */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 block">Sort Order (Rank Index)</label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 10"
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(Number(e.target.value))}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-300 block">Select Task Icon</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {iconsList.map((ic) => {
+                      const IconComp = ic.icon;
+                      const isSelected = icon === ic.name;
+                      return (
+                        <button
+                          key={ic.name}
+                          type="button"
+                          onClick={() => setIcon(ic.name)}
+                          className={`flex items-center gap-1.5 p-2 border rounded-xl text-xs font-bold transition ${
+                            isSelected
+                              ? 'bg-amber-500/10 border-amber-500 text-amber-400'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          <IconComp className="w-3.5 h-3.5" />
+                          <span className="truncate">{ic.desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Active Toggle */}
+                <div className="flex items-center gap-2.5 py-2 md:col-span-2">
+                  <button
+                    type="button"
+                    onClick={() => setActive(!active)}
+                    className="flex items-center gap-2 text-xs font-bold text-slate-300"
+                  >
+                    {active ? (
+                      <ToggleRight className="w-6 h-6 text-emerald-400" />
+                    ) : (
+                      <ToggleLeft className="w-6 h-6 text-slate-600" />
+                    )}
+                    <span>Task is active and published to users</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowForm(false)}
+                  className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-lg shadow-amber-500/10 transition"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{editingId ? 'Save Edits' : 'Publish Task'}</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Tasks List */}
+          {isLoading ? (
+            <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800/60 flex flex-col items-center justify-center gap-3">
+              <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-xs text-slate-400">Loading dynamic tasks...</p>
+            </div>
+          ) : tasks.length === 0 ? (
+            <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800/60 text-center space-y-2">
+              <p className="text-xs text-slate-500">No custom tasks published yet.</p>
+              <button
+                onClick={handleCreateNew}
+                className="text-xs text-amber-400 hover:underline font-bold inline-flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" /> Publish your first task
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {tasks.map((task) => {
+                const IconComponent = iconsList.find(i => i.name === task.icon)?.icon || CheckSquare;
+                return (
+                  <div
+                    key={task.id}
+                    className={`p-5 rounded-3xl border transition flex flex-col justify-between gap-4 backdrop-blur-md ${
+                      task.active
+                        ? 'bg-slate-900/60 border-slate-800/80 hover:border-slate-700'
+                        : 'bg-slate-950/40 border-slate-900 opacity-65'
+                    }`}
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          {task.taskImage ? (
+                            <img src={task.taskImage} alt="Task" className="w-10 h-10 rounded-xl object-cover border border-slate-800" />
+                          ) : (
+                            <div className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-amber-400">
+                              <IconComponent className="w-5 h-5" />
+                            </div>
+                          )}
+                          <div>
+                            <h4 className="text-sm font-black text-white line-clamp-1">{task.title}</h4>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                              Rank Order: {task.sortOrder}
+                            </span>
+                          </div>
+                        </div>
+                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
+                          task.active
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : 'bg-slate-900 text-slate-500 border border-slate-800'
+                        }`}>
+                          {task.active ? 'ACTIVE' : 'DISABLED'}
+                        </span>
+                      </div>
+
+                      {task.description && (
+                        <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
+                          {task.description}
+                        </p>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-3 text-xs font-bold pt-1">
+                        <div className="flex items-center gap-1 text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/20">
+                          <DollarSign className="w-3.5 h-3.5" />
+                          <span>₹{task.reward} Reward</span>
+                        </div>
+                        {task.coins > 0 && (
+                          <div className="flex items-center gap-1 text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-lg border border-purple-500/20">
+                            <Coins className="w-3.5 h-3.5" />
+                            <span>{task.coins} Coins</span>
+                          </div>
+                        )}
+                        <span className={`text-[10px] uppercase font-black px-2 py-0.5 rounded ${
+                          task.verificationType === 'manual'
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                            : 'bg-slate-950 text-slate-400 border border-slate-800'
+                        }`}>
+                          {task.verificationType === 'manual' ? '🛡️ Manual Audit' : task.verificationType === 'automatic' ? '⚡ Auto' : '🚀 Instant'}
+                        </span>
+                      </div>
+
+                      {(task.url || task.externalDestinationUrl) && (
+                        <a
+                          href={task.externalDestinationUrl || task.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[10px] text-sky-400 hover:underline flex items-center gap-1 font-mono break-all"
+                        >
+                          <ExternalLink className="w-3 h-3 shrink-0" />
+                          <span>{task.externalDestinationUrl || task.url}</span>
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                      <button
+                        onClick={() => handleToggleActive(task)}
+                        className={`flex items-center gap-1 text-[10px] font-bold transition ${
+                          task.active ? 'text-slate-400 hover:text-amber-400' : 'text-emerald-500 hover:text-emerald-400'
+                        }`}
+                      >
+                        {task.active ? (
+                          <>
+                            <EyeOff className="w-3.5 h-3.5" />
+                            <span>Disable</span>
+                          </>
+                        ) : (
+                          <>
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Enable</span>
+                          </>
+                        )}
+                      </button>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleEdit(task)}
+                          className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+                          title="Edit task"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteTask(task.id)}
+                          className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition"
+                          title="Delete task"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* SUBTAB 2: MANUAL SUBMISSIONS AUDIT */}
+      {activeSubTab === 'submissions' && (
+        <div className="space-y-4">
+          {/* Filters & Search */}
+          <div className="p-4 rounded-3xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+              {(['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const).map((st) => {
+                const isSelected = submissionStatusFilter === st;
+                return (
+                  <button
+                    key={st}
+                    onClick={() => setSubmissionStatusFilter(st)}
+                    className={`py-1.5 px-3.5 rounded-xl text-xs font-black transition shrink-0 ${
+                      isSelected
+                        ? st === 'PENDING'
+                          ? 'bg-amber-500 text-slate-950'
+                          : st === 'APPROVED'
+                          ? 'bg-emerald-500 text-slate-950'
+                          : st === 'REJECTED'
+                          ? 'bg-rose-500 text-white'
+                          : 'bg-slate-200 text-slate-950'
+                        : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    {st === 'ALL' ? 'All Proofs' : st === 'PENDING' ? '⏳ Pending' : st === 'APPROVED' ? '✅ Approved' : '❌ Rejected'}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="relative w-full md:w-64">
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3" />
               <input
                 type="text"
-                placeholder="e.g. Join Our Telegram Official News Channel"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
-                required
+                placeholder="Search user, mobile, UID..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2 pl-9 pr-3 text-xs text-white outline-none"
               />
             </div>
+          </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-400 block">Cash Reward (₹)</label>
-              <input
-                type="number"
-                placeholder="e.g. 10"
-                value={reward}
-                onChange={(e) => setReward(Number(e.target.value))}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
-                min="0"
-                required
-              />
+          {/* Submissions List */}
+          {isLoading ? (
+            <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800/60 flex flex-col items-center justify-center gap-3">
+              <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-xs text-slate-400">Loading manual task submissions...</p>
             </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-400 block">Coins Reward</label>
-              <input
-                type="number"
-                placeholder="e.g. 50"
-                value={coins}
-                onChange={(e) => setCoins(Number(e.target.value))}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
-                min="0"
-                required
-              />
+          ) : filteredSubmissions.length === 0 ? (
+            <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800/60 text-center space-y-2">
+              <p className="text-xs text-slate-500">No screenshot submissions found matching your filters.</p>
             </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredSubmissions.map((sub) => (
+                <div
+                  key={sub.id}
+                  className="p-4 rounded-3xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-md flex flex-col justify-between gap-3 hover:border-slate-700 transition"
+                >
+                  <div className="space-y-3">
+                    {/* Header info */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-xs font-black text-white line-clamp-1">{sub.taskTitle}</h4>
+                        <span className="text-[10px] font-bold text-amber-400">Reward: ₹{sub.reward}</span>
+                      </div>
+                      <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
+                        sub.status === 'APPROVED'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                          : sub.status === 'REJECTED'
+                          ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                          : 'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse'
+                      }`}>
+                        {sub.status === 'APPROVED' ? 'APPROVED' : sub.status === 'REJECTED' ? 'REJECTED' : 'PENDING'}
+                      </span>
+                    </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-400 block">Verification Type</label>
-              <select
-                value={verificationType}
-                onChange={(e) => setVerificationType(e.target.value as any)}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3 text-xs font-bold text-white outline-none"
-              >
-                <option value="none">None (Instant Reward)</option>
-                <option value="automatic">Automatic System Verification</option>
-                <option value="manual">Manual Admin Audit Approval</option>
-              </select>
-            </div>
+                    {/* Screenshot Preview */}
+                    {sub.proofImageUrl && (
+                      <div
+                        onClick={() => setSelectedSubmissionForModal(sub)}
+                        className="relative h-36 rounded-2xl border border-slate-800 overflow-hidden bg-slate-950 cursor-pointer group"
+                      >
+                        <img src={sub.proofImageUrl} alt="Proof" className="w-full h-full object-cover group-hover:scale-105 transition" />
+                        <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-xs font-bold text-white transition">
+                          🔍 View Proof Screenshot
+                        </div>
+                      </div>
+                    )}
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-400 block">Sort Order (Rank)</label>
-              <input
-                type="number"
-                placeholder="e.g. 10"
-                value={sortOrder}
-                onChange={(e) => setSortOrder(Number(e.target.value))}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
-                required
-              />
-            </div>
+                    {/* User & Mobile details */}
+                    <div className="space-y-1 p-2.5 rounded-xl bg-slate-950 border border-slate-850 text-xs font-mono">
+                      <div className="flex justify-between text-slate-300">
+                        <span className="text-slate-500">Mobile:</span>
+                        <span className="font-bold text-amber-400">{sub.registrationMobile}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-300">
+                        <span className="text-slate-500">User:</span>
+                        <span className="truncate max-w-[140px] text-slate-200">{sub.userFullName || sub.telegramUsername || sub.userId}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-300">
+                        <span className="text-slate-500">TG ID:</span>
+                        <span className="text-slate-400">{sub.telegramUserId}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-300">
+                        <span className="text-slate-500">Submitted:</span>
+                        <span className="text-[10px] text-slate-400">
+                          {new Date(sub.submittedAt).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}
+                        </span>
+                      </div>
 
-            <div className="space-y-1.5 sm:col-span-2">
-              <label className="text-xs font-bold text-slate-400 block">External Destination Link (URL - Optional)</label>
-              <input
-                type="url"
-                placeholder="e.g. https://t.me/news_channel"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none font-mono"
-              />
-            </div>
+                      {sub.rejectionReason && (
+                        <div className="pt-1 mt-1 border-t border-slate-900 text-rose-400 text-[10px] font-sans">
+                          Reason: {sub.rejectionReason}
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
-            <div className="space-y-1.5 sm:col-span-2">
-              <label className="text-xs font-bold text-slate-400 block">Select Task Visual Theme Icon</label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {iconsList.map((ic) => {
-                  const IconComp = ic.icon;
-                  const isSelected = icon === ic.name;
-                  return (
+                  {/* Actions */}
+                  <div className="flex items-center gap-2 pt-2 border-t border-slate-800">
                     <button
-                      key={ic.name}
-                      type="button"
-                      onClick={() => setIcon(ic.name)}
-                      className={`flex items-center gap-2 p-2.5 border rounded-xl text-xs font-bold transition ${
-                        isSelected
-                          ? 'bg-amber-500/10 border-amber-500 text-amber-400'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                      }`}
+                      onClick={() => setSelectedSubmissionForModal(sub)}
+                      className="flex-1 py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-bold rounded-xl transition text-center"
                     >
-                      <IconComp className="w-4 h-4" />
-                      <span>{ic.desc}</span>
+                      View
                     </button>
-                  );
-                })}
+
+                    {sub.status === 'PENDING_APPROVAL' && (
+                      <>
+                        <button
+                          onClick={() => handleApproveSubmission(sub.id)}
+                          disabled={isProcessingAction}
+                          className="flex-1 py-1.5 px-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-black rounded-xl transition text-center shadow"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => {
+                            setRejectingSubId(sub.id);
+                            setShowRejectModal(true);
+                          }}
+                          disabled={isProcessingAction}
+                          className="flex-1 py-1.5 px-2 bg-rose-500 hover:bg-rose-400 text-white text-[11px] font-black rounded-xl transition text-center shadow"
+                        >
+                          Reject
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* FULL-SIZE PROOF SCREENSHOT MODAL */}
+      {selectedSubmissionForModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div>
+                <h3 className="text-sm font-black text-white">{selectedSubmissionForModal.taskTitle}</h3>
+                <span className="text-xs font-bold text-amber-400">Reward: ₹{selectedSubmissionForModal.reward}</span>
+              </div>
+              <button
+                onClick={() => setSelectedSubmissionForModal(null)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 overflow-hidden bg-slate-950 flex items-center justify-center">
+              <img
+                src={selectedSubmissionForModal.proofImageUrl}
+                alt="Submitted Proof"
+                className="max-h-[50vh] w-auto object-contain"
+              />
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-850 space-y-1 text-xs font-mono">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Registration Mobile:</span>
+                <span className="text-amber-400 font-bold">{selectedSubmissionForModal.registrationMobile}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">User Full Name:</span>
+                <span className="text-slate-200">{selectedSubmissionForModal.userFullName || 'N/A'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Telegram Username:</span>
+                <span className="text-sky-400">@{selectedSubmissionForModal.telegramUsername || 'N/A'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Telegram ID:</span>
+                <span className="text-slate-300">{selectedSubmissionForModal.telegramUserId}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">UID:</span>
+                <span className="text-slate-300">{selectedSubmissionForModal.userAppUid || selectedSubmissionForModal.userId}</span>
               </div>
             </div>
 
-            <div className="flex items-center gap-2.5 py-2 sm:col-span-2">
+            {selectedSubmissionForModal.status === 'PENDING_APPROVAL' && (
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  onClick={() => handleApproveSubmission(selectedSubmissionForModal.id)}
+                  disabled={isProcessingAction}
+                  className="flex-1 py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow transition"
+                >
+                  ✅ APPROVE SUBMISSION
+                </button>
+                <button
+                  onClick={() => {
+                    setRejectingSubId(selectedSubmissionForModal.id);
+                    setShowRejectModal(true);
+                  }}
+                  disabled={isProcessingAction}
+                  className="flex-1 py-2.5 px-4 bg-rose-500 hover:bg-rose-400 text-white font-black text-xs rounded-xl shadow transition"
+                >
+                  ❌ REJECT SUBMISSION
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* REJECTION REASON MODAL */}
+      {showRejectModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <XCircle className="w-4 h-4 text-rose-500" />
+                <span>Select Rejection Reason</span>
+              </h3>
               <button
-                type="button"
-                onClick={() => setActive(!active)}
-                className="flex items-center gap-2 text-xs font-bold text-slate-300"
+                onClick={() => setShowRejectModal(false)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
               >
-                {active ? (
-                  <ToggleRight className="w-6 h-6 text-emerald-400" />
-                ) : (
-                  <ToggleLeft className="w-6 h-6 text-slate-600" />
-                )}
-                <span>Task is active and visible to app users</span>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {presetRejectionReasons.map((reason) => (
+                <button
+                  key={reason}
+                  type="button"
+                  onClick={() => setRejectionReason(reason)}
+                  className={`w-full text-left p-3 rounded-xl border text-xs font-bold transition flex items-center justify-between ${
+                    rejectionReason === reason
+                      ? 'bg-rose-500/10 border-rose-500 text-rose-400'
+                      : 'bg-slate-950 border-slate-800 text-slate-300 hover:text-white'
+                  }`}
+                >
+                  <span>{reason}</span>
+                  {rejectionReason === reason && <Check className="w-4 h-4 text-rose-400" />}
+                </button>
+              ))}
+            </div>
+
+            {rejectionReason === 'Other' && (
+              <textarea
+                rows={2}
+                placeholder="Enter custom rejection reason..."
+                value={customReasonText}
+                onChange={(e) => setCustomReasonText(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-rose-500 rounded-xl p-3 text-xs text-white outline-none"
+              />
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                onClick={() => setShowRejectModal(false)}
+                className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmRejection}
+                disabled={isProcessingAction}
+                className="py-2.5 px-5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-black text-xs transition"
+              >
+                CONFIRM REJECTION
               </button>
             </div>
           </div>
-
-          <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-800">
-            <button
-              type="button"
-              onClick={() => setShowForm(false)}
-              className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 text-xs font-bold transition"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-lg shadow-amber-500/10 transition"
-            >
-              <Check className="w-4 h-4" />
-              <span>{editingId ? 'Save Edits' : 'Publish Task'}</span>
-            </button>
-          </div>
-        </form>
-      )}
-
-      {isLoading ? (
-        <div className="p-10 rounded-3xl bg-slate-900/20 border border-slate-800/40 flex flex-col items-center justify-center gap-3">
-          <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs text-slate-400">Loading dynamic tasks from ledger...</p>
-        </div>
-      ) : tasks.length === 0 ? (
-        <div className="p-10 rounded-3xl bg-slate-900/20 border border-slate-800/40 text-center space-y-2">
-          <p className="text-xs text-slate-500">No custom tasks published yet.</p>
-          <button
-            onClick={handleCreateNew}
-            className="text-xs text-amber-400 hover:underline font-bold inline-flex items-center gap-1"
-          >
-            <Plus className="w-3.5 h-3.5" /> Publish your first task
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {tasks.map((task) => {
-            const IconComponent = iconsList.find(i => i.name === task.icon)?.icon || CheckSquare;
-            return (
-              <div
-                key={task.id}
-                className={`p-5 rounded-3xl border transition flex flex-col justify-between gap-4 ${
-                  task.active
-                    ? 'bg-slate-900/40 border-slate-800/80 hover:border-slate-700'
-                    : 'bg-slate-950/20 border-slate-900 opacity-65'
-                }`}
-              >
-                <div className="space-y-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 bg-slate-950 border border-slate-850 rounded-xl text-amber-400">
-                        <IconComponent className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-black text-white line-clamp-1">{task.title}</h4>
-                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                          Rank Order: {task.sortOrder}
-                        </span>
-                      </div>
-                    </div>
-                    <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
-                      task.active
-                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                        : 'bg-slate-900 text-slate-500 border border-slate-800'
-                    }`}>
-                      {task.active ? 'ACTIVE' : 'DISABLED'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-4 text-xs font-bold pt-1.5">
-                    <div className="flex items-center gap-1 text-emerald-400">
-                      <DollarSign className="w-3.5 h-3.5" />
-                      <span>₹{task.reward}</span>
-                    </div>
-                    <div className="flex items-center gap-1 text-purple-400">
-                      <Coins className="w-3.5 h-3.5" />
-                      <span>{task.coins} Coins</span>
-                    </div>
-                    <span className="text-[10px] text-slate-400 capitalize px-2 py-0.5 bg-slate-950 rounded">
-                      {task.verificationType === 'none' ? 'Instant' : task.verificationType === 'manual' ? 'Audit' : 'Auto'}
-                    </span>
-                  </div>
-
-                  {task.url && (
-                    <a
-                      href={task.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[10px] text-sky-400 hover:underline flex items-center gap-1 font-mono break-all"
-                    >
-                      <ExternalLink className="w-3 h-3 shrink-0" />
-                      <span>{task.url}</span>
-                    </a>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between pt-3 border-t border-slate-850">
-                  <button
-                    onClick={() => handleToggleActive(task)}
-                    className={`flex items-center gap-1 text-[10px] font-bold transition ${
-                      task.active ? 'text-slate-400 hover:text-amber-400' : 'text-emerald-500 hover:text-emerald-400'
-                    }`}
-                  >
-                    {task.active ? (
-                      <>
-                        <EyeOff className="w-3.5 h-3.5" />
-                        <span>Disable Task</span>
-                      </>
-                    ) : (
-                      <>
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Enable Task</span>
-                      </>
-                    )}
-                  </button>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleEdit(task)}
-                      className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition"
-                      title="Edit task"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(task.id)}
-                      className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded transition"
-                      title="Delete task"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
         </div>
       )}
     </div>

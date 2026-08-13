@@ -127,6 +127,27 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Dynamic Tasks, Campaigns & Submissions
+    match /tasks/{taskId} {
+      allow read, write: if true;
+    }
+
+    match /taskCampaigns/{campaignId} {
+      allow read, write: if true;
+    }
+
+    match /taskAttempts/{attemptId} {
+      allow read, write: if true;
+    }
+
+    match /taskAnalytics/{analyticsId} {
+      allow read, write: if true;
+    }
+
+    match /manualTaskSubmissions/{submissionId} {
+      allow read, write: if true;
+    }
+
     // Default catch-all
     match /{document=**} {
       allow read, write: if true;

@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { processTelegramUpdate, sendTelegramApi } from './src/server/botHandler';
-import { resolveEarningBotReferrer } from './src/server/earningBotHandler';
+import { resolveEarningBotReferrer, handleManualTaskApproval, handleManualTaskRejection } from './src/server/earningBotHandler';
 import { getReferralTokenInfo, processReferralVerification } from './src/server/referralVerification';
 import { getMilestoneTokenInfo, processMilestoneClaim } from './src/server/milestoneVerification';
 import { approveWithdrawal, rejectWithdrawal } from './src/server/withdrawalHandler';
@@ -472,6 +472,582 @@ async function startServer() {
         success: false,
         error: err.message || 'Network error fetching webhook info',
       });
+    }
+  });
+
+  // 3.1. VERIFY TELEGRAM ADMIN GROUP CHAT ID
+  app.post('/api/admin/verify-telegram-group', async (req, res) => {
+    try {
+      const { groupChatId, botId } = req.body;
+      const cleanGroupId = String(groupChatId || '').trim();
+      if (!cleanGroupId) {
+        return res.status(400).json({ success: false, error: 'Group Chat ID is required.' });
+      }
+
+      let token = process.env.TELEGRAM_BOT_TOKEN || '';
+      if (botId) {
+        const botSnap = await getDoc(doc(db, 'earningBots', botId));
+        if (botSnap.exists() && botSnap.data().token) {
+          token = botSnap.data().token;
+        }
+      }
+
+      if (!token) {
+        const botsSnap = await getDocs(query(collection(db, 'earningBots'), where('status', '==', 'active'), limit(1)));
+        if (!botsSnap.empty) {
+          token = botsSnap.docs[0].data().token;
+        }
+      }
+
+      if (!token) {
+        return res.status(400).json({ success: false, error: 'No active Telegram bot token found to test connection.' });
+      }
+
+      const tgRes = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: cleanGroupId })
+      });
+      const data = await tgRes.json();
+
+      if (data.ok) {
+        return res.json({
+          success: true,
+          chatTitle: data.result?.title || data.result?.username || cleanGroupId,
+          chatType: data.result?.type,
+        });
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: data.description || 'Bot cannot reach this group chat ID. Make sure bot is added as admin to the group.'
+        });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Error verifying group' });
+    }
+  });
+
+  // 3.1.5 START TASK ATTEMPT (Proof Lock & Countdown)
+  app.post('/api/tasks/start-attempt', async (req, res) => {
+    try {
+      const { taskId, earningBotId, telegramUserId, userId } = req.body;
+      if (!taskId || !telegramUserId) {
+        return res.status(400).json({ success: false, error: 'taskId and telegramUserId are required.' });
+      }
+
+      const eBotId = earningBotId || 'roy_share_wallet';
+      const taskDoc = await getDoc(doc(db, 'tasks', taskId));
+      if (!taskDoc.exists()) {
+        return res.status(404).json({ success: false, error: 'Task not found.' });
+      }
+
+      const task = taskDoc.data();
+      if (!task.active) {
+        return res.status(400).json({ success: false, error: 'This task is currently inactive.' });
+      }
+
+      // Check Task Capacity
+      const approvedCount = Number(task.approvedCount || 0);
+      const maxApproved = Number(task.maxApprovedUsers || 0);
+      if (maxApproved > 0 && approvedCount >= maxApproved) {
+        return res.status(400).json({ success: false, error: '⚠️ This task is currently full.' });
+      }
+
+      // Check Campaign status if linked
+      if (task.campaignId) {
+        const campDoc = await getDoc(doc(db, 'taskCampaigns', task.campaignId));
+        if (campDoc.exists()) {
+          const camp = campDoc.data();
+          if (camp.status === 'PAUSED') {
+            return res.status(400).json({ success: false, error: '⚠️ The campaign for this task is currently paused.' });
+          }
+          if (camp.status === 'EXPIRED' || (camp.endDate && new Date(camp.endDate).getTime() < Date.now())) {
+            return res.status(400).json({ success: false, error: '⚠️ The campaign for this task has expired.' });
+          }
+          if (camp.status === 'COMPLETED' || camp.status === 'FULL') {
+            return res.status(400).json({ success: false, error: '⚠️ The campaign for this task is complete.' });
+          }
+        }
+      }
+
+      // Check existing submission status for this user
+      const subQuery = query(
+        collection(db, 'manualTaskSubmissions'),
+        where('earningBotId', '==', eBotId),
+        where('taskId', '==', taskId),
+        where('telegramUserId', '==', String(telegramUserId))
+      );
+      const subSnap = await getDocs(subQuery);
+      const existingSubs = subSnap.docs.map(d => d.data());
+
+      const pendingSub = existingSubs.find(s => s.status === 'PENDING_APPROVAL');
+      if (pendingSub) {
+        return res.status(400).json({ success: false, error: 'You already have a pending submission for this task under review.' });
+      }
+
+      const approvedSub = existingSubs.find(s => s.status === 'APPROVED');
+      if (approvedSub) {
+        return res.status(400).json({ success: false, error: 'You have already completed and received reward for this task.' });
+      }
+
+      const rejectionCount = existingSubs.filter(s => s.status === 'REJECTED').length;
+      const maxResub = Number(task.maxResubmissions || 2);
+      if (rejectionCount > 0) {
+        if (task.allowResubmission === false) {
+          return res.status(400).json({ success: false, error: 'Your previous proof was rejected and resubmission is disabled for this task.' });
+        }
+        if (rejectionCount > maxResub) {
+          return res.status(400).json({ success: false, error: `Maximum resubmission limit (${maxResub}) reached for this task.` });
+        }
+      }
+
+      // Compute Deadline expiration
+      let expiresAt: string | null = null;
+      if (task.deadlineEnabled && Number(task.deadlineMinutes || 0) > 0) {
+        const expTime = Date.now() + Number(task.deadlineMinutes) * 60 * 1000;
+        expiresAt = new Date(expTime).toISOString();
+      }
+
+      const attemptId = `${eBotId}_${telegramUserId}_${taskId}`;
+      const attemptRef = doc(db, 'taskAttempts', attemptId);
+      const version = rejectionCount + 1;
+
+      const attemptData = {
+        id: attemptId,
+        earningBotId: eBotId,
+        taskId,
+        telegramUserId: String(telegramUserId),
+        userId: userId || `${eBotId}_${telegramUserId}`,
+        status: 'PROOF_PENDING',
+        startedAt: new Date().toISOString(),
+        expiresAt,
+        version,
+      };
+
+      await setDoc(attemptRef, attemptData, { merge: true });
+
+      return res.json({
+        success: true,
+        attempt: attemptData,
+        message: 'Task started! Please submit your proof before the deadline.'
+      });
+    } catch (err: any) {
+      console.error('Error starting task attempt:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Error starting task attempt.' });
+    }
+  });
+
+  // 3.2. SUBMIT MANUAL TASK PROOF (Mini App -> Admin Group & DB)
+  app.post('/api/tasks/submit-manual-proof', async (req, res) => {
+    try {
+      const {
+        taskId,
+        userId,
+        earningBotId,
+        telegramUserId,
+        telegramUsername,
+        userFullName,
+        userAppUid,
+        registrationMobile,
+        proofImageUrl,
+        version
+      } = req.body;
+
+      if (!taskId || !userId || !registrationMobile || !proofImageUrl) {
+        return res.status(400).json({ success: false, error: 'Missing required fields (taskId, userId, mobile, or proof image).' });
+      }
+
+      // Basic Screenshot Quality Check
+      if (typeof proofImageUrl !== 'string' || proofImageUrl.length < 200 || (!proofImageUrl.startsWith('data:image/') && !proofImageUrl.startsWith('http'))) {
+        return res.status(400).json({ success: false, error: '⚠️ Please upload a clear screenshot.' });
+      }
+
+      const cleanMobile = String(registrationMobile).replace(/\D/g, '');
+      if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+        return res.status(400).json({ success: false, error: 'Please enter a valid 10-digit Indian mobile number.' });
+      }
+
+      const eBotId = earningBotId || 'roy_share_wallet';
+      const tgUserIdStr = String(telegramUserId || userId);
+
+      const taskDoc = await getDoc(doc(db, 'tasks', taskId));
+      if (!taskDoc.exists()) {
+        return res.status(404).json({ success: false, error: 'Task not found' });
+      }
+      const task = taskDoc.data();
+      const adminGroupChatId = task.privateAdminGroupChatId;
+
+      if (!adminGroupChatId) {
+        return res.status(400).json({ success: false, error: 'Private Admin Group Chat ID is not configured for this task.' });
+      }
+
+      // Check Task Capacity
+      const approvedCount = Number(task.approvedCount || 0);
+      const maxApproved = Number(task.maxApprovedUsers || 0);
+      if (maxApproved > 0 && approvedCount >= maxApproved) {
+        return res.status(400).json({ success: false, error: '⚠️ This task is currently full.' });
+      }
+
+      // Check Task Deadline
+      const attemptId = `${eBotId}_${tgUserIdStr}_${taskId}`;
+      const attemptSnap = await getDoc(doc(db, 'taskAttempts', attemptId));
+      if (attemptSnap.exists()) {
+        const attempt = attemptSnap.data();
+        if (attempt.expiresAt && new Date(attempt.expiresAt).getTime() < Date.now()) {
+          await setDoc(doc(db, 'taskAttempts', attemptId), { status: 'EXPIRED' }, { merge: true });
+          return res.status(400).json({ success: false, error: '⚠️ Task deadline has expired. Proof cannot be submitted.' });
+        }
+      }
+
+      // Registration Mobile Duplicate Check within the same Earning Bot
+      const mobQuery = query(
+        collection(db, 'manualTaskSubmissions'),
+        where('earningBotId', '==', eBotId),
+        where('registrationMobile', '==', cleanMobile)
+      );
+      const mobSnap = await getDocs(mobQuery);
+      const mobSubmissions = mobSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // Check if duplicate approved/pending in same bot/task
+      const duplicateActive = mobSubmissions.find((s: any) =>
+        (s.status === 'APPROVED' || s.status === 'PENDING_APPROVAL') &&
+        (s.taskId === taskId || s.campaignId === task.campaignId)
+      );
+
+      if (duplicateActive) {
+        return res.status(400).json({
+          success: false,
+          error: '⚠️ This registration number has already been used for this task/campaign.'
+        });
+      }
+
+      // Check user previous submissions for resubmission limits
+      const userSubQuery = query(
+        collection(db, 'manualTaskSubmissions'),
+        where('earningBotId', '==', eBotId),
+        where('taskId', '==', taskId),
+        where('telegramUserId', '==', tgUserIdStr)
+      );
+      const userSubSnap = await getDocs(userSubQuery);
+      const userSubs = userSubSnap.docs.map(d => d.data());
+
+      const pendingSub = userSubs.find(s => s.status === 'PENDING_APPROVAL');
+      if (pendingSub) {
+        return res.status(400).json({ success: false, error: 'You already have a pending proof submission for this task under admin review.' });
+      }
+
+      const approvedSub = userSubs.find(s => s.status === 'APPROVED');
+      if (approvedSub) {
+        return res.status(400).json({ success: false, error: 'You have already completed and received reward for this task.' });
+      }
+
+      const rejectedSubsCount = userSubs.filter(s => s.status === 'REJECTED').length;
+      if (rejectedSubsCount > 0 && !task.allowResubmission) {
+        return res.status(400).json({ success: false, error: 'Your previous submission was rejected and resubmission is disabled for this task.' });
+      }
+
+      const maxResub = Number(task.maxResubmissions || 2);
+      if (rejectedSubsCount > maxResub) {
+        return res.status(400).json({ success: false, error: `Maximum resubmissions limit (${maxResub}) reached for this task.` });
+      }
+
+      const submissionVer = Number(version || (rejectedSubsCount + 1));
+
+      // Check Suspicious Signals
+      const distinctUsersWithMobile = new Set(mobSubmissions.map((s: any) => String(s.telegramUserId)));
+      let suspiciousFlag: 'NORMAL' | 'REVIEW' | 'SUSPICIOUS' = 'NORMAL';
+      let suspiciousReason = '';
+
+      if (distinctUsersWithMobile.size > 0 && !distinctUsersWithMobile.has(tgUserIdStr)) {
+        suspiciousFlag = 'SUSPICIOUS';
+        suspiciousReason = `Registration mobile ${cleanMobile} was previously used by ${distinctUsersWithMobile.size} other Telegram user(s).`;
+      } else if (mobSubmissions.length >= 3) {
+        suspiciousFlag = 'REVIEW';
+        suspiciousReason = `Registration mobile ${cleanMobile} has ${mobSubmissions.length} previous submission records.`;
+      } else if (rejectedSubsCount >= 2) {
+        suspiciousFlag = 'REVIEW';
+        suspiciousReason = `User has ${rejectedSubsCount} previously rejected attempts for this task.`;
+      }
+
+      let botToken = process.env.TELEGRAM_BOT_TOKEN || '';
+      if (eBotId && eBotId !== 'roy_share_wallet') {
+        const botSnap = await getDoc(doc(db, 'earningBots', eBotId));
+        if (botSnap.exists() && botSnap.data().token) {
+          botToken = botSnap.data().token;
+        }
+      }
+
+      const submissionId = `SUB_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+      const formattedDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
+
+      // Get Campaign Name if available
+      let campaignName = '';
+      if (task.campaignId) {
+        const campDoc = await getDoc(doc(db, 'taskCampaigns', task.campaignId));
+        if (campDoc.exists()) {
+          campaignName = campDoc.data().name || '';
+        }
+      }
+
+      const flagBadge = suspiciousFlag === 'SUSPICIOUS' ? '\n\n⚠️ <b>SUSPICIOUS FLAG DETECTED!</b>' : (suspiciousFlag === 'REVIEW' ? '\n\n🔍 <b>FLAGGED FOR REVIEW</b>' : '');
+
+      const captionText =
+        `📋 <b>TASK PROOF SUBMISSION (v${submissionVer})</b>\n\n` +
+        `🎯 Task: <b>${task.title}</b>\n` +
+        (campaignName ? `🏆 Campaign: <b>${campaignName}</b>\n` : '') +
+        `💰 Reward: <b>₹${task.reward}</b>\n\n` +
+        `📱 <b>Registration Mobile:</b>\n<code>${cleanMobile}</code>\n\n` +
+        `👤 <b>Telegram Username:</b>\n@${telegramUsername || 'N/A'}\n\n` +
+        `🆔 <b>Telegram ID:</b>\n<code>${tgUserIdStr}</code>\n\n` +
+        `👤 <b>Full Name:</b>\n${userFullName || 'User'}\n\n` +
+        `🆔 <b>User UID:</b>\n<code>${userAppUid || userId}</code>\n\n` +
+        `🕐 <b>Submitted:</b> ${formattedDate}\n\n` +
+        `📌 <b>Status:</b> ⏳ PENDING APPROVAL` +
+        flagBadge;
+
+      const inlineKeyboard = [
+        [
+          { text: '✅ APPROVE', callback_data: `approve_task:${submissionId}` },
+          { text: '❌ REJECT', callback_data: `reject_task:${submissionId}` }
+        ]
+      ];
+
+      let telegramMsgId = null;
+
+      if (botToken && adminGroupChatId) {
+        try {
+          const photoPayload: any = {
+            chat_id: adminGroupChatId,
+            caption: captionText,
+            parse_mode: 'HTML',
+            photo: proofImageUrl,
+            reply_markup: JSON.stringify({ inline_keyboard: inlineKeyboard })
+          };
+
+          const tgPhotoRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(photoPayload)
+          });
+          const tgPhotoData = await tgPhotoRes.json();
+          if (tgPhotoData.ok) {
+            telegramMsgId = tgPhotoData.result?.message_id;
+          } else {
+            console.warn('sendPhoto failed, attempting fallback sendMessage:', tgPhotoData.description);
+            const msgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: adminGroupChatId,
+                text: `${captionText}\n\n📷 <b>Proof Image:</b> ${proofImageUrl.slice(0, 200)}...`,
+                parse_mode: 'HTML',
+                reply_markup: JSON.stringify({ inline_keyboard: inlineKeyboard })
+              })
+            });
+            const msgData = await msgRes.json();
+            telegramMsgId = msgData.result?.message_id;
+          }
+        } catch (tgErr) {
+          console.error('Error sending proof to Telegram Admin Group:', tgErr);
+        }
+      }
+
+      const newSubmission = {
+        id: submissionId,
+        taskId,
+        taskTitle: task.title,
+        campaignId: task.campaignId || '',
+        campaignName: campaignName || '',
+        reward: Number(task.reward) || 0,
+        coins: Number(task.coins) || 0,
+        userId,
+        earningBotId: eBotId,
+        telegramUserId: tgUserIdStr,
+        telegramUsername: telegramUsername || '',
+        userFullName: userFullName || '',
+        userAppUid: userAppUid || userId,
+        registrationMobile: cleanMobile,
+        proofImageUrl,
+        status: 'PENDING_APPROVAL',
+        submissionVersion: submissionVer,
+        attemptId,
+        adminGroupChatId,
+        adminGroupMessageId: telegramMsgId,
+        submittedAt: new Date().toISOString(),
+        suspiciousFlag,
+        suspiciousReason,
+        mobileUseCount: mobSubmissions.length + 1,
+        relatedSubmissionIds: mobSubmissions.map((s: any) => s.id)
+      };
+
+      await setDoc(doc(db, 'manualTaskSubmissions', submissionId), newSubmission);
+
+      // Update attempt status to UNDER_REVIEW
+      await setDoc(doc(db, 'taskAttempts', attemptId), {
+        id: attemptId,
+        earningBotId: eBotId,
+        taskId,
+        telegramUserId: tgUserIdStr,
+        userId,
+        status: 'UNDER_REVIEW',
+        submissionId,
+        version: submissionVer,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+
+      return res.json({
+        success: true,
+        submissionId,
+        submissionVersion: submissionVer,
+        message: 'Task proof submitted successfully for admin review!'
+      });
+    } catch (err: any) {
+      console.error('Error submitting manual task proof:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Internal server error submitting proof.' });
+    }
+  });
+
+  // 3.3. APPROVE MANUAL TASK SUBMISSION (Admin UI endpoint)
+  app.post('/api/tasks/approve-submission', async (req, res) => {
+    try {
+      const { submissionId, adminName, adminNote } = req.body;
+      if (!submissionId) {
+        return res.status(400).json({ success: false, error: 'submissionId is required.' });
+      }
+
+      const subSnap = await getDoc(doc(db, 'manualTaskSubmissions', submissionId));
+      if (!subSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Submission not found.' });
+      }
+      const subData = subSnap.data();
+
+      let botObject: any = null;
+      if (subData.earningBotId) {
+        const botSnap = await getDoc(doc(db, 'earningBots', subData.earningBotId));
+        if (botSnap.exists()) {
+          botObject = { botId: subData.earningBotId, ...botSnap.data() };
+        }
+      }
+
+      const result = await handleManualTaskApproval(botObject, submissionId, adminName || 'Admin', adminNote || '');
+      if (result.success) {
+        return res.json({ success: true, newBalance: result.newBalance });
+      } else {
+        return res.status(400).json({ success: false, error: result.error || 'Failed to approve' });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Server error approving submission' });
+    }
+  });
+
+  // 3.4. REJECT MANUAL TASK SUBMISSION (Admin UI endpoint)
+  app.post('/api/tasks/reject-submission', async (req, res) => {
+    try {
+      const { submissionId, reason, adminNote, adminName } = req.body;
+      if (!submissionId) {
+        return res.status(400).json({ success: false, error: 'submissionId is required.' });
+      }
+
+      const subSnap = await getDoc(doc(db, 'manualTaskSubmissions', submissionId));
+      if (!subSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Submission not found.' });
+      }
+      const subData = subSnap.data();
+
+      let botObject: any = null;
+      if (subData.earningBotId) {
+        const botSnap = await getDoc(doc(db, 'earningBots', subData.earningBotId));
+        if (botSnap.exists()) {
+          botObject = { botId: subData.earningBotId, ...botSnap.data() };
+        }
+      }
+
+      const result = await handleManualTaskRejection(
+        botObject,
+        submissionId,
+        reason || 'Screenshot proof rejected by admin.',
+        adminName || 'Admin',
+        adminNote || ''
+      );
+      if (result.success) {
+        return res.json({ success: true });
+      } else {
+        return res.status(400).json({ success: false, error: result.error || 'Failed to reject' });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Server error rejecting submission' });
+    }
+  });
+
+  // 3.5 TASK ANALYTICS & CAMPAIGN API ENDPOINTS
+  app.get('/api/tasks/analytics', async (req, res) => {
+    try {
+      const { earningBotId, taskId } = req.query;
+      if (!earningBotId || !taskId) {
+        return res.status(400).json({ success: false, error: 'earningBotId and taskId are required.' });
+      }
+
+      const eBotId = String(earningBotId);
+      const tId = String(taskId);
+
+      // Query task attempts
+      const attQuery = query(
+        collection(db, 'taskAttempts'),
+        where('earningBotId', '==', eBotId),
+        where('taskId', '==', tId)
+      );
+      const attSnap = await getDocs(attQuery);
+      const attempts = attSnap.docs.map(d => d.data());
+
+      // Query submissions
+      const subQuery = query(
+        collection(db, 'manualTaskSubmissions'),
+        where('earningBotId', '==', eBotId),
+        where('taskId', '==', tId)
+      );
+      const subSnap = await getDocs(subQuery);
+      const submissions = subSnap.docs.map(d => d.data());
+
+      const taskSnap = await getDoc(doc(db, 'tasks', tId));
+      const taskData = taskSnap.exists() ? taskSnap.data() : { reward: 0, title: 'Task' };
+
+      const startsCount = attempts.length;
+      const submittedCount = submissions.length;
+      const pendingCount = submissions.filter(s => s.status === 'PENDING_APPROVAL').length;
+      const approvedCount = submissions.filter(s => s.status === 'APPROVED').length;
+      const rejectedCount = submissions.filter(s => s.status === 'REJECTED').length;
+      const expiredCount = attempts.filter(a => a.status === 'EXPIRED').length;
+      const resubmittedCount = submissions.filter(s => (s.submissionVersion || 1) > 1).length;
+      const totalPaid = approvedCount * Number(taskData.reward || 0);
+
+      const decided = approvedCount + rejectedCount;
+      const approvalRate = decided > 0 ? Number(((approvedCount / decided) * 100).toFixed(1)) : 0;
+      const rejectionRate = decided > 0 ? Number(((rejectedCount / decided) * 100).toFixed(1)) : 0;
+      const conversionRate = startsCount > 0 ? Number(((approvedCount / startsCount) * 100).toFixed(1)) : 0;
+
+      return res.json({
+        success: true,
+        analytics: {
+          taskId: tId,
+          taskTitle: taskData.title || 'Task',
+          earningBotId: eBotId,
+          viewsCount: Math.max(startsCount * 2, startsCount + 10), // Estimated views
+          startsCount,
+          submittedCount,
+          pendingCount,
+          approvedCount,
+          rejectedCount,
+          expiredCount,
+          resubmittedCount,
+          totalPaid,
+          approvalRate,
+          rejectionRate,
+          conversionRate
+        }
+      });
+    } catch (err: any) {
+      console.error('Error fetching task analytics:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Error fetching analytics' });
     }
   });
 

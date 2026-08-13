@@ -868,13 +868,113 @@ export interface TaskItem {
   id: string;
   title: string;
   reward: number; // in Rupees
+  rewardType?: 'fixed' | 'custom';
   coins: number; // in Coins
   verificationType: 'automatic' | 'manual' | 'none';
   icon: string; // lucide icon name (e.g. "CheckSquare", "Users", "Tv", "Share2")
   sortOrder: number;
   url?: string; // external link if any
+  externalDestinationUrl?: string; // External URL for task
+  taskImage?: string; // Image for task card
+  description?: string; // Short Description / Instructions
+  detailedInstructions?: string; // Detailed Step-by-Step Instructions
+  proofDemoImage?: string; // Proof Screenshot Demo Image
+  privateAdminGroupChatId?: string; // Private Telegram Admin Group Chat ID e.g. -100xxxxxxxxxx
+  allowResubmission?: boolean; // Allow Resubmission After Rejection: ON / OFF
+  maxResubmissions?: number; // Maximum resubmissions allowed (default 2)
+  maxSubmissionsPerUser?: number; // Maximum submissions per user (default 1)
+  deadlineEnabled?: boolean; // Deadline feature enabled
+  deadlineMinutes?: number; // Deadline duration in minutes
+  maxApprovedUsers?: number; // Maximum approved users limit (0 for unlimited)
+  approvedCount?: number; // Current approved user count
+  isFull?: boolean; // True if maxApprovedUsers limit reached
+  campaignId?: string; // Optional campaign ID
+  earningBotId?: string; // Earning Bot scope ID
   active: boolean;
   createdAt: string;
+}
+
+export interface TaskCampaign {
+  id: string;
+  earningBotId: string;
+  name: string;
+  description: string;
+  imageUrl?: string;
+  totalBudget: number;
+  rewardPerUser: number;
+  maxApprovedUsers: number;
+  startDate: string;
+  endDate: string;
+  status: 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'FULL' | 'EXPIRED' | 'COMPLETED';
+  createdAt: string;
+  spentBudget?: number;
+  approvedUsersCount?: number;
+  tasksCount?: number;
+  pendingReviewsCount?: number;
+}
+
+export interface TaskAttempt {
+  id: string; // `${earningBotId}_${telegramUserId}_${taskId}`
+  earningBotId: string;
+  taskId: string;
+  telegramUserId: string;
+  userId: string;
+  status: 'TASK_STARTED' | 'PROOF_PENDING' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'RESUBMISSION_AVAILABLE' | 'EXPIRED';
+  startedAt: string;
+  expiresAt?: string | null;
+  submissionId?: string | null;
+  version: number;
+}
+
+export interface ManualTaskSubmission {
+  id: string;
+  earningBotId: string;
+  taskId: string;
+  taskTitle: string;
+  campaignId?: string;
+  campaignName?: string;
+  reward: number;
+  coins?: number;
+  userId: string;
+  telegramUserId: string;
+  telegramUsername?: string;
+  userFullName?: string;
+  userAppUid?: string;
+  registrationMobile: string;
+  proofImageUrl: string;
+  status: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED';
+  submissionVersion?: number;
+  attemptId?: string;
+  submittedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  adminNote?: string;
+  rejectionReason?: string;
+  adminGroupMessageId?: number;
+  adminGroupChatId?: string;
+  suspiciousFlag?: 'NORMAL' | 'REVIEW' | 'SUSPICIOUS';
+  suspiciousReason?: string;
+  mobileUseCount?: number;
+  relatedSubmissionIds?: string[];
+}
+
+export interface TaskAnalytics {
+  taskId: string;
+  taskTitle: string;
+  earningBotId: string;
+  viewsCount: number;
+  startsCount: number;
+  submittedCount: number;
+  pendingCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  expiredCount: number;
+  resubmittedCount: number;
+  totalPaid: number;
+  remainingBudget?: number;
+  approvalRate: number;
+  rejectionRate: number;
+  conversionRate: number;
 }
 
 export interface TaskCompletionRecord {

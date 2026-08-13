@@ -21,7 +21,15 @@ import {
   Timer,
   Key,
   ArrowRight,
-  Bot
+  Bot,
+  Upload,
+  Image as ImageIcon,
+  FileText,
+  Phone,
+  Clock,
+  XCircle,
+  CheckCircle2,
+  X
 } from 'lucide-react';
 import { generateDeviceFingerprint } from '../utils/fingerprint';
 
@@ -133,6 +141,17 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   const [isSubmittingReg, setIsSubmittingReg] = useState<boolean>(false);
   const [regError, setRegError] = useState<string | null>(null);
   const [otpSuccessMsg, setOtpSuccessMsg] = useState<string | null>(null);
+
+  // Dynamic Tasks, Milestones & Manual Proof Submissions States
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [milestones, setMilestones] = useState<any[]>([]);
+  const [userManualSubmissions, setUserManualSubmissions] = useState<any[]>([]);
+  const [activeProofTask, setActiveProofTask] = useState<any | null>(null);
+  const [proofMobile, setProofMobile] = useState('');
+  const [proofImageBase64, setProofImageBase64] = useState('');
+  const [isSubmittingProof, setIsSubmittingProof] = useState(false);
+  const [proofError, setProofError] = useState<string | null>(null);
+  const [showDemoImageModal, setShowDemoImageModal] = useState(false);
 
   const generateDeviceFingerprint = async (): Promise<string> => {
     try {
@@ -793,9 +812,6 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     }
   };
 
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [milestones, setMilestones] = useState<any[]>([]);
-
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts((prev) => [...prev, { id, text, type }]);
@@ -1094,7 +1110,15 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
             verificationType: d.verificationType || 'none',
             icon: d.icon || 'CheckSquare',
             sortOrder: Number(d.sortOrder) || 0,
-            url: d.url || '',
+            url: d.url || d.externalDestinationUrl || '',
+            externalDestinationUrl: d.externalDestinationUrl || d.url || '',
+            taskImage: d.taskImage || '',
+            description: d.description || '',
+            proofDemoImage: d.proofDemoImage || '',
+            privateAdminGroupChatId: d.privateAdminGroupChatId || '',
+            allowResubmission: d.allowResubmission !== false,
+            maxSubmissionsPerUser: d.maxSubmissionsPerUser || 1,
+            earningBotId: d.earningBotId || '',
           });
         }
       });
@@ -1103,6 +1127,22 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
     }, (err) => {
       console.error('Error listening to tasks:', err);
     });
+
+    // 3.5. Listen to manual task proof submissions for current user
+    let unsubscribeManualSubs = () => {};
+    if (tgId) {
+      const subRef = collection(db, 'manualTaskSubmissions');
+      const qSub = query(subRef, where('telegramUserId', '==', String(tgId)));
+      unsubscribeManualSubs = onSnapshot(qSub, (snap) => {
+        const list: any[] = [];
+        snap.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...docSnap.data() });
+        });
+        setUserManualSubmissions(list);
+      }, (err) => {
+        console.error('Error listening to manual submissions:', err);
+      });
+    }
 
     // 4. Listen to withdrawals history in real-time
     const withdrawalsRef = collection(db, 'withdrawals');
@@ -1326,6 +1366,83 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       showToast(`🎉 Task verified! Credited ₹${task.reward} & ${task.coins} coins!`, 'success');
     } catch (err: any) {
       showToast(`❌ Verification failed: ${err.message}`, 'error');
+    }
+  };
+
+  const handleProofImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.type)) {
+      setProofError('Please select a valid JPG, PNG, or WEBP image file.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setProofError('Image file size must be less than 5MB.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (reader.result) {
+        setProofImageBase64(String(reader.result));
+        setProofError(null);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleManualProofSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeProofTask) return;
+
+    const cleanMobile = proofMobile.replace(/\D/g, '');
+    if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+      setProofError('Please enter a valid 10-digit Indian mobile number.');
+      return;
+    }
+
+    if (!proofImageBase64) {
+      setProofError('Please select or upload a clear screenshot proof image.');
+      return;
+    }
+
+    setIsSubmittingProof(true);
+    setProofError(null);
+
+    try {
+      const tgId = getTelegramUserId();
+      const tg = (window as any).Telegram?.WebApp;
+      const tgUser = tg?.initDataUnsafe?.user;
+
+      const res = await fetch('/api/tasks/submit-manual-proof', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: activeProofTask.id,
+          userId: user?.id || user?.uid || String(tgId),
+          earningBotId: earningBotId || activeProofTask.earningBotId || 'roy_share_wallet',
+          telegramUserId: String(tgId || user?.telegramId || ''),
+          telegramUsername: user?.username || tgUser?.username || '',
+          userFullName: user?.userName || tgUser?.first_name || 'User',
+          userAppUid: user?.appUid || user?.uid || String(tgId),
+          registrationMobile: cleanMobile,
+          proofImageUrl: proofImageBase64
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        showToast('🎉 Screenshot proof submitted successfully for admin review!', 'success');
+        setActiveProofTask(null);
+        setProofMobile('');
+        setProofImageBase64('');
+      } else {
+        setProofError(data.error || 'Failed to submit proof.');
+      }
+    } catch (err: any) {
+      setProofError(err.message || 'Error submitting screenshot proof.');
+    } finally {
+      setIsSubmittingProof(false);
     }
   };
 
@@ -2314,69 +2431,179 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
         {activeTab === 'tasks' && (
           <div className="space-y-6">
             <div className="p-4 rounded-2xl bg-slate-900/40 border border-slate-800/60">
-              <h2 className="text-xs font-black text-slate-300 uppercase tracking-widest mb-1">How it works</h2>
+              <h2 className="text-xs font-black text-slate-300 uppercase tracking-widest mb-1">Earn Cash & Coins</h2>
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Complete the easy tasks below to earn cash balances and coins. Coins can be used to participate in special Giveaway pools.
+                Complete tasks below to earn real cash and coins. For manual audit tasks, upload your registration screenshot proof for instant admin verification.
               </p>
             </div>
 
-            <div className="space-y-2.5">
-              {tasks.map((task) => {
-                const isCompleted = user?.completedTasks?.includes(task.id);
-                return (
-                  <div
-                    key={task.id}
-                    className={`p-4 rounded-2xl bg-slate-900/30 border border-slate-900 flex items-center justify-between ${
-                      isCompleted ? 'opacity-65' : ''
-                    }`}
-                  >
-                    <div>
-                      <h3 className="text-xs font-black text-white">{task.title}</h3>
-                      <div className="flex items-center gap-2 mt-1.5">
-                        <span className="text-[9px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/10 px-1.5 py-0.5 rounded font-bold">
-                          +₹{task.reward} Cash
-                        </span>
-                        <span className="text-[9px] bg-amber-500/15 text-amber-400 border border-amber-500/10 px-1.5 py-0.5 rounded font-bold">
-                          +{task.coins} Coins
-                        </span>
-                      </div>
-                    </div>
+            <div className="space-y-3">
+              {tasks.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-500 rounded-2xl bg-slate-900/20 border border-slate-800">
+                  No active tasks available right now. Check back soon!
+                </div>
+              ) : (
+                tasks.map((task) => {
+                  const isCompleted = user?.completedTasks?.includes(task.id);
+                  const isManual = task.verificationType === 'manual';
+                  const taskSubs = userManualSubmissions.filter((s) => s.taskId === task.id);
+                  const latestSub = taskSubs[0];
 
-                    <div>
-                      {isCompleted ? (
-                        <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
-                          <Check className="w-3 h-3" />
-                          <span>Completed</span>
-                        </span>
-                      ) : task.url ? (
-                        <div className="flex gap-2">
+                  const pendingSub = taskSubs.find((s) => s.status === 'PENDING_APPROVAL');
+                  const approvedSub = taskSubs.find((s) => s.status === 'APPROVED');
+                  const rejectedSub = taskSubs.find((s) => s.status === 'REJECTED');
+
+                  return (
+                    <div
+                      key={task.id}
+                      className={`p-4 rounded-2xl bg-slate-900/50 border border-slate-800/80 space-y-3 transition ${
+                        isCompleted || approvedSub ? 'opacity-75' : ''
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          {task.taskImage ? (
+                            <img src={task.taskImage} alt={task.title} className="w-11 h-11 rounded-xl object-cover border border-slate-800 shrink-0" />
+                          ) : (
+                            <div className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-amber-400 shrink-0">
+                              <CheckSquare className="w-5 h-5" />
+                            </div>
+                          )}
+                          <div className="space-y-1">
+                            <h3 className="text-xs font-black text-white">{task.title}</h3>
+                            {task.description && (
+                              <p className="text-[11px] text-slate-400 leading-normal line-clamp-2">{task.description}</p>
+                            )}
+                            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                              <span className="text-[9px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/10 px-1.5 py-0.5 rounded font-bold">
+                                +₹{task.reward} Cash
+                              </span>
+                              {task.coins > 0 && (
+                                <span className="text-[9px] bg-amber-500/15 text-amber-400 border border-amber-500/10 px-1.5 py-0.5 rounded font-bold">
+                                  +{task.coins} Coins
+                                </span>
+                              )}
+                              {isManual && (
+                                <span className="text-[9px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded font-bold flex items-center gap-0.5">
+                                  <ShieldCheck className="w-3 h-3" /> Manual Audit
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Manual Audit Status Info Box */}
+                      {isManual && latestSub && (
+                        <div className="p-3 rounded-xl bg-slate-950 border border-slate-850 space-y-1 text-xs">
+                          {latestSub.status === 'PENDING_APPROVAL' && (
+                            <div className="flex items-center gap-2 text-amber-400 font-bold">
+                              <Clock className="w-4 h-4 animate-spin" />
+                              <span>Proof Submitted (Pending Admin Review)</span>
+                            </div>
+                          )}
+                          {latestSub.status === 'APPROVED' && (
+                            <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                              <CheckCircle2 className="w-4 h-4" />
+                              <span>Approved & ₹{task.reward} Credited to Wallet!</span>
+                            </div>
+                          )}
+                          {latestSub.status === 'REJECTED' && (
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 text-rose-400 font-bold">
+                                <XCircle className="w-4 h-4" />
+                                <span>Proof Rejected</span>
+                              </div>
+                              {latestSub.rejectionReason && (
+                                <p className="text-[11px] text-slate-400">Reason: {latestSub.rejectionReason}</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Task Action Buttons */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/60">
+                        {task.externalDestinationUrl || task.url ? (
                           <a
-                            href={task.url}
+                            href={task.externalDestinationUrl || task.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                            className="text-[11px] font-bold text-sky-400 hover:underline flex items-center gap-1"
                           >
                             <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Visit Link</span>
                           </a>
-                          <button
-                            onClick={() => handleVerifyTask(task.id)}
-                            className="py-1.5 px-3 rounded-lg bg-amber-500 text-slate-950 font-black text-[10px] hover:bg-amber-400"
-                          >
-                            Verify
-                          </button>
+                        ) : (
+                          <span />
+                        )}
+
+                        <div>
+                          {isCompleted || approvedSub ? (
+                            <span className="text-xs text-emerald-400 font-black flex items-center gap-1 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-xl">
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Completed</span>
+                            </span>
+                          ) : isManual ? (
+                            pendingSub ? (
+                              <button
+                                disabled
+                                className="py-1.5 px-3 rounded-xl bg-slate-800 text-amber-400 font-bold text-xs cursor-not-allowed flex items-center gap-1"
+                              >
+                                <Clock className="w-3.5 h-3.5 animate-spin" />
+                                <span>Pending Audit</span>
+                              </button>
+                            ) : (
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    const tgId = getTelegramUserId();
+                                    const res = await fetch('/api/tasks/start-attempt', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({
+                                        taskId: task.id,
+                                        userId: user?.id || user?.uid || String(tgId),
+                                        telegramUserId: String(tgId || user?.telegramId || ''),
+                                        earningBotId: earningBotId || task.earningBotId || 'roy_share_wallet'
+                                      })
+                                    });
+                                    const data = await res.json();
+                                    if (data.success || data.attempt) {
+                                      setActiveProofTask(task);
+                                      setProofMobile('');
+                                      setProofImageBase64('');
+                                      setProofError(null);
+                                      if (task.externalDestinationUrl || task.url) {
+                                        window.open(task.externalDestinationUrl || task.url, '_blank');
+                                      }
+                                    } else {
+                                      showToast(data.error || 'Cannot start task attempt', 'error');
+                                    }
+                                  } catch (e: any) {
+                                    showToast(e.message || 'Error starting task attempt', 'error');
+                                  }
+                                }}
+                                className="py-2 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-lg shadow-amber-500/10 flex items-center gap-1.5 transition"
+                              >
+                                <Upload className="w-3.5 h-3.5" />
+                                <span>{rejectedSub && task.allowResubmission !== false ? 'Resubmit Proof' : 'TASK NOW / Submit Proof'}</span>
+                              </button>
+                            )
+                          ) : (
+                            <button
+                              onClick={() => handleVerifyTask(task.id)}
+                              className="py-2 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-lg transition"
+                            >
+                              Claim Reward
+                            </button>
+                          )}
                         </div>
-                      ) : (
-                        <button
-                          onClick={() => handleVerifyTask(task.id)}
-                          className="py-1.5 px-3 rounded-lg bg-amber-500 text-slate-950 font-black text-[10px] hover:bg-amber-400"
-                        >
-                          Claim
-                        </button>
-                      )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -3094,6 +3321,161 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           <span className="text-[9px] mt-1 font-bold">Profile</span>
         </button>
       </div>
+
+      {/* MANUAL TASK PROOF SUBMISSION MODAL */}
+      {activeProofTask && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-amber-400 font-black text-sm">
+                <Upload className="w-4 h-4" />
+                <span>Submit Task Proof Screenshot</span>
+              </div>
+              <button
+                onClick={() => setActiveProofTask(null)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-sm font-black text-white">{activeProofTask.title}</h3>
+              <p className="text-xs text-emerald-400 font-bold">Reward: ₹{activeProofTask.reward} Cash</p>
+              {activeProofTask.description && (
+                <p className="text-xs text-slate-300 pt-1 leading-relaxed">{activeProofTask.description}</p>
+              )}
+            </div>
+
+            {/* External URL Action */}
+            {(activeProofTask.externalDestinationUrl || activeProofTask.url) && (
+              <a
+                href={activeProofTask.externalDestinationUrl || activeProofTask.url}
+                target="_blank"
+                rel="noreferrer"
+                className="p-3 rounded-2xl bg-sky-500/10 border border-sky-500/20 text-sky-400 text-xs font-bold flex items-center justify-between hover:bg-sky-500/20 transition"
+              >
+                <span>1. Open Registration Link First</span>
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            )}
+
+            {/* Demo Image Example Link */}
+            {activeProofTask.proofDemoImage && (
+              <button
+                type="button"
+                onClick={() => setShowDemoImageModal(true)}
+                className="w-full p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-bold flex items-center justify-center gap-1.5 hover:bg-amber-500/20 transition"
+              >
+                <ImageIcon className="w-4 h-4" />
+                <span>📷 See Example Required Screenshot</span>
+              </button>
+            )}
+
+            <form onSubmit={handleManualProofSubmit} className="space-y-4 pt-2">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">Registration Mobile Number (10 digits) *</label>
+                <input
+                  type="tel"
+                  placeholder="e.g. 9876543210"
+                  maxLength={10}
+                  value={proofMobile}
+                  onChange={(e) => setProofMobile(e.target.value.replace(/\D/g, ''))}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">Upload Screenshot Proof *</label>
+                {proofImageBase64 ? (
+                  <div className="relative rounded-2xl border border-slate-700 overflow-hidden max-h-48 bg-slate-950 flex items-center justify-center">
+                    <img src={proofImageBase64} alt="Proof preview" className="max-h-48 object-contain" />
+                    <button
+                      type="button"
+                      onClick={() => setProofImageBase64('')}
+                      className="absolute top-2 right-2 bg-slate-950/80 text-rose-400 p-1.5 rounded-xl border border-slate-700 hover:bg-slate-900"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="w-full h-32 rounded-2xl border-2 border-dashed border-slate-700 bg-slate-950/80 hover:border-amber-500 flex flex-col items-center justify-center cursor-pointer p-4 transition text-center">
+                    <Upload className="w-6 h-6 text-slate-400 mb-1" />
+                    <span className="text-xs font-bold text-slate-300">Tap to Select Screenshot Proof</span>
+                    <span className="text-[10px] text-slate-500 mt-0.5">JPG, PNG, WEBP (Max 5MB)</span>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/jpg,image/png,image/webp"
+                      onChange={handleProofImageSelect}
+                      className="hidden"
+                    />
+                  </label>
+                )}
+              </div>
+
+              {proofError && (
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-bold">
+                  {proofError}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setActiveProofTask(null)}
+                  className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold hover:bg-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingProof}
+                  className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-lg flex items-center gap-1.5"
+                >
+                  {isSubmittingProof ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Submitting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Submit Proof for Audit</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* PROOF DEMO EXAMPLE IMAGE MODAL */}
+      {showDemoImageModal && activeProofTask?.proofDemoImage && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-5 space-y-3 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span className="text-xs font-black text-amber-400">Example Screenshot Proof Required</span>
+              <button
+                onClick={() => setShowDemoImageModal(false)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 flex items-center justify-center p-2">
+              <img src={activeProofTask.proofDemoImage} alt="Demo screenshot" className="max-h-[65vh] object-contain rounded-xl" />
+            </div>
+            <button
+              onClick={() => setShowDemoImageModal(false)}
+              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
+            >
+              Close Example
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
