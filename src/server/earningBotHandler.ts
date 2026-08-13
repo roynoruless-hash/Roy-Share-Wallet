@@ -2,6 +2,7 @@ import { collection, query, where, getDocs, addDoc, doc, getDoc, runTransaction,
 import { db } from '../services/firebase';
 import { recordWalletTransaction } from './transactionService';
 import { sendTelegramApi } from './botHandler';
+import { isRoyShareWalletUser } from '../utils/userScope';
 
 // In-memory chat/session steps for users during withdrawal flow
 // Keys: `${botId}_${chatId}`
@@ -1114,6 +1115,112 @@ async function handleConfirmWithdrawal(bot: any, userId: string) {
 }
 
 /**
+ * Resolve exact Roy Share Wallet user account for a task submission
+ * Uses strict hierarchy:
+ * 1. Primary: accountScope == "ROY_SHARE_WALLET" AND (appUid == sub.userAppUid/uid OR docId == sub.userAppUid/uid)
+ * 2. Fallback: accountScope == "ROY_SHARE_WALLET" AND (telegramId == sub.telegramUserId OR docId == sub.telegramUserId)
+ * 3. Final Fallback: accountScope == "ROY_SHARE_WALLET" AND (mobile == sub.registrationMobile)
+ */
+export async function resolveRoyShareWalletAccountForSubmission(sub: any): Promise<{
+  userDocRef: any;
+  userSnap: any;
+  userDocId: string | null;
+  userData: any | null;
+  lookupAttempted: string[];
+}> {
+  const lookupAttempted: string[] = [];
+
+  const submissionUid = String(sub.userAppUid || sub.uid || sub.userUid || sub.userId || '').trim();
+  const submissionTgId = String(sub.telegramUserId || sub.userId || '').trim();
+  const rawMobile = String(sub.registrationMobile || sub.mobile || '').replace(/\D/g, '').trim();
+
+  const usersRef = collection(db, 'users');
+
+  const checkIsRoyUser = (docId: string, data: any) => {
+    if (!data) return false;
+    // Exclude Earning Bot or non-Roy accounts
+    if (data.accountScope === 'EARNING_BOT' || (data.earningBotId && data.earningBotId !== 'ROY_SHARE_WALLET' && data.earningBotId !== 'roy_share_wallet')) {
+      return false;
+    }
+    return isRoyShareWalletUser(docId, data);
+  };
+
+  // 1. PRIMARY LOOKUP: accountScope == "ROY_SHARE_WALLET" AND uid == submission.uid
+  if (submissionUid) {
+    lookupAttempted.push(`Primary: accountScope == "ROY_SHARE_WALLET" AND uid == "${submissionUid}"`);
+
+    // Check appUid field
+    const qAppUid = query(usersRef, where('appUid', '==', submissionUid));
+    const snapAppUid = await getDocs(qAppUid);
+    for (const d of snapAppUid.docs) {
+      if (checkIsRoyUser(d.id, d.data())) {
+        return { userDocRef: d.ref, userSnap: d, userDocId: d.id, userData: d.data(), lookupAttempted };
+      }
+    }
+
+    // Check uid field
+    const qUid = query(usersRef, where('uid', '==', submissionUid));
+    const snapUid = await getDocs(qUid);
+    for (const d of snapUid.docs) {
+      if (checkIsRoyUser(d.id, d.data())) {
+        return { userDocRef: d.ref, userSnap: d, userDocId: d.id, userData: d.data(), lookupAttempted };
+      }
+    }
+
+    // Check direct document ID = submissionUid
+    const directRef = doc(db, 'users', submissionUid);
+    const directSnap = await getDoc(directRef);
+    if (directSnap.exists() && checkIsRoyUser(directSnap.id, directSnap.data())) {
+      return { userDocRef: directRef, userSnap: directSnap, userDocId: directSnap.id, userData: directSnap.data(), lookupAttempted };
+    }
+  }
+
+  // 2. FALLBACK LOOKUP: accountScope == "ROY_SHARE_WALLET" AND telegramUserId == submission.telegramUserId
+  if (submissionTgId) {
+    lookupAttempted.push(`Fallback: accountScope == "ROY_SHARE_WALLET" AND telegramUserId == "${submissionTgId}"`);
+
+    // Check direct document ID = submissionTgId
+    const directTgRef = doc(db, 'users', submissionTgId);
+    const directTgSnap = await getDoc(directTgRef);
+    if (directTgSnap.exists() && checkIsRoyUser(directTgSnap.id, directTgSnap.data())) {
+      return { userDocRef: directTgRef, userSnap: directTgSnap, userDocId: directTgSnap.id, userData: directTgSnap.data(), lookupAttempted };
+    }
+
+    // Check telegramId field
+    const qTg = query(usersRef, where('telegramId', '==', submissionTgId));
+    const snapTg = await getDocs(qTg);
+    for (const d of snapTg.docs) {
+      if (checkIsRoyUser(d.id, d.data())) {
+        return { userDocRef: d.ref, userSnap: d, userDocId: d.id, userData: d.data(), lookupAttempted };
+      }
+    }
+  }
+
+  // 3. FINAL FALLBACK LOOKUP: accountScope == "ROY_SHARE_WALLET" AND mobile == submission.registrationMobile
+  if (rawMobile) {
+    lookupAttempted.push(`Final Fallback: accountScope == "ROY_SHARE_WALLET" AND mobile == "${rawMobile}"`);
+
+    const qMob = query(usersRef, where('mobile', '==', rawMobile));
+    const snapMob = await getDocs(qMob);
+    for (const d of snapMob.docs) {
+      if (checkIsRoyUser(d.id, d.data())) {
+        return { userDocRef: d.ref, userSnap: d, userDocId: d.id, userData: d.data(), lookupAttempted };
+      }
+    }
+
+    const qRegMob = query(usersRef, where('registrationMobile', '==', rawMobile));
+    const snapRegMob = await getDocs(qRegMob);
+    for (const d of snapRegMob.docs) {
+      if (checkIsRoyUser(d.id, d.data())) {
+        return { userDocRef: d.ref, userSnap: d, userDocId: d.id, userData: d.data(), lookupAttempted };
+      }
+    }
+  }
+
+  return { userDocRef: null, userSnap: null, userDocId: null, userData: null, lookupAttempted };
+}
+
+/**
  * Handle Manual Audit Task Approval
  */
 export async function handleManualTaskApproval(
@@ -1133,46 +1240,68 @@ export async function handleManualTaskApproval(
     if (sub.status === 'APPROVED') {
       return { success: false, error: 'Submission has already been approved and rewarded' };
     }
-    if (sub.status !== 'PENDING_APPROVAL') {
+    if (sub.status !== 'PENDING_APPROVAL' && sub.status !== 'PENDING') {
       return { success: false, error: `Submission cannot be approved (current status: ${sub.status})` };
     }
 
-    const botId = sub.earningBotId || bot?.botId || '';
-    const tgUserId = String(sub.telegramUserId || '');
-    const userDocId = `${botId}_${tgUserId}`;
-    const userRef = doc(db, 'users', userDocId);
+    // Resolve exact Roy Share Wallet user account using submission identity
+    const accountResult = await resolveRoyShareWalletAccountForSubmission(sub);
+
+    if (!accountResult.userDocRef || !accountResult.userDocId) {
+      console.warn('[ManualTaskApproval] User account resolution failed. Attempted lookups:', accountResult.lookupAttempted, 'for submissionId:', submissionId);
+
+      const subUid = sub.userAppUid || sub.uid || sub.userUid || sub.userId || 'N/A';
+      const subTgId = sub.telegramUserId || sub.userId || 'N/A';
+
+      const diagnosticError = `Roy Share Wallet account could not be resolved for this submission.\nUID: ${subUid}\nTelegram ID: ${subTgId}\nScope: ROY_SHARE_WALLET`;
+
+      return {
+        success: false,
+        error: diagnosticError
+      };
+    }
+
+    const resolvedUserRef = accountResult.userDocRef;
+    const resolvedUserDocId = accountResult.userDocId;
+
     const taskRef = doc(db, 'tasks', sub.taskId);
-    const attemptId = `${botId}_${tgUserId}_${sub.taskId}`;
+    const attemptId = sub.attemptId || `${resolvedUserDocId}_${sub.taskId}`;
     const attemptRef = doc(db, 'taskAttempts', attemptId);
-    const idempotentTxnId = `TASK_REWARD_${botId}_${submissionId}`;
+    const idempotentTxnId = `TASK_REWARD_${submissionId}`;
     const idempotentTxnRef = doc(db, 'transactions', idempotentTxnId);
 
     let newBalance = 0;
 
     await runTransaction(db, async (transaction) => {
-      // Check idempotent transaction first
+      // 1. Idempotency Check
       const existingTxnSnap = await transaction.get(idempotentTxnRef);
       if (existingTxnSnap.exists()) {
         throw new Error('Reward transaction has already been credited.');
       }
 
+      // 2. Fresh Submission Check
       const freshSubSnap = await transaction.get(subRef);
       if (!freshSubSnap.exists()) {
         throw new Error('Submission not found');
       }
       const freshSub = freshSubSnap.data();
-      if (freshSub.status !== 'PENDING_APPROVAL') {
+      if (freshSub.status !== 'PENDING_APPROVAL' && freshSub.status !== 'PENDING') {
         throw new Error(`Submission is already ${freshSub.status}`);
       }
 
-      const userSnap = await transaction.get(userRef);
+      // 3. User Account Check
+      const userSnap = await transaction.get(resolvedUserRef);
       if (!userSnap.exists()) {
-        throw new Error('User account not found');
+        throw new Error('Roy Share Wallet user account no longer exists');
+      }
+
+      const userData = userSnap.data() as any || {};
+      if (!isRoyShareWalletUser(resolvedUserDocId, userData)) {
+        throw new Error('Resolved account does not belong to ROY_SHARE_WALLET');
       }
 
       const taskSnap = await transaction.get(taskRef);
 
-      const userData = userSnap.data();
       const currentWallet = Number(userData.walletBalance || userData.balance || 0);
       const currentCoins = Number(userData.coinsBalance || 0);
       const rewardAmt = Number(freshSub.reward || 0);
@@ -1184,48 +1313,62 @@ export async function handleManualTaskApproval(
       }
 
       newBalance = currentWallet + rewardAmt;
+      const nowIso = new Date().toISOString();
 
-      // 1. Update Submission status
+      // Update Submission status
       transaction.update(subRef, {
         status: 'APPROVED',
-        reviewedAt: new Date().toISOString(),
+        approvedAt: nowIso,
+        approvedBy: adminUsername,
+        reviewedAt: nowIso,
         reviewedBy: adminUsername,
         adminNote: adminNote || '',
+        userDocId: resolvedUserDocId,
+        accountScope: 'ROY_SHARE_WALLET'
       });
 
-      // 2. Update User Wallet
-      transaction.update(userRef, {
+      // Update User Wallet & Tasks
+      transaction.update(resolvedUserRef, {
         walletBalance: newBalance,
+        balance: newBalance,
         coinsBalance: currentCoins + coinsAmt,
-        completedTasks: [...completedTasks, freshSub.taskId]
+        completedTasks: [...completedTasks, freshSub.taskId],
+        accountScope: 'ROY_SHARE_WALLET',
+        updatedAt: nowIso
       });
 
-      // 3. Create Idempotent Transaction Entry
+      // Create Idempotent Wallet Transaction Entry
       transaction.set(idempotentTxnRef, {
+        id: idempotentTxnId,
         transactionId: idempotentTxnId,
-        uid: userDocId,
-        telegramId: tgUserId,
-        userName: userData.userName || userData.firstName || sub.userFullName || `User #${tgUserId}`,
+        uid: resolvedUserDocId,
+        userAppUid: freshSub.userAppUid || freshSub.uid || userData.appUid || userData.uid || '',
+        telegramId: freshSub.telegramUserId || userData.telegramId || '',
+        userName: userData.userName || userData.firstName || freshSub.userFullName || `User #${freshSub.telegramUserId}`,
         amount: rewardAmt,
         type: 'TASK_REWARD',
+        taskId: freshSub.taskId,
+        submissionId: submissionId,
         status: 'completed',
-        description: `Task: ${freshSub.taskTitle}`,
-        createdAt: new Date().toISOString()
+        accountScope: 'ROY_SHARE_WALLET',
+        description: `Task Reward: ${freshSub.taskTitle}`,
+        createdAt: nowIso
       });
 
-      // 4. Update Task Attempt
+      // Update Task Attempt
       transaction.set(attemptRef, {
         id: attemptId,
-        earningBotId: botId,
-        taskId: sub.taskId,
-        telegramUserId: tgUserId,
-        userId: sub.userId || userDocId,
+        earningBotId: 'roy_share_wallet',
+        accountScope: 'ROY_SHARE_WALLET',
+        taskId: freshSub.taskId,
+        telegramUserId: freshSub.telegramUserId || userData.telegramId || '',
+        userId: resolvedUserDocId,
         status: 'APPROVED',
         submissionId,
-        updatedAt: new Date().toISOString()
+        updatedAt: nowIso
       }, { merge: true });
 
-      // 5. Update Task Capacity / Approved Count
+      // Update Task Capacity / Approved Count
       if (taskSnap.exists()) {
         const taskData = taskSnap.data();
         const currentApproved = Number(taskData.approvedCount || 0) + 1;
@@ -1237,7 +1380,7 @@ export async function handleManualTaskApproval(
           isFull: isFull
         });
 
-        // 6. Update Campaign if linked
+        // Update Campaign if linked
         if (taskData.campaignId) {
           const campaignRef = doc(db, 'taskCampaigns', taskData.campaignId);
           const campaignSnap = await transaction.get(campaignRef);
@@ -1264,9 +1407,10 @@ export async function handleManualTaskApproval(
     });
 
     // Send Telegram Notification to user
-    if (bot && bot.token && tgUserId) {
+    const userTgId = sub.telegramUserId || accountResult.userData?.telegramId;
+    if (bot && bot.token && userTgId) {
       await sendTelegramApi(bot.token, 'sendMessage', {
-        chat_id: tgUserId,
+        chat_id: String(userTgId),
         text: `🎉 <b>TASK APPROVED!</b>\n\n` +
           `Task: <b>${sub.taskTitle}</b>\n` +
           `💰 Reward: <b>₹${sub.reward}</b>\n\n` +
@@ -1286,7 +1430,7 @@ export async function handleManualTaskApproval(
         `👤 Telegram Username: @${sub.telegramUsername || 'N/A'}\n` +
         `🆔 Telegram ID: ${sub.telegramUserId}\n` +
         `👤 Full Name: ${sub.userFullName || 'N/A'}\n` +
-        `🆔 User UID: ${sub.userAppUid || sub.userId}\n\n` +
+        `🆔 User UID: ${sub.userAppUid || sub.uid || sub.userId}\n\n` +
         `📌 <b>Status: APPROVED ✅ by ${adminUsername}</b>` +
         (adminNote ? `\n📝 <b>Note:</b> ${adminNote}` : '');
 
@@ -1336,13 +1480,14 @@ export async function handleManualTaskRejection(
     }
 
     const sub = subSnap.data();
-    if (sub.status !== 'PENDING_APPROVAL') {
+    if (sub.status !== 'PENDING_APPROVAL' && sub.status !== 'PENDING') {
       return { success: false, error: `Submission cannot be rejected (status: ${sub.status})` };
     }
 
-    const botId = sub.earningBotId || bot?.botId || '';
-    const tgUserId = String(sub.telegramUserId || '');
+    const botId = sub.earningBotId || bot?.botId || 'roy_share_wallet';
+    const tgUserId = String(sub.telegramUserId || sub.userId || '');
     const rejectionReason = reason || 'Screenshot does not match the required proof.';
+    const nowIso = new Date().toISOString();
 
     // Check task settings for resubmission
     const taskRef = doc(db, 'tasks', sub.taskId);
@@ -1359,25 +1504,28 @@ export async function handleManualTaskRejection(
       status: 'REJECTED',
       rejectionReason,
       adminNote: adminNote || '',
-      reviewedAt: new Date().toISOString(),
-      reviewedBy: adminUsername
+      reviewedAt: nowIso,
+      reviewedBy: adminUsername,
+      rejectedAt: nowIso,
+      rejectedBy: adminUsername
     });
 
     // Update attempt status
-    const attemptId = `${botId}_${tgUserId}_${sub.taskId}`;
+    const attemptId = sub.attemptId || `${tgUserId}_${sub.taskId}`;
     const attemptRef = doc(db, 'taskAttempts', attemptId);
     await setDoc(attemptRef, {
       id: attemptId,
       earningBotId: botId,
+      accountScope: 'ROY_SHARE_WALLET',
       taskId: sub.taskId,
       telegramUserId: tgUserId,
-      userId: sub.userId,
+      userId: sub.userId || tgUserId,
       status: canResubmit ? 'RESUBMISSION_AVAILABLE' : 'REJECTED',
       submissionId,
-      updatedAt: new Date().toISOString()
+      updatedAt: nowIso
     }, { merge: true });
 
-    // Send Telegram Notification to user
+    // Send Telegram Notification to user using submission identity directly
     if (bot && bot.token && tgUserId) {
       const resubmitNotice = canResubmit ? `\n\n🔄 <b>Resubmission Available:</b> You can upload a new proof screenshot from the app.` : '';
       await sendTelegramApi(bot.token, 'sendMessage', {
@@ -1401,7 +1549,7 @@ export async function handleManualTaskRejection(
         `👤 Telegram Username: @${sub.telegramUsername || 'N/A'}\n` +
         `🆔 Telegram ID: ${sub.telegramUserId}\n` +
         `👤 Full Name: ${sub.userFullName || 'N/A'}\n` +
-        `🆔 User UID: ${sub.userAppUid || sub.userId}\n\n` +
+        `🆔 User UID: ${sub.userAppUid || sub.uid || sub.userId}\n\n` +
         `📌 <b>Status: REJECTED ❌ by ${adminUsername}</b>\n` +
         `<b>Reason:</b> ${rejectionReason}` +
         (adminNote ? `\n📝 <b>Note:</b> ${adminNote}` : '');

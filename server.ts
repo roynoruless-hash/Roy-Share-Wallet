@@ -615,16 +615,20 @@ async function startServer() {
         const sysReviewSnap = await getDoc(doc(db, 'settings', 'telegramReview'));
         if (sysReviewSnap.exists()) {
           const srd = sysReviewSnap.data();
-          if (srd.privateReviewGroupChatId) {
-            return res.json({
-              success: true,
-              config: {
-                earningBotId: 'roy_share_wallet',
-                privateReviewGroupChatId: srd.privateReviewGroupChatId,
-                telegramAdminChatId: srd.telegramAdminChatId || ''
-              }
-            });
-          }
+          return res.json({
+            success: true,
+            config: {
+              earningBotId: 'roy_share_wallet',
+              privateReviewGroupChatId: srd.privateReviewGroupChatId || '',
+              telegramAdminChatId: srd.telegramAdminChatId || '',
+              lastTestStatus: srd.lastTestStatus || 'NOT TESTED',
+              lastTestAt: srd.lastTestAt || null,
+              lastTestError: srd.lastTestError || null,
+              lastNotificationAt: srd.lastNotificationAt || null,
+              lastNotificationStatus: srd.lastNotificationStatus || null,
+              lastNotificationError: srd.lastNotificationError || null
+            }
+          });
         }
       }
 
@@ -648,9 +652,127 @@ async function startServer() {
         });
       }
 
-      return res.json({ success: true, config: null });
+      return res.json({
+        success: true,
+        config: {
+          earningBotId: eBotId,
+          privateReviewGroupChatId: '',
+          telegramAdminChatId: ''
+        }
+      });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message || 'Error fetching telegram config' });
+      return res.status(500).json({ success: false, error: err.message || 'Error fetching telegram review config' });
+    }
+  });
+
+  // 3.1.3 SEND TEST MESSAGE TO PRIVATE REVIEW GROUP
+  app.post('/api/admin/send-test-review-message', async (req, res) => {
+    try {
+      const { privateReviewGroupChatId, botId } = req.body;
+      const eBotId = String(botId || 'roy_share_wallet').trim();
+      let reviewGroupId = String(privateReviewGroupChatId || '').trim();
+
+      if (!reviewGroupId) {
+        if (eBotId === 'roy_share_wallet') {
+          const sysReviewSnap = await getDoc(doc(db, 'settings', 'telegramReview'));
+          if (sysReviewSnap.exists()) {
+            reviewGroupId = sysReviewSnap.data().privateReviewGroupChatId || '';
+          }
+        }
+        if (!reviewGroupId) {
+          const configSnap = await getDoc(doc(db, 'earningBotReviewConfigs', eBotId));
+          if (configSnap.exists()) {
+            reviewGroupId = configSnap.data().privateReviewGroupChatId || '';
+          }
+        }
+      }
+
+      if (!reviewGroupId) {
+        return res.status(400).json({ success: false, error: 'Private Review Group Chat ID is required.' });
+      }
+
+      let token = '';
+      if (eBotId === 'roy_share_wallet' || !eBotId) {
+        const sysConfig = await getDecryptedConfig();
+        token = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+      } else {
+        const botSnap = await getDoc(doc(db, 'earningBots', eBotId));
+        if (botSnap.exists() && botSnap.data().token) {
+          token = botSnap.data().token;
+        }
+        if (!token) {
+          const sysConfig = await getDecryptedConfig();
+          token = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+        }
+      }
+
+      if (!token) {
+        return res.status(400).json({ success: false, error: 'Roy Share Wallet Bot token not found in system settings.' });
+      }
+
+      const testCaption =
+        `🧪 <b>ROY SHARE WALLET TEST NOTIFICATION</b>\n\n` +
+        `This is a test notification to verify that the <b>Roy Share Wallet Bot</b> can send notifications with photos and inline action buttons to this Private Review Group.\n\n` +
+        `✅ <b>Connection Status:</b> ACTIVE\n` +
+        `🕐 <b>Time:</b> ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
+
+      const testKeyboard = [
+        [{ text: '✅ TEST BUTTON (ROY SHARE WALLET)', callback_data: 'test_review_btn' }]
+      ];
+
+      const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: reviewGroupId,
+          text: testCaption,
+          parse_mode: 'HTML',
+          reply_markup: JSON.stringify({ inline_keyboard: testKeyboard })
+        })
+      });
+
+      const data = await tgRes.json();
+      const nowIso = new Date().toISOString();
+
+      if (data.ok) {
+        await setDoc(doc(db, 'settings', 'telegramReview'), {
+          lastTestStatus: 'SUCCESS',
+          lastTestError: null,
+          lastTestAt: nowIso
+        }, { merge: true });
+
+        return res.json({
+          success: true,
+          message: '✅ Test message sent successfully to Private Review Group!',
+          lastTestStatus: 'SUCCESS',
+          lastTestAt: nowIso
+        });
+      } else {
+        const rawError = data.description || 'Failed to send test message';
+        let mappedError = rawError;
+        if (rawError.includes('chat not found')) {
+          mappedError = `Bad Request: chat not found - Verify that privateReviewGroupChatId (${reviewGroupId}) is accessible by the Roy Share Wallet bot.`;
+        } else if (rawError.includes('is not a member') || rawError.includes('not in the chat')) {
+          mappedError = `Roy Share Wallet Bot is not a member/admin of the configured private review group.`;
+        } else if (rawError.includes('was kicked') || rawError.includes('bot was blocked')) {
+          mappedError = `Roy Share Wallet Bot was removed from the private review group.`;
+        }
+
+        await setDoc(doc(db, 'settings', 'telegramReview'), {
+          lastTestStatus: 'FAILED',
+          lastTestError: mappedError,
+          lastTestAt: nowIso
+        }, { merge: true });
+
+        return res.status(400).json({
+          success: false,
+          error: mappedError,
+          lastTestStatus: 'FAILED',
+          lastTestAt: nowIso
+        });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || 'Error sending test message' });
     }
   });
 
@@ -764,6 +886,167 @@ async function startServer() {
     }
   });
 
+  // 3.2.1 DEDICATED FUNCTION TO SEND TASK PROOF TO TELEGRAM PRIVATE REVIEW GROUP
+  async function sendTaskProofToPrivateReviewGroup(submission: any): Promise<{
+    success: boolean;
+    messageId?: number;
+    error?: string;
+  }> {
+    try {
+      const eBotId = submission.earningBotId || 'roy_share_wallet';
+      const taskId = submission.taskId;
+
+      // 1. Get Private Review Group Chat ID
+      let privateReviewGroupChatId = submission.adminGroupChatId || '';
+      if (!privateReviewGroupChatId && taskId) {
+        const taskDoc = await getDoc(doc(db, 'tasks', taskId));
+        if (taskDoc.exists()) {
+          privateReviewGroupChatId = taskDoc.data().privateAdminGroupChatId || '';
+        }
+      }
+
+      if (!privateReviewGroupChatId) {
+        if (eBotId === 'roy_share_wallet' || !eBotId) {
+          const sysReviewSnap = await getDoc(doc(db, 'settings', 'telegramReview'));
+          if (sysReviewSnap.exists()) {
+            privateReviewGroupChatId = sysReviewSnap.data().privateReviewGroupChatId || '';
+          }
+        }
+        if (!privateReviewGroupChatId) {
+          const configSnap = await getDoc(doc(db, 'earningBotReviewConfigs', eBotId));
+          if (configSnap.exists()) {
+            privateReviewGroupChatId = configSnap.data().privateReviewGroupChatId || '';
+          }
+        }
+      }
+
+      if (!privateReviewGroupChatId) {
+        return {
+          success: false,
+          error: 'Private Review Group Chat ID is not configured.'
+        };
+      }
+
+      // 2. Read Roy Share Wallet Bot Token
+      let botToken = '';
+      if (eBotId === 'roy_share_wallet' || !eBotId) {
+        const sysConfig = await getDecryptedConfig();
+        botToken = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+      } else {
+        const botSnap = await getDoc(doc(db, 'earningBots', eBotId));
+        if (botSnap.exists() && botSnap.data().token) {
+          botToken = botSnap.data().token;
+        }
+        if (!botToken) {
+          const sysConfig = await getDecryptedConfig();
+          botToken = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+        }
+      }
+
+      if (!botToken) {
+        return {
+          success: false,
+          error: 'Roy Share Wallet Bot Token is missing in system configuration.'
+        };
+      }
+
+      // 3. Format Caption exactly as requested
+      const tgUserIdStr = String(submission.telegramUserId || submission.userId || '');
+      const cleanMobile = submission.registrationMobile || 'N/A';
+      const userFullName = submission.userFullName || 'User';
+      const rawUsername = submission.telegramUsername ? String(submission.telegramUsername).replace(/^@/, '') : '';
+      const telegramUsername = rawUsername ? `@${rawUsername}` : '@N/A';
+      const userAppUid = submission.userAppUid || submission.userId || 'N/A';
+      const reward = submission.reward || 0;
+      const taskTitle = submission.taskTitle || 'Task';
+      const submissionId = submission.id;
+
+      const captionText =
+        `📥 <b>NEW TASK SUBMISSION</b>\n\n` +
+        `📋 <b>Task:</b> ${taskTitle}\n` +
+        `💰 <b>Reward:</b> ₹${reward}\n\n` +
+        `👤 <b>Name:</b> ${userFullName}\n` +
+        `📱 <b>Mobile:</b> <code>${cleanMobile}</code>\n` +
+        `🔹 <b>Username:</b> ${telegramUsername}\n` +
+        `🆔 <b>Telegram ID:</b> <code>${tgUserIdStr}</code>\n` +
+        `🆔 <b>UID:</b> <code>${userAppUid}</code>\n\n` +
+        `📸 <b>Proof Screenshot</b>\n\n` +
+        `⏳ <b>Status:</b> PENDING REVIEW`;
+
+      const inlineKeyboard = [
+        [
+          { text: '✅ APPROVE', callback_data: `approve_task:${submissionId}` },
+          { text: '❌ REJECT', callback_data: `reject_task:${submissionId}` }
+        ]
+      ];
+
+      // 4. Send Photo via Telegram sendPhoto
+      const photoUrl = submission.proofImageUrl;
+      let messageId: number | undefined;
+
+      const photoRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: String(privateReviewGroupChatId).trim(),
+          photo: photoUrl,
+          caption: captionText,
+          parse_mode: 'HTML',
+          reply_markup: JSON.stringify({ inline_keyboard: inlineKeyboard })
+        })
+      });
+
+      const photoData = await photoRes.json();
+
+      if (photoData.ok) {
+        messageId = photoData.result?.message_id;
+      } else {
+        const rawError = photoData.description || 'Failed to send photo via Telegram';
+        let mappedError = rawError;
+
+        if (rawError.includes('chat not found')) {
+          mappedError = `Bad Request: chat not found - Please verify that privateReviewGroupChatId (${privateReviewGroupChatId}) is accessible by the Roy Share Wallet bot.`;
+        } else if (rawError.includes('is not a member') || rawError.includes('not in the chat')) {
+          mappedError = `Roy Share Wallet Bot is not a member/admin of the configured private review group.`;
+        } else if (rawError.includes('was kicked') || rawError.includes('bot was blocked')) {
+          mappedError = `Roy Share Wallet Bot was removed from the private review group.`;
+        }
+
+        // Try fallback sendMessage if photo upload had format issues
+        const msgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: String(privateReviewGroupChatId).trim(),
+            text: `${captionText}\n\n📸 <b>Proof Screenshot:</b> ${photoUrl.slice(0, 300)}`,
+            parse_mode: 'HTML',
+            reply_markup: JSON.stringify({ inline_keyboard: inlineKeyboard })
+          })
+        });
+
+        const msgData = await msgRes.json();
+        if (msgData.ok) {
+          messageId = msgData.result?.message_id;
+        } else {
+          const rawMsgErr = msgData.description || rawError;
+          let finalError = rawMsgErr;
+          if (rawMsgErr.includes('chat not found')) {
+            finalError = `Bad Request: chat not found - Please verify that privateReviewGroupChatId (${privateReviewGroupChatId}) is accessible by the Roy Share Wallet bot.`;
+          } else if (rawMsgErr.includes('is not a member') || rawMsgErr.includes('not in the chat')) {
+            finalError = `Roy Share Wallet Bot is not a member/admin of the configured private review group.`;
+          } else if (rawMsgErr.includes('was kicked') || rawMsgErr.includes('bot was blocked')) {
+            finalError = `Roy Share Wallet Bot was removed from the private review group.`;
+          }
+          return { success: false, error: finalError };
+        }
+      }
+
+      return { success: true, messageId };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Error executing sendTaskProofToPrivateReviewGroup' };
+    }
+  }
+
   // 3.2. SUBMIT MANUAL TASK PROOF (Mini App -> Admin Group & DB)
   app.post('/api/tasks/submit-manual-proof', async (req, res) => {
     try {
@@ -806,11 +1089,19 @@ async function startServer() {
       let telegramAdminChatId = task.telegramAdminChatId;
 
       if (!adminGroupChatId || !telegramAdminChatId) {
-        const configSnap = await getDoc(doc(db, 'earningBotReviewConfigs', eBotId));
-        if (configSnap.exists()) {
-          const cfg = configSnap.data();
-          if (!adminGroupChatId) adminGroupChatId = cfg.privateReviewGroupChatId;
-          if (!telegramAdminChatId) telegramAdminChatId = cfg.telegramAdminChatId;
+        const sysReviewSnap = await getDoc(doc(db, 'settings', 'telegramReview'));
+        if (sysReviewSnap.exists()) {
+          const srd = sysReviewSnap.data();
+          if (!adminGroupChatId) adminGroupChatId = srd.privateReviewGroupChatId;
+          if (!telegramAdminChatId) telegramAdminChatId = srd.telegramAdminChatId;
+        }
+        if (!adminGroupChatId || !telegramAdminChatId) {
+          const configSnap = await getDoc(doc(db, 'earningBotReviewConfigs', eBotId));
+          if (configSnap.exists()) {
+            const cfg = configSnap.data();
+            if (!adminGroupChatId) adminGroupChatId = cfg.privateReviewGroupChatId;
+            if (!telegramAdminChatId) telegramAdminChatId = cfg.telegramAdminChatId;
+          }
         }
       }
 
@@ -836,7 +1127,7 @@ async function startServer() {
         }
       }
 
-      // Registration Mobile Duplicate Check within the same Earning Bot
+      // Registration Mobile Duplicate Check
       const mobQuery = query(
         collection(db, 'manualTaskSubmissions'),
         where('earningBotId', '==', eBotId),
@@ -906,16 +1197,7 @@ async function startServer() {
         suspiciousReason = `User has ${rejectedSubsCount} previously rejected attempts for this task.`;
       }
 
-      let botToken = process.env.TELEGRAM_BOT_TOKEN || '';
-      if (eBotId && eBotId !== 'roy_share_wallet') {
-        const botSnap = await getDoc(doc(db, 'earningBots', eBotId));
-        if (botSnap.exists() && botSnap.data().token) {
-          botToken = botSnap.data().token;
-        }
-      }
-
       const submissionId = `SUB_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-      const formattedDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
 
       // Get Campaign Name if available
       let campaignName = '';
@@ -926,82 +1208,7 @@ async function startServer() {
         }
       }
 
-      const flagBadge = suspiciousFlag === 'SUSPICIOUS' ? '\n\n⚠️ <b>SUSPICIOUS FLAG DETECTED!</b>' : (suspiciousFlag === 'REVIEW' ? '\n\n🔍 <b>FLAGGED FOR REVIEW</b>' : '');
-
-      const captionText =
-        `🆕 <b>NEW TASK SUBMISSION</b>\n\n` +
-        `🎯 <b>Task:</b> ${task.title}\n` +
-        `💰 <b>Reward:</b> ₹${task.reward}\n\n` +
-        `👤 <b>Name:</b> ${userFullName || 'User'}\n` +
-        `📱 <b>Registration Mobile:</b> <code>${cleanMobile}</code>\n` +
-        `🔗 <b>Username:</b> @${telegramUsername || 'N/A'}\n` +
-        `🆔 <b>Telegram ID:</b> <code>${tgUserIdStr}</code>\n` +
-        `🧾 <b>Submission ID:</b> <code>${submissionId}</code>\n\n` +
-        `📌 <b>Status:</b> ⏳ PENDING REVIEW` +
-        flagBadge;
-
-      const inlineKeyboard = [
-        [
-          { text: '✅ APPROVE', callback_data: `approve_task:${submissionId}` },
-          { text: '❌ REJECT', callback_data: `reject_task:${submissionId}` }
-        ]
-      ];
-
-      let telegramMsgId = null;
-
-      if (botToken && adminGroupChatId) {
-        try {
-          const photoPayload: any = {
-            chat_id: adminGroupChatId,
-            caption: captionText,
-            parse_mode: 'HTML',
-            photo: proofImageUrl,
-            reply_markup: JSON.stringify({ inline_keyboard: inlineKeyboard })
-          };
-
-          const tgPhotoRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(photoPayload)
-          });
-          const tgPhotoData = await tgPhotoRes.json();
-          if (tgPhotoData.ok) {
-            telegramMsgId = tgPhotoData.result?.message_id;
-          } else {
-            console.warn('sendPhoto failed, attempting fallback sendMessage:', tgPhotoData.description);
-            const msgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: adminGroupChatId,
-                text: `${captionText}\n\n📷 <b>Proof Image:</b> ${proofImageUrl.slice(0, 200)}...`,
-                parse_mode: 'HTML',
-                reply_markup: JSON.stringify({ inline_keyboard: inlineKeyboard })
-              })
-            });
-            const msgData = await msgRes.json();
-            telegramMsgId = msgData.result?.message_id;
-          }
-
-          // Send duplicate review notification to telegramAdminChatId if configured and different
-          if (telegramAdminChatId && String(telegramAdminChatId).trim() !== String(adminGroupChatId).trim()) {
-            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: String(telegramAdminChatId).trim(),
-                text: `🆕 <b>NEW TASK SUBMISSION FOR REVIEW</b>\n\n🎯 Task: ${task.title}\n💰 Reward: ₹${task.reward}\n\n👤 Name: ${userFullName || 'User'}\n📱 Registration Mobile: <code>${cleanMobile}</code>\n🔗 Username: @${telegramUsername || 'N/A'}\n🆔 Telegram ID: <code>${tgUserIdStr}</code>\n🧾 Submission ID: <code>${submissionId}</code>\n\nStatus: ⏳ PENDING REVIEW`,
-                parse_mode: 'HTML',
-                reply_markup: JSON.stringify({ inline_keyboard: inlineKeyboard })
-              })
-            }).catch(() => {});
-          }
-        } catch (tgErr) {
-          console.error('Error sending proof to Telegram Admin Group:', tgErr);
-        }
-      }
-
-      const newSubmission = {
+      const newSubmission: any = {
         id: submissionId,
         taskId,
         taskTitle: task.title,
@@ -1011,6 +1218,7 @@ async function startServer() {
         coins: Number(task.coins) || 0,
         userId,
         earningBotId: eBotId,
+        accountScope: 'ROY_SHARE_WALLET',
         telegramUserId: tgUserIdStr,
         telegramUsername: telegramUsername || '',
         userFullName: userFullName || '',
@@ -1021,7 +1229,6 @@ async function startServer() {
         submissionVersion: submissionVer,
         attemptId,
         adminGroupChatId,
-        adminGroupMessageId: telegramMsgId,
         submittedAt: new Date().toISOString(),
         suspiciousFlag,
         suspiciousReason,
@@ -1029,9 +1236,34 @@ async function startServer() {
         relatedSubmissionIds: mobSubmissions.map((s: any) => s.id)
       };
 
+      // Send the submission immediately to the Telegram Private Review Group
+      const tgResult = await sendTaskProofToPrivateReviewGroup(newSubmission);
+      const nowIso = new Date().toISOString();
+
+      if (tgResult.success) {
+        newSubmission.adminGroupMessageId = tgResult.messageId || null;
+        newSubmission.telegramNotificationStatus = 'SUCCESS';
+        newSubmission.telegramNotificationError = null;
+        newSubmission.telegramLastNotification = nowIso;
+      } else {
+        newSubmission.telegramNotificationStatus = 'FAILED';
+        newSubmission.telegramNotificationError = tgResult.error || 'Failed to send notification to Telegram Private Review Group';
+        newSubmission.telegramLastNotification = nowIso;
+      }
+
+      // Save submission record to database
       await setDoc(doc(db, 'manualTaskSubmissions', submissionId), newSubmission);
 
-      // Update attempt status to UNDER_REVIEW
+      // Save last notification timestamp in settings
+      if (eBotId === 'roy_share_wallet') {
+        await setDoc(doc(db, 'settings', 'telegramReview'), {
+          lastNotificationAt: nowIso,
+          lastNotificationStatus: tgResult.success ? 'SUCCESS' : 'FAILED',
+          lastNotificationError: tgResult.error || null
+        }, { merge: true });
+      }
+
+      // Update task attempt status to UNDER_REVIEW
       await setDoc(doc(db, 'taskAttempts', attemptId), {
         id: attemptId,
         earningBotId: eBotId,
@@ -1041,14 +1273,16 @@ async function startServer() {
         status: 'UNDER_REVIEW',
         submissionId,
         version: submissionVer,
-        updatedAt: new Date().toISOString()
+        updatedAt: nowIso
       }, { merge: true });
 
       return res.json({
         success: true,
         submissionId,
         submissionVersion: submissionVer,
-        message: 'Task proof submitted successfully for admin review!'
+        telegramNotificationStatus: newSubmission.telegramNotificationStatus,
+        telegramNotificationError: newSubmission.telegramNotificationError,
+        message: 'Task proof submitted successfully!'
       });
     } catch (err: any) {
       console.error('Error submitting manual task proof:', err);
@@ -1071,11 +1305,16 @@ async function startServer() {
       const subData = subSnap.data();
 
       let botObject: any = null;
-      if (subData.earningBotId) {
+      if (subData.earningBotId && subData.earningBotId !== 'roy_share_wallet') {
         const botSnap = await getDoc(doc(db, 'earningBots', subData.earningBotId));
         if (botSnap.exists()) {
           botObject = { botId: subData.earningBotId, ...botSnap.data() };
         }
+      }
+      if (!botObject || !botObject.token) {
+        const sysConfig = await getDecryptedConfig();
+        const token = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+        botObject = { botId: subData.earningBotId || 'roy_share_wallet', token };
       }
 
       const result = await handleManualTaskApproval(botObject, submissionId, adminName || 'Admin', adminNote || '');
@@ -1104,11 +1343,16 @@ async function startServer() {
       const subData = subSnap.data();
 
       let botObject: any = null;
-      if (subData.earningBotId) {
+      if (subData.earningBotId && subData.earningBotId !== 'roy_share_wallet') {
         const botSnap = await getDoc(doc(db, 'earningBots', subData.earningBotId));
         if (botSnap.exists()) {
           botObject = { botId: subData.earningBotId, ...botSnap.data() };
         }
+      }
+      if (!botObject || !botObject.token) {
+        const sysConfig = await getDecryptedConfig();
+        const token = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+        botObject = { botId: subData.earningBotId || 'roy_share_wallet', token };
       }
 
       const result = await handleManualTaskRejection(

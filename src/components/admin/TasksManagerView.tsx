@@ -42,7 +42,8 @@ import {
   BarChart3,
   Megaphone,
   AlertTriangle,
-  Lock
+  Lock,
+  Send
 } from 'lucide-react';
 import { TaskItem, ManualTaskSubmission, TaskCampaign, TaskAnalytics } from '../../types';
 import { apiFetch } from '../../utils/api';
@@ -276,6 +277,51 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
       showToast(err.message || 'Error verifying Telegram configuration', 'error');
     } finally {
       setIsVerifyingGroup(false);
+    }
+  };
+
+  const [isSendingTestMsg, setIsSendingTestMsg] = useState(false);
+  const [testMsgStatus, setTestMsgStatus] = useState<{ success: boolean; msg: string } | null>(null);
+
+  const handleSendTestMessage = async () => {
+    if (!privateAdminGroupChatId.trim()) {
+      showToast('Please enter PRIVATE REVIEW GROUP CHAT ID first', 'error');
+      return;
+    }
+
+    setIsSendingTestMsg(true);
+    setTestMsgStatus(null);
+    try {
+      const res = await apiFetch('/api/admin/send-test-review-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          privateReviewGroupChatId: privateAdminGroupChatId.trim(),
+          botId: config?.botId || 'roy_share_wallet'
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestMsgStatus({
+          success: true,
+          msg: data.message || '✅ Test message sent successfully to Private Review Group!'
+        });
+        showToast('✅ Test message sent to Telegram Review Group!', 'success');
+      } else {
+        setTestMsgStatus({
+          success: false,
+          msg: data.error || 'Test message failed to send.'
+        });
+        showToast(data.error || 'Test message failed', 'error');
+      }
+    } catch (err: any) {
+      setTestMsgStatus({
+        success: false,
+        msg: err.message || 'Error sending test message'
+      });
+      showToast(err.message || 'Error sending test message', 'error');
+    } finally {
+      setIsSendingTestMsg(false);
     }
   };
 
@@ -722,7 +768,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                         <p className="text-[11px] text-slate-400">Admin review notifications will be received here.</p>
                       </div>
 
-                      <div className="pt-1 flex items-center justify-between">
+                      <div className="pt-1 flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={handleVerifyTelegramGroup}
@@ -731,6 +777,16 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                         >
                           {isVerifyingGroup ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
                           <span>VERIFY & SAVE TELEGRAM CONFIG</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleSendTestMessage}
+                          disabled={isSendingTestMsg}
+                          className="py-2.5 px-4 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-500/30 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+                        >
+                          {isSendingTestMsg ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                          <span>SEND TEST MESSAGE</span>
                         </button>
                       </div>
 
@@ -741,6 +797,16 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                             : 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
                         }`}>
                           {groupVerifyStatus.msg}
+                        </div>
+                      )}
+
+                      {testMsgStatus && (
+                        <div className={`p-3 rounded-xl text-xs font-mono whitespace-pre-line leading-relaxed ${
+                          testMsgStatus.success
+                            ? 'bg-blue-500/10 border border-blue-500/30 text-blue-300'
+                            : 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
+                        }`}>
+                          {testMsgStatus.msg}
                         </div>
                       )}
                     </div>
