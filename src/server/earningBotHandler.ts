@@ -18,8 +18,27 @@ const userChatSessions = new Map<string, EarningUserChatSession>();
 export async function processEarningBotUpdate(bot: any, update: any) {
   try {
     const token = bot.token;
+
+    // 1. IGNORE EDITED MESSAGES, CHANNEL POSTS, AND BOT STATUS UPDATES IN GROUPS
+    if (update.edited_message || update.channel_post || update.edited_channel_post || update.my_chat_member || update.chat_member) {
+      return;
+    }
+
     if (update.message) {
       const message = update.message;
+      const chatType = String(message.chat?.type || '');
+
+      // STRICT CHAT-TYPE GUARD:
+      // Earning Bot user onboarding, messages, account creation, and menu interactions MUST ONLY happen in PRIVATE DM chats (chat.type === "private").
+      // If the message is received in a GROUP or SUPERGROUP or CHANNEL (chat.type === "group" | "supergroup" | "channel"):
+      // - DO NOT send Welcome message / Join Channel / Verify / Menu
+      // - DO NOT create user accounts / pending sessions
+      // - DO NOT award Signup or Referral bonuses
+      // - Silently ignore the update!
+      if (chatType !== 'private') {
+        return;
+      }
+
       const chatId = String(message.chat.id);
       const userId = String(message.from?.id || chatId);
       const text = message.text ? String(message.text).trim() : '';
@@ -74,11 +93,11 @@ export async function processEarningBotUpdate(bot: any, update: any) {
         return;
       }
 
-      // Default fallback for active users or unregistered
+      // Default fallback for active users or unregistered (ONLY in private chat)
       const userDoc = await getEarningUser(bot.botId, userId);
       if (userDoc) {
         await sendTelegramApi(token, 'sendMessage', {
-          chat_id: chatId,
+          chat_id: userId,
           text: `🤖 <b>Hello, ${userDoc.firstName}!</b>\n\nHow can I help you today? Please use the menu below.`,
           parse_mode: 'HTML',
           reply_markup: buildUserMenuMarkup(),
@@ -88,13 +107,20 @@ export async function processEarningBotUpdate(bot: any, update: any) {
       }
     } else if (update.callback_query) {
       const callback = update.callback_query;
-      const chatId = String(callback.message.chat.id);
-      const userId = String(callback.from?.id || chatId);
-      const data = String(callback.data);
+      const chatType = String(callback.message?.chat?.type || '');
 
       await sendTelegramApi(bot.token, 'answerCallbackQuery', {
         callback_query_id: callback.id,
-      });
+      }).catch(() => {});
+
+      // Reject callback queries from non-private chats
+      if (chatType !== 'private') {
+        return;
+      }
+
+      const chatId = String(callback.message?.chat?.id || callback.from?.id);
+      const userId = String(callback.from?.id || chatId);
+      const data = String(callback.data);
 
       const sessionRef = doc(db, 'pendingBotSessions', `${bot.botId}_${userId}`);
 
@@ -108,7 +134,7 @@ export async function processEarningBotUpdate(bot: any, update: any) {
       } else if (data === 'earn_wd_cancel') {
         userChatSessions.delete(`${bot.botId}_${userId}`);
         await sendTelegramApi(bot.token, 'sendMessage', {
-          chat_id: chatId,
+          chat_id: userId,
           text: `❌ <b>Withdrawal cancelled.</b>`,
           parse_mode: 'HTML',
           reply_markup: buildUserMenuMarkup(),
@@ -123,7 +149,7 @@ export async function processEarningBotUpdate(bot: any, update: any) {
 /**
  * Resolve Earning Bot Referrer by code, Telegram ID, UID, or Admin Chat ID
  */
-export async function resolveEarningBotReferrer(bot: any, rawReferrerCode: string): Promise<{ telegramId: string; docId: string } | null> {
+export async function resolveEarningBotReferrer(bot: any, rawReferrerCode: string): Promise<{ telegramId: string; docId: string; isAdmin?: boolean } | null> {
   if (!rawReferrerCode || !bot || !bot.botId) return null;
 
   const botId = bot.botId;
@@ -142,7 +168,7 @@ export async function resolveEarningBotReferrer(bot: any, rawReferrerCode: strin
 
   // 1. Check if candidate matches Admin Chat ID or 'ADMIN'
   const adminChatId = String(bot.adminChatId || '').trim();
-  if (cleanCode === 'ADMIN' || (adminChatId && (cleanCode === adminChatId || candidateTgId === adminChatId))) {
+  if (cleanCode === 'ADMIN' || cleanCode.startsWith('ADMIN') || (adminChatId && (cleanCode === adminChatId || candidateTgId === adminChatId))) {
     const targetAdminTg = adminChatId || 'ADMIN';
     const adminDocId = `${botId}_${targetAdminTg}`;
     const adminRef = doc(db, 'users', adminDocId);
@@ -172,7 +198,7 @@ export async function resolveEarningBotReferrer(bot: any, rawReferrerCode: strin
         lastActive: nowIso,
       });
     }
-    return { telegramId: targetAdminTg, docId: adminDocId };
+    return { telegramId: targetAdminTg, docId: adminDocId, isAdmin: true };
   }
 
   // 2. Direct Doc ID check
@@ -214,6 +240,12 @@ export async function resolveEarningBotReferrer(bot: any, rawReferrerCode: strin
  */
 async function handleStartCommand(bot: any, message: any, text: string, sessionRef: any) {
   const token = bot.token;
+
+  // STRICT PRIVATE CHAT GUARD
+  if (String(message.chat?.type || '') !== 'private') {
+    return;
+  }
+
   const chatId = String(message.chat.id);
   const userId = String(message.from?.id || chatId);
   const firstName = message.from?.first_name || 'User';
@@ -224,14 +256,14 @@ async function handleStartCommand(bot: any, message: any, text: string, sessionR
   if (userDoc) {
     if (userDoc.status === 'BANNED') {
       await sendTelegramApi(token, 'sendMessage', {
-        chat_id: chatId,
+        chat_id: userId,
         text: `🚫 <b>Your account has been suspended.</b>\n\nContact Admin.`,
         parse_mode: 'HTML',
       });
       return;
     }
     await sendTelegramApi(token, 'sendMessage', {
-      chat_id: chatId,
+      chat_id: userId,
       text: `👋 <b>Welcome back, ${userDoc.firstName}!</b>\n\n👛 <b>Wallet Balance:</b> ₹${userDoc.walletBalance || 0}`,
       parse_mode: 'HTML',
       reply_markup: buildUserMenuMarkup(),
@@ -423,7 +455,7 @@ async function sendChannelGroupJoinPrompt(bot: any, chatId: string, userId: stri
   }]);
 
   await sendTelegramApi(bot.token, 'sendMessage', {
-    chat_id: chatId,
+    chat_id: userId,
     text: `👋 <b>Welcome!</b>\n\nPlease join the required channels/groups to continue.`,
     parse_mode: 'HTML',
     reply_markup: { inline_keyboard },
@@ -438,7 +470,7 @@ async function handleVerifyJoinCallback(bot: any, chatId: string, userId: string
 
   if (!channelsJoined || !groupsJoined) {
     await sendTelegramApi(bot.token, 'sendMessage', {
-      chat_id: chatId,
+      chat_id: userId,
       text: `❌ <b>Please join all required channels/groups to continue:</b>\n\n• ${missing.join('\n• ')}`,
       parse_mode: 'HTML',
     });
@@ -454,7 +486,7 @@ async function handleVerifyJoinCallback(bot: any, chatId: string, userId: string
 
   // Continue to contact verification
   await sendTelegramApi(bot.token, 'sendMessage', {
-    chat_id: chatId,
+    chat_id: userId,
     text: `✅ <b>Verification Complete!</b>\n\nPlease tap the button below to share your verified mobile number securely.`,
     parse_mode: 'HTML',
     reply_markup: {
@@ -471,6 +503,8 @@ async function handleVerifyJoinCallback(bot: any, chatId: string, userId: string
  * Handle contact sharing & run silent background security check
  */
 async function handleContactSharing(bot: any, message: any, sessionRef: any) {
+  if (String(message.chat?.type || '') !== 'private') return;
+
   const chatId = String(message.chat.id);
   const userId = String(message.from?.id || chatId);
   const contact = message.contact;
@@ -480,7 +514,7 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
   const contactUserId = String(contact.user_id || '');
   if (contactUserId && contactUserId !== userId) {
     await sendTelegramApi(bot.token, 'sendMessage', {
-      chat_id: chatId,
+      chat_id: userId,
       text: `❌ <b>This contact does not belong to your Telegram account.</b>\n\nPlease share your own verified mobile number.`,
       parse_mode: 'HTML',
       reply_markup: {
@@ -497,7 +531,7 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
   const phone = String(contact.phone_number || '').replace(/[^0-9]/g, '');
   if (!phone || phone.length < 7) {
     await sendTelegramApi(bot.token, 'sendMessage', {
-      chat_id: chatId,
+      chat_id: userId,
       text: `❌ <b>Invalid mobile number received.</b>\n\nPlease tap the button below to share your contact number.`,
       parse_mode: 'HTML',
       reply_markup: {
@@ -526,7 +560,7 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
 
   // PROMPT USER TO OPEN TELEGRAM MINI APP FOR MANDATORY SECURITY VERIFICATION
   await sendTelegramApi(bot.token, 'sendMessage', {
-    chat_id: chatId,
+    chat_id: userId,
     text: `📱 <b>Contact Verified Successfully!</b>\n\n` +
       `🔒 <b>Final Step: Mandatory Security Verification Required</b>\n\n` +
       `Please tap the button below to open the Telegram Mini App and complete automated device fingerprinting, IP risk check, and bot-specific security verification to activate your account and claim your <b>₹${bot.registrationBonus || 0} Registration Bonus</b>!`,
@@ -548,7 +582,7 @@ export async function promptUnverifiedUser(bot: any, chatId: string, userId: str
   const miniAppUrl = bot.miniAppUrl || `${baseUrl}/?botId=${bot.botId}&tgId=${userId}`;
 
   await sendTelegramApi(bot.token, 'sendMessage', {
-    chat_id: chatId,
+    chat_id: userId,
     text: `🔒 <b>Security Verification Required</b>\n\n` +
       `Your account is not yet active. Please tap the button below to complete Telegram Mini App security verification to activate your account and claim your registration bonus.`,
     parse_mode: 'HTML',

@@ -9142,20 +9142,32 @@ Respond with a JSON object containing two properties:
       const usersList: any[] = [];
       usersSnap.forEach(d => {
         const u = d.data();
+        const signupBonus = u.signupBonus ?? (Number(u.registrationBonus) || 1);
+        const adminReferralBonus = u.adminReferralBonus ?? (u.isAdminReferral ? 1 : 0);
+        const refSource = u.referralSource || (u.isAdminReferral ? 'Admin Referral Link' : (u.referrerUid ? 'User Referral' : 'Direct Registration'));
+        const refStatus = u.referralStatus || (u.isDuplicateAccount ? 'REJECTED' : (u.referrerUid ? 'VALID' : 'NONE'));
+        const totalWithdrawn = Number(u.totalWithdrawn) || 0;
+
         usersList.push({
           id: d.id,
           uid: u.uid || d.id,
           telegramId: u.telegramId,
           userName: u.firstName || u.userName || u.name || `User #${u.telegramId}`,
-          username: u.username ? `@${u.username}` : '-',
-          referredBy: u.referrerUid || u.referredBy || 'Direct',
+          username: u.username ? `@${u.username.replace(/^@/, '')}` : '-',
+          referredBy: u.referredBy || u.referrerUid || 'Direct',
+          referralSource: refSource,
+          referralStatus: refStatus,
+          signupBonus,
+          adminReferralBonus,
           joinedAt: u.createdAt || '-',
           isVerified: Boolean(u.channelVerified && u.groupVerified),
           contactVerified: Boolean(u.mobile),
           walletBalance: Number(u.walletBalance) || 0,
-          registrationBonus: Number(u.walletBalance) || 0,
           totalReferralEarnings: Number(u.totalReferralEarnings) || 0,
-          totalEarned: (Number(u.walletBalance) || 0) + (Number(u.totalWithdrawn) || 0),
+          totalEarned: (Number(u.walletBalance) || 0) + totalWithdrawn,
+          totalWithdrawn,
+          withdrawalStatus: totalWithdrawn > 0 ? `Withdrawn ₹${totalWithdrawn}` : 'No Withdrawals',
+          isDuplicateAccount: Boolean(u.isDuplicateAccount),
           status: u.status || 'ACTIVE',
         });
       });
@@ -9447,6 +9459,14 @@ Respond with a JSON object containing two properties:
       const referrerTgId = resolvedReferrer?.telegramId || '';
       const refDocId = resolvedReferrer?.docId || '';
 
+      const isAdminReferral = Boolean(
+        resolvedReferrer &&
+        (resolvedReferrer.isAdmin ||
+          resolvedReferrer.telegramId === bot.adminChatId ||
+          rawRefUid === 'ADMIN' ||
+          String(rawRefUid).includes('ADMIN'))
+      );
+
       // Duplicity and Device fingerprint/IP check: BOT-SPECIFIC (accountScope: EARNING_BOT, botId)
       const fingerprint = String(deviceFingerprint || '').trim();
       const clientIp = String(req.body.ip || req.headers['x-forwarded-for'] || req.ip || req.socket?.remoteAddress || '').split(',')[0].trim();
@@ -9478,6 +9498,19 @@ Respond with a JSON object containing two properties:
         });
       }
 
+      // Calculate initial bonuses (Default ₹1 signup bonus, ₹1 admin referral bonus)
+      const signupBonus = Number(bot.registrationBonus) >= 0 ? Number(bot.registrationBonus) : 1;
+      const adminReferralBonus = (isAdminReferral && !isDuplicateDeviceOrIp) ? (Number(bot.adminReferralBonus) || 1) : 0;
+      const initialWalletBalance = signupBonus + adminReferralBonus;
+
+      const referralSource = isAdminReferral
+        ? 'Admin Referral Link'
+        : (referrerTgId ? 'User Referral' : 'Direct Registration');
+
+      const initialRefStatus = isDuplicateDeviceOrIp
+        ? 'REJECTED'
+        : (referrerTgId ? 'VALID' : 'NONE');
+
       // Build and Save User Document - Account is ALWAYS ALLOWED and ACTIVE
       const nowIso = new Date().toISOString();
       const newUser = {
@@ -9490,13 +9523,18 @@ Respond with a JSON object containing two properties:
         username,
         firstName,
         mobile: verifiedMobile,
-        walletBalance: Number(bot.registrationBonus) || 0,
+        signupBonus,
+        adminReferralBonus,
+        walletBalance: initialWalletBalance,
         lockedBalance: 0,
         totalWithdrawn: 0,
         channelVerified: true,
         groupVerified: true,
         referrerUid: referrerTgId || '',
         referredBy: referrerTgId || '',
+        referralSource,
+        isAdminReferral,
+        referralStatus: initialRefStatus,
         referralRewardReceived: false,
         totalReferrals: 0,
         successfulReferrals: 0,
@@ -9512,15 +9550,28 @@ Respond with a JSON object containing two properties:
       await setDoc(userRef, newUser);
 
       // Log Registration Bonus ledger transaction
-      if (bot.registrationBonus && Number(bot.registrationBonus) > 0) {
+      if (signupBonus > 0) {
         await recordWalletTransaction({
           uid: userDocId,
           botId,
           type: 'REGISTRATION_BONUS',
-          amount: Number(bot.registrationBonus),
+          amount: signupBonus,
           status: 'completed',
-          description: `Registration Bonus - Welcome to ${bot.botName || 'Earning Bot'}!`,
+          description: `Signup Bonus - Welcome to ${bot.botName || 'Earning Bot'}!`,
           transactionId: `REGBONUS_${botId}_${tgUserId}`,
+        });
+      }
+
+      // Log Admin Referral Bonus ledger transaction if applicable
+      if (adminReferralBonus > 0) {
+        await recordWalletTransaction({
+          uid: userDocId,
+          botId,
+          type: 'ADMIN_REFERRAL_BONUS',
+          amount: adminReferralBonus,
+          status: 'completed',
+          description: `🎁 Admin Referral Bonus - Joined via Official Link`,
+          transactionId: `ADMINREFBONUS_${botId}_${tgUserId}`,
         });
       }
 
@@ -9643,7 +9694,6 @@ Respond with a JSON object containing two properties:
 
       // Send Telegram Notification & Activate Bot Menu on user's Telegram Chat
       try {
-        const regBonus = Number(bot.registrationBonus) || 0;
         let successText = '';
 
         if (isDuplicateDeviceOrIp) {
@@ -9653,15 +9703,23 @@ Respond with a JSON object containing two properties:
             `Your account is still active and you can use the bot normally.\n\n` +
             `However, this registration is not eligible for referral rewards.\n\n` +
             `Referral Status: ❌ <b>REJECTED</b>\n\n` +
-            `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` +
-            `💳 <b>Wallet Balance:</b> ₹${regBonus}\n\n` +
+            `🎁 <b>Signup Bonus:</b> ₹${signupBonus}\n` +
+            `💳 <b>Wallet Balance:</b> ₹${signupBonus}\n\n` +
+            `You can now use the options below.`;
+        } else if (isAdminReferral) {
+          successText =
+            `✅ <b>Account Verified Successfully!</b>\n\n` +
+            `🎉 Your account is now active.\n\n` +
+            `🎁 <b>Signup Bonus:</b> ₹${signupBonus}\n` +
+            `🔗 <b>Admin Referral Bonus:</b> ₹${adminReferralBonus}\n` +
+            `💰 <b>Starting Balance:</b> ₹${initialWalletBalance}\n\n` +
             `You can now use the options below.`;
         } else {
           successText =
             `✅ <b>Account Verified Successfully!</b>\n\n` +
             `🎉 Your account is now active.\n\n` +
-            `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` +
-            `💳 <b>Wallet Balance:</b> ₹${regBonus}\n\n` +
+            `🎁 <b>Signup Bonus:</b> ₹${signupBonus}\n` +
+            `💳 <b>Wallet Balance:</b> ₹${initialWalletBalance}\n\n` +
             `You can now use the options below.`;
         }
 
@@ -9687,7 +9745,11 @@ Respond with a JSON object containing two properties:
         user: newUser,
         isNew: true,
         isDuplicate: isDuplicateDeviceOrIp,
-        referralStatus: isDuplicateDeviceOrIp ? 'REJECTED' : (referrerTgId ? 'VALID' : 'NONE')
+        isAdminReferral,
+        signupBonus,
+        adminReferralBonus,
+        startingBalance: initialWalletBalance,
+        referralStatus: initialRefStatus
       });
     } catch (err: any) {
       console.error('[earning-bots/register Error]:', err);

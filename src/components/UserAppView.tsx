@@ -1517,9 +1517,9 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   if (!isRegistered || !user) {
     if (earningBotId || registrationState === 'EARNING_BOT_UNREGISTERED') {
       const botTitle = earningBotConfig?.botName || earningBotConfig?.botFirstName || 'Earning Bot';
-      const regBonus = earningBotConfig?.registrationBonus ?? 0;
-      const refBonus = earningBotConfig?.referralReward ?? 0;
-      const minWith = earningBotConfig?.minWithdrawal ?? 100;
+      const regBonus = earningBotConfig?.registrationBonus ?? 1;
+      const refBonus = earningBotConfig?.referralReward ?? 2;
+      const minWith = earningBotConfig?.minWithdrawal ?? 5;
 
       return (
         <div className="min-h-screen bg-slate-950 text-white font-sans flex items-center justify-center p-4">
@@ -1530,13 +1530,13 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                 <Bot className="w-9 h-9" />
               </div>
               <div className="inline-block px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-black uppercase tracking-wider">
-                🤖 Bot Security & Verification
+                🤖 Telegram Bot Security & Account Activation
               </div>
               <h1 className="text-2xl font-black tracking-tight text-white">
                 {botTitle}
               </h1>
               <p className="text-xs text-slate-400">
-                Complete security verification to activate your account and claim your <b>₹{regBonus}</b> welcome bonus.
+                Complete security verification to activate your bot account and claim your sign-up bonuses.
               </p>
             </div>
 
@@ -1596,19 +1596,78 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
               </div>
             </div>
 
-            {/* Earning Bot Highlights Box */}
-            <div className="space-y-2 bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800">
-              <div className="flex items-center justify-between text-xs p-2 bg-slate-900 rounded-xl border border-slate-800">
-                <span className="text-slate-400 font-medium">🎁 Signup Welcome Bonus</span>
-                <span className="font-black text-amber-400 text-sm">₹{regBonus}</span>
+            {/* REFERRAL TRANSPARENCY CARD */}
+            <div className="space-y-2 bg-slate-950/90 p-4 rounded-2xl border border-emerald-500/30 text-xs">
+              <div className="text-[11px] font-extrabold text-emerald-400 uppercase tracking-wider mb-2 flex items-center justify-between">
+                <span>🎁 Referral & Registration Transparency</span>
               </div>
-              <div className="flex items-center justify-between text-xs p-2 bg-slate-900 rounded-xl border border-slate-800">
-                <span className="text-slate-400 font-medium">👥 Per Referral Bonus</span>
-                <span className="font-black text-emerald-400 text-sm">₹{refBonus}</span>
+
+              <div className="space-y-1.5 font-sans">
+                <div className="flex items-center justify-between text-slate-300">
+                  <span>🎁 Signup Bonus:</span>
+                  <span className="font-bold text-amber-400">₹{regBonus}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-300">
+                  <span>🔗 Admin Referral Bonus:</span>
+                  <span className="font-bold text-emerald-400">₹1</span>
+                </div>
+                <div className="flex items-center justify-between text-white font-bold pt-1 border-t border-slate-800">
+                  <span>💰 Starting Balance:</span>
+                  <span className="font-extrabold text-emerald-300 text-sm">₹{regBonus + 1}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-400 text-[11px] pt-1">
+                  <span>⚡ Minimum Withdrawal:</span>
+                  <span className="font-bold text-sky-400">₹{minWith}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                  <span>💳 Withdrawal Method:</span>
+                  <span className="font-bold text-purple-400">Ultra Pay</span>
+                </div>
               </div>
-              <div className="flex items-center justify-between text-xs p-2 bg-slate-900 rounded-xl border border-slate-800">
-                <span className="text-slate-400 font-medium">⚡ Minimum Withdrawal</span>
-                <span className="font-black text-sky-400 text-sm">₹{minWith}</span>
+            </div>
+
+            {/* 🔐 WHY TRUST ULTRA PAY? Section */}
+            <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800/80 text-xs space-y-2">
+              <div className="font-black text-amber-400 text-[11px] uppercase tracking-wider flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-amber-400" />
+                <span>🔐 WHY TRUST ULTRA PAY?</span>
+              </div>
+              <ul className="space-y-1.5 text-slate-300 text-[11px] leading-snug">
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-400 shrink-0">✓</span>
+                  <span>Secure Telegram-based account verification</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-400 shrink-0">✓</span>
+                  <span>Device/IP security checks</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-400 shrink-0">✓</span>
+                  <span>Duplicate-account protection</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-400 shrink-0">✓</span>
+                  <span>Referral fraud protection</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-400 shrink-0">✓</span>
+                  <span>Clear referral status: <b>Valid</b> / <b>Pending</b> / <b>Rejected</b></span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-400 shrink-0">✓</span>
+                  <span>Withdrawal status shown in transaction history</span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-400 shrink-0">✓</span>
+                  <span>Minimum withdrawal: <b>₹{minWith}</b></span>
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <span className="text-emerald-400 shrink-0">✓</span>
+                  <span>Withdrawal method: <b>Ultra Pay only</b></span>
+                </li>
+              </ul>
+              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[10px] text-slate-400 italic">
+                ℹ️ Your account can continue to use the bot even if a referral is rejected. Only the referral reward is rejected.
               </div>
             </div>
 
@@ -1622,7 +1681,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                 <span>Verifying Security & Activating...</span>
               ) : (
                 <>
-                  <span>🔒 COMPLETE SECURITY VERIFICATION (CLAIM ₹{regBonus})</span>
+                  <span>🔒 COMPLETE SECURITY VERIFICATION (CLAIM ₹{regBonus + 1})</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
@@ -2130,6 +2189,26 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                   <div className="p-2.5 rounded-xl bg-slate-950 border border-amber-500/30">
                     <span className="text-[9px] text-amber-400 font-bold uppercase tracking-wider block">Pending Earnings</span>
                     <span className="text-base font-black text-amber-400">₹{earningBotRefStats?.pendingEarnings ?? 0}</span>
+                  </div>
+                </div>
+
+                {/* COMPACT TRUST & STATUS CARD */}
+                <div className="p-4 bg-slate-950/90 rounded-2xl border border-slate-800 text-left space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-black uppercase text-amber-400 tracking-wider">
+                    <ShieldCheck className="w-4 h-4 text-amber-400" />
+                    <span>🔐 Transparent & Secure Referral System</span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Register through the official referral link, complete security verification, and receive the applicable signup & referral bonuses. Referral eligibility is checked automatically to prevent duplicate devices.
+                  </p>
+                  <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800/80 space-y-1 text-[11px]">
+                    <div className="font-bold text-slate-200">Referral Status Definitions:</div>
+                    <div className="text-slate-300">🟢 <b>VALID</b>: Unique device & IP verified. Reward credited immediately.</div>
+                    <div className="text-slate-300">🟡 <b>PENDING</b>: Verification in progress.</div>
+                    <div className="text-slate-300">🔴 <b>REJECTED</b>: Duplicate device/IP detected. Referral reward withheld.</div>
+                  </div>
+                  <div className="text-[10px] text-emerald-400 font-medium italic border-t border-slate-800/80 pt-2">
+                    💡 <b>Account Safety Guarantee</b>: Your account can continue to use the bot even if a referral is rejected. Only the referral reward is rejected.
                   </div>
                 </div>
               </div>
