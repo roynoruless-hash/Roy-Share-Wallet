@@ -260,20 +260,20 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
           success: true,
           msg: data.message || '✅ Telegram configuration verified successfully.'
         });
-        showToast('✅ Telegram configuration verified successfully.', 'success');
+        showToast('✅ Roy Share Wallet Review Group Verified!', 'success');
       } else {
         setGroupVerifyStatus({
           success: false,
-          msg: data.error || '❌ Bot is not a member/admin of this Telegram group.'
+          msg: data.error || 'Verification failed'
         });
-        showToast(data.error || '❌ Bot is not a member/admin of this Telegram group.', 'error');
+        showToast(data.error || 'Verification failed', 'error');
       }
     } catch (err: any) {
       setGroupVerifyStatus({
         success: false,
-        msg: '❌ Bot is not a member/admin of this Telegram group.'
+        msg: err.message || 'Error verifying Telegram configuration'
       });
-      showToast('❌ Bot is not a member/admin of this Telegram group.', 'error');
+      showToast(err.message || 'Error verifying Telegram configuration', 'error');
     } finally {
       setIsVerifyingGroup(false);
     }
@@ -735,9 +735,13 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                       </div>
 
                       {groupVerifyStatus && (
-                        <p className={`text-[11px] font-bold ${groupVerifyStatus.success ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        <div className={`p-3 rounded-xl text-xs font-mono whitespace-pre-line leading-relaxed ${
+                          groupVerifyStatus.success
+                            ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
+                            : 'bg-rose-500/10 border border-rose-500/30 text-rose-300'
+                        }`}>
                           {groupVerifyStatus.msg}
-                        </p>
+                        </div>
                       )}
                     </div>
 

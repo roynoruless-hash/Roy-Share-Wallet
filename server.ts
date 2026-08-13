@@ -490,83 +490,84 @@ async function startServer() {
         });
       }
 
-      let token = process.env.TELEGRAM_BOT_TOKEN || '';
-      if (eBotId) {
+      let token = '';
+      if (eBotId === 'roy_share_wallet') {
+        const sysConfig = await getDecryptedConfig();
+        token = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+      } else {
         const botSnap = await getDoc(doc(db, 'earningBots', eBotId));
         if (botSnap.exists() && botSnap.data().token) {
           token = botSnap.data().token;
         }
-      }
-
-      if (!token) {
-        const botsSnap = await getDocs(query(collection(db, 'earningBots'), where('status', '==', 'active'), limit(1)));
-        if (!botsSnap.empty) {
-          token = botsSnap.docs[0].data().token;
+        if (!token) {
+          const sysConfig = await getDecryptedConfig();
+          token = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
         }
       }
 
       if (!token) {
-        return res.status(400).json({ success: false, error: 'No active Telegram bot token found to test connection.' });
+        return res.status(400).json({
+          success: false,
+          error: 'No active Roy Share Wallet bot token found in system settings.'
+        });
       }
 
-      // Get Bot Info for checking user membership status
+      // 1. Get Bot Info via getMe
       const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
       const meData = await meRes.json();
       if (!meData.ok || !meData.result?.id) {
-        return res.status(400).json({ success: false, error: 'Failed to verify bot token with Telegram.' });
+        return res.status(400).json({
+          success: false,
+          error: meData.description || 'Failed to verify bot token with Telegram API.'
+        });
       }
+
       const botUserId = meData.result.id;
+      const botName = meData.result.first_name || 'Roy Share Wallet Bot';
+      const botUsername = meData.result.username ? `@${meData.result.username}` : botName;
 
-      // Helper function to verify chat & admin membership
-      const verifySingleChat = async (chatId: string) => {
-        const chatRes = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId })
+      // 2. Verify Private Review Group Access via getChat
+      const chatRes = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: reviewGroupId })
+      });
+      const chatData = await chatRes.json();
+      if (!chatData.ok) {
+        return res.status(400).json({
+          success: false,
+          error: chatData.description || `Bot cannot access group (${reviewGroupId}). Make sure bot is added to the group.`
         });
-        const chatData = await chatRes.json();
-        if (!chatData.ok) {
-          return { ok: false, error: '❌ Bot is not a member/admin of this Telegram group.' };
-        }
-
-        const memberRes = await fetch(`https://api.telegram.org/bot${token}/getChatMember`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, user_id: botUserId })
-        });
-        const memberData = await memberRes.json();
-        if (!memberData.ok) {
-          return { ok: false, error: '❌ Bot is not a member/admin of this Telegram group.' };
-        }
-
-        const status = memberData.result?.status;
-        if (status !== 'administrator' && status !== 'creator') {
-          return { ok: false, error: '❌ Bot is not a member/admin of this Telegram group.' };
-        }
-
-        return {
-          ok: true,
-          title: chatData.result?.title || chatData.result?.username || chatId,
-          type: chatData.result?.type
-        };
-      };
-
-      // 1. Verify Private Review Group
-      const reviewGroupRes = await verifySingleChat(reviewGroupId);
-      if (!reviewGroupRes.ok) {
-        return res.status(400).json({ success: false, error: reviewGroupRes.error });
       }
 
-      // 2. Verify Telegram Admin Chat ID if provided
-      let adminChatRes = null;
-      if (adminChatId) {
-        adminChatRes = await verifySingleChat(adminChatId);
-        if (!adminChatRes.ok) {
-          return res.status(400).json({ success: false, error: adminChatRes.error });
-        }
+      const groupTitle = chatData.result?.title || chatData.result?.username || reviewGroupId;
+
+      // 3. Verify Bot Membership & Admin Rights in Private Review Group via getChatMember
+      const memberRes = await fetch(`https://api.telegram.org/bot${token}/getChatMember`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: reviewGroupId, user_id: botUserId })
+      });
+      const memberData = await memberRes.json();
+      if (!memberData.ok) {
+        return res.status(400).json({
+          success: false,
+          error: memberData.description || `Bot is not a member of "${groupTitle}". Please add ${botUsername} to the group.`
+        });
       }
 
-      // Save strictly scoped configuration for this earningBotId
+      const status = memberData.result?.status;
+      if (status !== 'administrator' && status !== 'creator') {
+        return res.status(400).json({
+          success: false,
+          error: `Bot is in "${groupTitle}" but is NOT an Administrator. Please promote ${botUsername} to Administrator.`
+        });
+      }
+
+      // Note: TELEGRAM ADMIN/REVIEW CHAT ID is NOT treated as a group and NOT checked for admin status!
+      // It may be a personal user/chat ID used for admin notifications.
+
+      // Save strictly scoped configuration
       await setDoc(doc(db, 'earningBotReviewConfigs', eBotId), {
         earningBotId: eBotId,
         privateReviewGroupChatId: reviewGroupId,
@@ -575,31 +576,58 @@ async function startServer() {
         verified: true
       }, { merge: true });
 
-      // Also update earningBots document
-      const botRef = doc(db, 'earningBots', eBotId);
-      const botSnap = await getDoc(botRef);
-      if (botSnap.exists()) {
-        await setDoc(botRef, {
+      if (eBotId === 'roy_share_wallet') {
+        await setDoc(doc(db, 'settings', 'telegramReview'), {
           privateReviewGroupChatId: reviewGroupId,
-          telegramAdminChatId: adminChatId || ''
+          telegramAdminChatId: adminChatId || '',
+          updatedAt: new Date().toISOString()
         }, { merge: true });
       }
 
+      // Format response exactly as requested
+      const successMessage =
+        `✅ Roy Share Wallet Review Group Verified\n` +
+        `Bot: ${botName} (${botUsername})\n` +
+        `Group: ${groupTitle}\n` +
+        `Chat ID: ${reviewGroupId}\n` +
+        `Bot Status: ✅ Administrator`;
+
       return res.json({
         success: true,
-        message: '✅ Telegram configuration verified successfully.',
-        privateReviewGroupTitle: reviewGroupRes.title,
-        telegramAdminChatTitle: adminChatRes?.title || null
+        message: successMessage,
+        botName,
+        botUsername,
+        groupTitle,
+        reviewGroupId,
+        botStatus: '✅ Administrator'
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message || 'Error verifying group' });
     }
   });
 
-  // 3.1.2 GET TELEGRAM REVIEW CONFIG FOR EARNING BOT
+  // 3.1.2 GET TELEGRAM REVIEW CONFIG FOR EARNING BOT OR ROY SHARE WALLET
   app.get('/api/admin/get-telegram-config', async (req, res) => {
     try {
       const eBotId = String(req.query.botId || 'roy_share_wallet').trim();
+
+      if (eBotId === 'roy_share_wallet') {
+        const sysReviewSnap = await getDoc(doc(db, 'settings', 'telegramReview'));
+        if (sysReviewSnap.exists()) {
+          const srd = sysReviewSnap.data();
+          if (srd.privateReviewGroupChatId) {
+            return res.json({
+              success: true,
+              config: {
+                earningBotId: 'roy_share_wallet',
+                privateReviewGroupChatId: srd.privateReviewGroupChatId,
+                telegramAdminChatId: srd.telegramAdminChatId || ''
+              }
+            });
+          }
+        }
+      }
+
       const configRef = doc(db, 'earningBotReviewConfigs', eBotId);
       const configSnap = await getDoc(configRef);
       if (configSnap.exists()) {
