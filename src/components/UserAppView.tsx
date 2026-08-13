@@ -296,8 +296,8 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
       let fpHash = localStorage.getItem('roy_device_fp') || '';
       try {
-        const fpData = await generateDeviceFingerprint();
-        fpHash = fpData.fingerprintHash || fpHash;
+        const fpData: any = await generateDeviceFingerprint();
+        fpHash = typeof fpData === 'string' ? fpData : (fpData?.hash || fpHash);
       } catch (e) {
         console.warn('Fingerprint generation notice:', e);
       }

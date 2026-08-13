@@ -9447,7 +9447,7 @@ Respond with a JSON object containing two properties:
       }
 
       // Resolve referrer
-      let resolvedReferrer: { telegramId: string; docId: string } | null = null;
+      let resolvedReferrer: { telegramId: string; docId: string; isAdmin?: boolean } | null = null;
       if (rawRefUid && String(rawRefUid) !== String(tgUserId)) {
         resolvedReferrer = await resolveEarningBotReferrer(bot, rawRefUid);
       }
