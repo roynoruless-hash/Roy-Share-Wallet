@@ -4,9 +4,6 @@ import {
   saveTaskToDb,
   deleteTaskFromDb,
   fetchManualSubmissionsFromDb,
-  fetchCampaignsFromDb,
-  saveCampaignToDb,
-  deleteCampaignFromDb
 } from '../../services/taskService';
 import {
   Plus,
@@ -34,7 +31,6 @@ import {
   Filter,
   AlertCircle,
   FileText,
-  Phone,
   CheckCircle2,
   XCircle,
   Clock,
@@ -42,10 +38,13 @@ import {
   BarChart3,
   Megaphone,
   AlertTriangle,
-  Lock,
-  Send
+  Send,
+  Settings,
+  RotateCcw,
+  Link2,
+  Activity,
 } from 'lucide-react';
-import { TaskItem, ManualTaskSubmission, TaskCampaign, TaskAnalytics } from '../../types';
+import { TaskItem, ManualTaskSubmission } from '../../types';
 import { apiFetch } from '../../utils/api';
 
 interface TasksManagerViewProps {
@@ -57,19 +56,40 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   config,
   showToast
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'tasks' | 'submissions' | 'channels' | 'analytics'>('tasks');
+  const [activeSubTab, setActiveSubTab] = useState<'tasks' | 'submissions' | 'channels'>('tasks');
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [submissions, setSubmissions] = useState<ManualTaskSubmission[]>([]);
-  const [campaigns, setCampaigns] = useState<TaskCampaign[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Promotion Channels states
   const [channels, setChannels] = useState<any[]>([]);
   const [isLoadingChannels, setIsLoadingChannels] = useState(false);
   const [showAddChannelModal, setShowAddChannelModal] = useState(false);
+  const [newChannelName, setNewChannelName] = useState('');
   const [newChannelChatId, setNewChannelChatId] = useState('');
-  const [newChannelTitle, setNewChannelTitle] = useState('');
+  const [newChannelUsername, setNewChannelUsername] = useState('');
+  const [newChannelInviteUrl, setNewChannelInviteUrl] = useState('');
+  const [newAutoPromotion, setNewAutoPromotion] = useState(true);
+  const [newTestNotifications, setNewTestNotifications] = useState(true);
   const [isAddingChannel, setIsAddingChannel] = useState(false);
+  const [addChannelErrorDiagnostic, setAddChannelErrorDiagnostic] = useState<any>(null);
+  const [isVerifyingAllChannels, setIsVerifyingAllChannels] = useState(false);
+
+  // Channel Settings Modal
+  const [selectedChannelForSettings, setSelectedChannelForSettings] = useState<any | null>(null);
+
+  // Post History states
+  const [postHistory, setPostHistory] = useState<any[]>([]);
+  const [isLoadingPostHistory, setIsLoadingPostHistory] = useState(false);
+  const [retryingPostId, setRetryingPostId] = useState<string | null>(null);
+
+  // Task Distribution History states
+  const [distributionHistory, setDistributionHistory] = useState<any[]>([]);
+  const [showDistributionHistory, setShowDistributionHistory] = useState(false);
+  const [isLoadingDistHistory, setIsLoadingDistHistory] = useState(false);
+
+  // Task Preview Modal state
+  const [previewTaskModal, setPreviewTaskModal] = useState<TaskItem | null>(null);
 
   // Task Publishing Modal states
   const [showPublishModal, setShowPublishModal] = useState(false);
@@ -78,17 +98,13 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   const [postChannelsCheck, setPostChannelsCheck] = useState(true);
   const [includeImageCheck, setIncludeImageCheck] = useState(true);
   const [isPublishing, setIsPublishing] = useState(false);
-
-  // Distribution Analytics states
-  const [overallStats, setOverallStats] = useState<any>(null);
-  const [isLoadingOverallStats, setIsLoadingOverallStats] = useState(false);
+  const [publishProgress, setPublishProgress] = useState<any | null>(null);
 
   // Task Form states
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [reward, setReward] = useState<number>(10);
-  const [rewardType, setRewardType] = useState<'fixed' | 'custom'>('fixed');
   const [coins, setCoins] = useState<number>(25);
   const [verificationType, setVerificationType] = useState<'automatic' | 'manual' | 'none'>('none');
   const [icon, setIcon] = useState('CheckSquare');
@@ -96,35 +112,12 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   const [url, setUrl] = useState('');
   const [taskImage, setTaskImage] = useState('');
   const [description, setDescription] = useState('');
-  const [detailedInstructions, setDetailedInstructions] = useState('');
   const [proofDemoImage, setProofDemoImage] = useState('');
   const [privateAdminGroupChatId, setPrivateAdminGroupChatId] = useState('');
   const [telegramAdminChatId, setTelegramAdminChatId] = useState('');
   const [allowResubmission, setAllowResubmission] = useState<boolean>(true);
-  const [maxResubmissions, setMaxResubmissions] = useState<number>(2);
   const [maxSubmissionsPerUser, setMaxSubmissionsPerUser] = useState<number>(1);
-  const [deadlineEnabled, setDeadlineEnabled] = useState<boolean>(false);
-  const [deadlineMinutes, setDeadlineMinutes] = useState<number>(1440);
-  const [maxApprovedUsers, setMaxApprovedUsers] = useState<number>(0);
-  const [campaignId, setCampaignId] = useState<string>('');
   const [active, setActive] = useState<boolean>(true);
-
-  // Campaign Form states
-  const [showCampaignForm, setShowCampaignForm] = useState(false);
-  const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
-  const [campName, setCampName] = useState('');
-  const [campDesc, setCampDesc] = useState('');
-  const [campBudget, setCampBudget] = useState<number>(1000);
-  const [campReward, setCampReward] = useState<number>(10);
-  const [campMaxUsers, setCampMaxUsers] = useState<number>(100);
-  const [campStartDate, setCampStartDate] = useState(new Date().toISOString().slice(0, 10));
-  const [campEndDate, setCampEndDate] = useState('');
-  const [campStatus, setCampStatus] = useState<'DRAFT' | 'ACTIVE' | 'PAUSED'>('ACTIVE');
-
-  // Analytics states
-  const [selectedTaskForAnalytics, setSelectedTaskForAnalytics] = useState<string>('');
-  const [taskAnalytics, setTaskAnalytics] = useState<TaskAnalytics | null>(null);
-  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
 
   // Group Verification State
   const [isVerifyingGroup, setIsVerifyingGroup] = useState(false);
@@ -155,10 +148,59 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     }
   };
 
+  const loadPostHistory = async () => {
+    setIsLoadingPostHistory(true);
+    try {
+      const res = await apiFetch('/api/admin/promotion-channels/post-history');
+      const data = await res.json();
+      if (data.success) {
+        setPostHistory(data.posts || []);
+      }
+    } catch (err) {
+      console.error('Error loading post history:', err);
+    } finally {
+      setIsLoadingPostHistory(false);
+    }
+  };
+
+  const loadDistributionHistory = async () => {
+    setIsLoadingDistHistory(true);
+    try {
+      const res = await apiFetch('/api/admin/task-distribution-history');
+      const data = await res.json();
+      if (data.success) {
+        setDistributionHistory(data.history || []);
+      }
+    } catch (err) {
+      console.error('Error loading distribution history:', err);
+    } finally {
+      setIsLoadingDistHistory(false);
+    }
+  };
+
+  const handleVerifyAllChannels = async () => {
+    setIsVerifyingAllChannels(true);
+    try {
+      const res = await apiFetch('/api/admin/promotion-channels/verify-all', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🟢 All channels verified successfully!', 'success');
+        loadPromotionChannels();
+      } else {
+        showToast('❌ ' + (data.error || 'Verification failed'), 'error');
+      }
+    } catch (err: any) {
+      showToast('Error verifying channels: ' + err.message, 'error');
+    } finally {
+      setIsVerifyingAllChannels(false);
+    }
+  };
+
   const handleAddChannel = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAddChannelErrorDiagnostic(null);
     if (!newChannelChatId.trim()) {
-      showToast('Channel Chat ID or Username is required', 'error');
+      showToast('Telegram Chat ID or Username is required', 'error');
       return;
     }
     setIsAddingChannel(true);
@@ -167,24 +209,59 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          name: newChannelName.trim(),
           chatId: newChannelChatId.trim(),
-          title: newChannelTitle.trim(),
+          username: newChannelUsername.trim(),
+          inviteUrl: newChannelInviteUrl.trim(),
+          autoPromotion: newAutoPromotion,
+          testNotifications: newTestNotifications,
         }),
       });
       const data = await res.json();
       if (data.success) {
-        showToast('✅ ' + data.message, 'success');
+        showToast('🟢 Channel Connected Successfully!', 'success');
         setShowAddChannelModal(false);
+        setNewChannelName('');
         setNewChannelChatId('');
-        setNewChannelTitle('');
+        setNewChannelUsername('');
+        setNewChannelInviteUrl('');
         loadPromotionChannels();
       } else {
-        showToast('❌ ' + (data.error || 'Failed to add channel'), 'error');
+        setAddChannelErrorDiagnostic(data);
+        showToast('❌ Verification Failed. Check diagnostic details below.', 'error');
       }
     } catch (err: any) {
       showToast('Error adding channel: ' + err.message, 'error');
     } finally {
       setIsAddingChannel(false);
+    }
+  };
+
+  const handleUpdateChannelSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedChannelForSettings) return;
+    try {
+      const res = await apiFetch('/api/admin/promotion-channels/update-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelId: selectedChannelForSettings.id,
+          autoPromotion: selectedChannelForSettings.autoPromotion,
+          testNotifications: selectedChannelForSettings.testNotifications,
+          inviteUrl: selectedChannelForSettings.inviteUrl,
+          active: selectedChannelForSettings.active,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🟢 Channel settings saved!', 'success');
+        setSelectedChannelForSettings(null);
+        loadPromotionChannels();
+      } else {
+        showToast('❌ ' + (data.error || 'Failed to update settings'), 'error');
+      }
+    } catch (err: any) {
+      showToast('Error saving channel settings: ' + err.message, 'error');
     }
   };
 
@@ -215,7 +292,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
       });
       const data = await res.json();
       if (data.success) {
-        showToast('Channel deleted', 'success');
+        showToast('Channel removed', 'success');
         setChannels(prev => prev.filter(c => c.id !== channelId));
       }
     } catch (err: any) {
@@ -232,7 +309,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
       });
       const data = await res.json();
       if (data.success) {
-        showToast('✅ ' + data.message, 'success');
+        showToast('🟢 Test message sent successfully!', 'success');
         loadPromotionChannels();
       } else {
         showToast('❌ ' + (data.error || 'Test failed'), 'error');
@@ -242,11 +319,35 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     }
   };
 
+  const handleRetryPost = async (postId: string) => {
+    setRetryingPostId(postId);
+    try {
+      const res = await apiFetch('/api/admin/promotion-channels/retry-post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('🟢 Post retried successfully!', 'success');
+        loadPostHistory();
+        loadPromotionChannels();
+      } else {
+        showToast('❌ ' + (data.error || 'Retry failed'), 'error');
+      }
+    } catch (err: any) {
+      showToast('Error retrying post: ' + err.message, 'error');
+    } finally {
+      setRetryingPostId(null);
+    }
+  };
+
   const handleOpenPublishModal = (task: TaskItem) => {
     setPublishingTask(task);
     setNotifyUsersCheck(true);
     setPostChannelsCheck(true);
     setIncludeImageCheck(!!task.taskImage);
+    setPublishProgress(null);
     setShowPublishModal(true);
   };
 
@@ -268,8 +369,8 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
       });
       const data = await res.json();
       if (data.success) {
-        showToast(`🎉 Published! Channels Target: ${data.channelsTargeted}, Success: ${data.channelsSuccess}`, 'success');
-        setShowPublishModal(false);
+        setPublishProgress(data);
+        showToast('🎉 Task Published & Distribution Initiated!', 'success');
         loadData();
       } else {
         showToast('❌ ' + (data.error || 'Failed to publish task'), 'error');
@@ -278,21 +379,6 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
       showToast('Error publishing task: ' + err.message, 'error');
     } finally {
       setIsPublishing(false);
-    }
-  };
-
-  const loadOverallStats = async () => {
-    setIsLoadingOverallStats(true);
-    try {
-      const res = await apiFetch('/api/admin/task-distribution-analytics');
-      const data = await res.json();
-      if (data.success) {
-        setOverallStats(data.stats);
-      }
-    } catch (err: any) {
-      showToast('Error loading analytics stats', 'error');
-    } finally {
-      setIsLoadingOverallStats(false);
     }
   };
 
@@ -662,84 +748,82 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   });
 
   const pendingCount = submissions.filter(s => s.status === 'PENDING_APPROVAL').length;
+  const totalTasksCount = tasks.length;
+  const activeTasksCount = tasks.filter(t => t.active).length;
+  const totalApprovedRewards = submissions.filter(s => s.status === 'APPROVED').reduce((sum, s) => sum + (s.reward || 0), 0);
+  const totalStartsCount = tasks.reduce((acc, t) => acc + (t.startsCount || 0), 0);
+
+  // Connected Channels Summary Metrics
+  const activeChannelsCount = channels.filter(c => c.active !== false && c.botAdminStatus).length;
+  const failedChannelsCount = channels.filter(c => !c.botAdminStatus || c.lastError).length;
+  const totalPostsSentCount = channels.reduce((acc, c) => acc + (c.postsSentCount || 0), 0);
 
   return (
-    <div className="space-y-6 max-w-full overflow-x-hidden">
-      {/* Top Header & Tab Switcher */}
-      <div className="p-5 rounded-3xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-6 max-w-full overflow-x-hidden text-slate-100">
+      {/* Top Header & Sub-Tab Navigation Bar */}
+      <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md flex flex-col lg:flex-row lg:items-center justify-between gap-4 shadow-xl">
         <div>
           <h2 className="text-lg font-black text-white flex items-center gap-2">
             <ListTodo className="w-5 h-5 text-amber-500" />
-            <span>Task Management Suite</span>
+            <span>Roy Share Task Management Suite</span>
           </h2>
           <p className="text-xs text-slate-400 mt-1">
-            Configure dynamic app tasks, manual screenshot audit workflows, and admin group approvals.
+            Roy Share Wallet exclusive earning tasks, manual screenshot audits, and multi-channel Telegram auto promotion.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="p-1 rounded-2xl bg-slate-950 border border-slate-800 flex items-center gap-1">
             <button
               onClick={() => setActiveSubTab('tasks')}
               className={`py-2 px-4 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                 activeSubTab === 'tasks'
-                  ? 'bg-amber-500 text-slate-950 shadow'
+                  ? 'bg-amber-500 text-slate-950 shadow-md'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <Layers className="w-3.5 h-3.5" />
-              <span>Tasks Config</span>
+              <span>📋 Tasks Config</span>
             </button>
+
             <button
               onClick={() => setActiveSubTab('submissions')}
               className={`py-2 px-4 rounded-xl text-xs font-bold transition flex items-center gap-1.5 relative ${
                 activeSubTab === 'submissions'
-                  ? 'bg-amber-500 text-slate-950 shadow'
+                  ? 'bg-amber-500 text-slate-950 shadow-md'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>Manual Audits</span>
+              <span>🛡 Manual Audits</span>
               {pendingCount > 0 && (
                 <span className="ml-1 px-1.5 py-0.2 text-[9px] font-black rounded-full bg-rose-500 text-white animate-pulse">
                   {pendingCount}
                 </span>
               )}
             </button>
+
             <button
               onClick={() => {
                 setActiveSubTab('channels');
                 loadPromotionChannels();
+                loadPostHistory();
               }}
               className={`py-2 px-4 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                 activeSubTab === 'channels'
-                  ? 'bg-amber-500 text-slate-950 shadow'
+                  ? 'bg-amber-500 text-slate-950 shadow-md'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <Tv className="w-3.5 h-3.5" />
-              <span>Connected Channels</span>
-            </button>
-            <button
-              onClick={() => {
-                setActiveSubTab('analytics');
-                loadOverallStats();
-              }}
-              className={`py-2 px-4 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-                activeSubTab === 'analytics'
-                  ? 'bg-amber-500 text-slate-950 shadow'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>Analytics</span>
+              <span>📢 Connected Channels</span>
             </button>
           </div>
 
           <button
             onClick={loadData}
             className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition"
-            title="Refresh list"
+            title="Refresh Task Data"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-amber-400' : ''}`} />
           </button>
@@ -758,9 +842,95 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
       {/* SUBTAB 1: TASKS CONFIGURATION */}
       {activeSubTab === 'tasks' && (
-        <>
+        <div className="space-y-5">
+          {/* Top Task Management Stats Bar */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Tasks</span>
+              <p className="text-lg font-black text-amber-400">{totalTasksCount}</p>
+              <span className="text-[10px] text-slate-500 block">{activeTasksCount} Active Now</span>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Pending Audits</span>
+              <p className="text-lg font-black text-rose-400">{pendingCount}</p>
+              <span className="text-[10px] text-slate-500 block">Requires Manual Review</span>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Rewards Approved</span>
+              <p className="text-lg font-black text-emerald-400">₹{totalApprovedRewards}</p>
+              <span className="text-[10px] text-slate-500 block">Credited to Users</span>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Task Starts</span>
+              <p className="text-lg font-black text-purple-400">{totalStartsCount}</p>
+              <span className="text-[10px] text-slate-500 block">User Interactions</span>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1 col-span-2 sm:col-span-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Actions</span>
+              <button
+                onClick={() => {
+                  setShowDistributionHistory(!showDistributionHistory);
+                  if (!showDistributionHistory) loadDistributionHistory();
+                }}
+                className="w-full py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold rounded-xl border border-slate-700 transition flex items-center justify-center gap-1"
+              >
+                <Activity className="w-3.5 h-3.5 text-amber-400" />
+                <span>{showDistributionHistory ? 'Hide History' : 'Distribution Logs'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Distribution History Panel */}
+          {showDistributionHistory && (
+            <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <h4 className="text-xs font-black text-white flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-amber-400" />
+                  <span>Task Distribution & Broadcast Logs</span>
+                </h4>
+                <button
+                  onClick={loadDistributionHistory}
+                  className="text-xs text-amber-400 hover:underline flex items-center gap-1"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isLoadingDistHistory ? 'animate-spin' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+
+              {isLoadingDistHistory ? (
+                <p className="text-xs text-slate-400 py-4 text-center">Loading logs...</p>
+              ) : distributionHistory.length === 0 ? (
+                <p className="text-xs text-slate-500 py-4 text-center">No distribution records found yet.</p>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {distributionHistory.map((item) => (
+                    <div key={item.id} className="p-3 rounded-xl bg-slate-950 border border-slate-850 text-xs space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-amber-400">{item.taskTitle}</span>
+                        <span className="text-[10px] font-mono text-slate-500">
+                          {new Date(item.publishedAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-300">
+                        <span>👥 Users Sent: <strong className="text-emerald-400">{item.usersSent || 0}</strong></span>
+                        <span>📢 Channels Sent: <strong className="text-purple-400">{item.channelsSuccess || 0}</strong></span>
+                        {item.channelsFailed > 0 && <span className="text-rose-400 font-bold">Failed Channels: {item.channelsFailed}</span>}
+                        <span className="text-slate-500 uppercase font-mono text-[9px]">{item.status}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Create / Edit Task Form */}
           {showForm && (
-            <form onSubmit={handleSaveTask} className="p-5 sm:p-6 rounded-3xl bg-slate-900/90 border border-slate-800 space-y-5 backdrop-blur-md">
+            <form onSubmit={handleSaveTask} className="p-5 sm:p-6 rounded-3xl bg-slate-900/90 border border-slate-800 space-y-5 backdrop-blur-md shadow-2xl">
               <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                 <span className="text-sm font-black text-white flex items-center gap-2">
                   <FileText className="w-4 h-4 text-amber-400" />
@@ -781,7 +951,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                   <label className="text-xs font-bold text-slate-300 block">1. Task Title / Headline *</label>
                   <input
                     type="text"
-                    placeholder="e.g. Complete Account Registration"
+                    placeholder="e.g. Complete Registration on Partner Site"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
@@ -969,7 +1139,6 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                           onChange={(e) => setTelegramAdminChatId(e.target.value)}
                           className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-mono text-amber-400 outline-none"
                         />
-                        <p className="text-[11px] text-slate-400">Admin review notifications will be received here.</p>
                       </div>
 
                       <div className="pt-1 flex flex-wrap items-center gap-2">
@@ -977,7 +1146,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                           type="button"
                           onClick={handleVerifyTelegramGroup}
                           disabled={isVerifyingGroup}
-                          className="py-2.5 px-4 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+                          className="py-2 px-3 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
                         >
                           {isVerifyingGroup ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
                           <span>VERIFY & SAVE TELEGRAM CONFIG</span>
@@ -987,7 +1156,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                           type="button"
                           onClick={handleSendTestMessage}
                           disabled={isSendingTestMsg}
-                          className="py-2.5 px-4 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-500/30 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+                          className="py-2 px-3 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 border border-blue-500/30 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
                         >
                           {isSendingTestMsg ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                           <span>SEND TEST MESSAGE</span>
@@ -1018,7 +1187,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                     {/* Settings: Resubmission & Limits */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800">
                       <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-850">
-                        <span className="text-xs font-bold text-slate-300">Allow Resubmission After Rejection</span>
+                        <span className="text-xs font-bold text-slate-300">Allow Resubmission</span>
                         <button
                           type="button"
                           onClick={() => setAllowResubmission(!allowResubmission)}
@@ -1037,7 +1206,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                           onChange={(e) => setMaxSubmissionsPerUser(Number(e.target.value))}
                           className="bg-slate-900 border border-slate-800 text-xs font-bold text-amber-400 rounded-lg px-2.5 py-1 outline-none"
                         >
-                          <option value={1}>1 Submissions</option>
+                          <option value={1}>1 Submission</option>
                           <option value={2}>2 Submissions</option>
                           <option value={3}>3 Submissions</option>
                           <option value={999}>Unlimited</option>
@@ -1053,7 +1222,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                     <label className="text-xs font-bold text-slate-300 block">External Link (URL - Optional)</label>
                     <input
                       type="url"
-                      placeholder="e.g. https://t.me/news_channel"
+                      placeholder="e.g. https://t.me/royshare_channel"
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-mono text-white outline-none"
@@ -1063,7 +1232,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
                 {/* Sort Order & Icon */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-300 block">Sort Order (Rank Index)</label>
+                  <label className="text-xs font-bold text-slate-300 block">Sort Order Index</label>
                   <input
                     type="number"
                     placeholder="e.g. 10"
@@ -1074,7 +1243,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-300 block">Select Task Icon</label>
+                  <label className="text-xs font-bold text-slate-300 block">Task Icon</label>
                   <div className="grid grid-cols-2 gap-2">
                     {iconsList.map((ic) => {
                       const IconComp = ic.icon;
@@ -1110,7 +1279,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                     ) : (
                       <ToggleLeft className="w-6 h-6 text-slate-600" />
                     )}
-                    <span>Task is active and published to users</span>
+                    <span>Task is active and available to Roy Share Wallet users</span>
                   </button>
                 </div>
               </div>
@@ -1128,7 +1297,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                   className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-lg shadow-amber-500/10 transition"
                 >
                   <Check className="w-4 h-4" />
-                  <span>{editingId ? 'Save Edits' : 'Publish Task'}</span>
+                  <span>{editingId ? 'Save Edits' : 'Create Task'}</span>
                 </button>
               </div>
             </form>
@@ -1138,16 +1307,16 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
           {isLoading ? (
             <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800/60 flex flex-col items-center justify-center gap-3">
               <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-xs text-slate-400">Loading dynamic tasks...</p>
+              <p className="text-xs text-slate-400">Loading Roy Share Wallet earning tasks...</p>
             </div>
           ) : tasks.length === 0 ? (
             <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800/60 text-center space-y-2">
-              <p className="text-xs text-slate-500">No custom tasks published yet.</p>
+              <p className="text-xs text-slate-500">No earning tasks created yet.</p>
               <button
                 onClick={handleCreateNew}
                 className="text-xs text-amber-400 hover:underline font-bold inline-flex items-center gap-1"
               >
-                <Plus className="w-3.5 h-3.5" /> Publish your first task
+                <Plus className="w-3.5 h-3.5" /> Add your first earning task
               </button>
             </div>
           ) : (
@@ -1157,9 +1326,9 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                 return (
                   <div
                     key={task.id}
-                    className={`p-5 rounded-3xl border transition flex flex-col justify-between gap-4 backdrop-blur-md ${
+                    className={`p-5 rounded-3xl border transition flex flex-col justify-between gap-4 backdrop-blur-md shadow-lg ${
                       task.active
-                        ? 'bg-slate-900/60 border-slate-800/80 hover:border-slate-700'
+                        ? 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
                         : 'bg-slate-950/40 border-slate-900 opacity-65'
                     }`}
                   >
@@ -1167,16 +1336,16 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-3">
                           {task.taskImage ? (
-                            <img src={task.taskImage} alt="Task" className="w-10 h-10 rounded-xl object-cover border border-slate-800" />
+                            <img src={task.taskImage} alt="Task" className="w-10 h-10 rounded-xl object-cover border border-slate-800 shrink-0" />
                           ) : (
-                            <div className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-amber-400">
+                            <div className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-amber-400 shrink-0">
                               <IconComponent className="w-5 h-5" />
                             </div>
                           )}
                           <div>
                             <h4 className="text-sm font-black text-white line-clamp-1">{task.title}</h4>
                             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                              Rank Order: {task.sortOrder}
+                              Sort Index: {task.sortOrder}
                             </span>
                           </div>
                         </div>
@@ -1185,7 +1354,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                             ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                             : 'bg-slate-900 text-slate-500 border border-slate-800'
                         }`}>
-                          {task.active ? 'ACTIVE' : 'DISABLED'}
+                          {task.active ? '🟢 ACTIVE' : '🔴 DISABLED'}
                         </span>
                       </div>
 
@@ -1195,7 +1364,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                         </p>
                       )}
 
-                      <div className="flex flex-wrap items-center gap-3 text-xs font-bold pt-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-bold pt-1">
                         <div className="flex items-center gap-1 text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/20">
                           <DollarSign className="w-3.5 h-3.5" />
                           <span>₹{task.reward} Reward</span>
@@ -1203,7 +1372,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                         {task.coins > 0 && (
                           <div className="flex items-center gap-1 text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-lg border border-purple-500/20">
                             <Coins className="w-3.5 h-3.5" />
-                            <span>{task.coins} Coins</span>
+                            <span>+{task.coins} Coins</span>
                           </div>
                         )}
                         <span className={`text-[10px] uppercase font-black px-2 py-0.5 rounded ${
@@ -1220,39 +1389,39 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                           href={task.externalDestinationUrl || task.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-[10px] text-sky-400 hover:underline flex items-center gap-1 font-mono break-all"
+                          className="text-[10px] text-sky-400 hover:underline flex items-center gap-1 font-mono truncate"
                         >
                           <ExternalLink className="w-3 h-3 shrink-0" />
-                          <span>{task.externalDestinationUrl || task.url}</span>
+                          <span className="truncate">{task.externalDestinationUrl || task.url}</span>
                         </a>
                       )}
                     </div>
 
-                    <div className="flex items-center justify-between pt-3 border-t border-slate-800">
-                      <button
-                        onClick={() => handleToggleActive(task)}
-                        className={`flex items-center gap-1 text-[10px] font-bold transition ${
-                          task.active ? 'text-slate-400 hover:text-amber-400' : 'text-emerald-500 hover:text-emerald-400'
-                        }`}
-                      >
-                        {task.active ? (
-                          <>
-                            <EyeOff className="w-3.5 h-3.5" />
-                            <span>Disable</span>
-                          </>
-                        ) : (
-                          <>
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>Enable</span>
-                          </>
-                        )}
-                      </button>
-
+                    {/* Action Buttons */}
+                    <div className="flex items-center justify-between pt-3 border-t border-slate-800 gap-2 flex-wrap">
                       <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setPreviewTaskModal(task)}
+                          className="flex items-center gap-1 py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold transition"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Preview</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleToggleActive(task)}
+                          className={`flex items-center gap-1 py-1 px-2.5 rounded-lg text-xs font-bold transition ${
+                            task.active ? 'text-slate-400 hover:text-amber-400 bg-slate-950' : 'text-emerald-400 bg-emerald-500/10 border border-emerald-500/20'
+                          }`}
+                        >
+                          {task.active ? 'Disable' : 'Activate'}
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
                         <button
                           onClick={() => handleOpenPublishModal(task)}
                           className="flex items-center gap-1 py-1 px-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-500/30 rounded-lg text-xs font-black transition"
-                          title="Publish & Auto Promote Task"
                         >
                           <Megaphone className="w-3.5 h-3.5" />
                           <span>Publish & Promote</span>
@@ -1262,7 +1431,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                           className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
                           title="Edit task"
                         >
-                          <Edit2 className="w-3.5 h-3.5" />
+                          <Edit2 className="w-3 h-3.5" />
                         </button>
                         <button
                           onClick={() => handleDeleteTask(task.id)}
@@ -1278,14 +1447,14 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
               })}
             </div>
           )}
-        </>
+        </div>
       )}
 
       {/* SUBTAB 2: MANUAL SUBMISSIONS AUDIT */}
       {activeSubTab === 'submissions' && (
         <div className="space-y-4">
-          {/* Filters & Search */}
-          <div className="p-4 rounded-3xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+          {/* Filters & Search Bar */}
+          <div className="p-4 rounded-3xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
               {(['ALL', 'PENDING', 'APPROVED', 'REJECTED'] as const).map((st) => {
                 const isSelected = submissionStatusFilter === st;
@@ -1311,11 +1480,11 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
               })}
             </div>
 
-            <div className="relative w-full md:w-64">
+            <div className="relative w-full md:w-72">
               <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3" />
               <input
                 type="text"
-                placeholder="Search user, mobile, UID..."
+                placeholder="Search mobile, username, TG ID, UID..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2 pl-9 pr-3 text-xs text-white outline-none"
@@ -1323,22 +1492,22 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
             </div>
           </div>
 
-          {/* Submissions List */}
+          {/* Submissions Cards */}
           {isLoading ? (
             <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800/60 flex flex-col items-center justify-center gap-3">
               <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-              <p className="text-xs text-slate-400">Loading manual task submissions...</p>
+              <p className="text-xs text-slate-400">Loading manual proof submissions...</p>
             </div>
           ) : filteredSubmissions.length === 0 ? (
             <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800/60 text-center space-y-2">
-              <p className="text-xs text-slate-500">No screenshot submissions found matching your filters.</p>
+              <p className="text-xs text-slate-500">No screenshot submissions found for this filter.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredSubmissions.map((sub) => (
                 <div
                   key={sub.id}
-                  className="p-4 rounded-3xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-md flex flex-col justify-between gap-3 hover:border-slate-700 transition"
+                  className="p-4 rounded-3xl bg-slate-900/80 border border-slate-800 backdrop-blur-md flex flex-col justify-between gap-3 hover:border-slate-700 transition shadow-lg"
                 >
                   <div className="space-y-3">
                     {/* Header info */}
@@ -1366,7 +1535,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                       >
                         <img src={sub.proofImageUrl} alt="Proof" className="w-full h-full object-cover group-hover:scale-105 transition" />
                         <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-xs font-bold text-white transition">
-                          🔍 View Proof Screenshot
+                          🔍 Click to View Full Screenshot
                         </div>
                       </div>
                     )}
@@ -1374,16 +1543,20 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                     {/* User & Mobile details */}
                     <div className="space-y-1 p-2.5 rounded-xl bg-slate-950 border border-slate-850 text-xs font-mono">
                       <div className="flex justify-between text-slate-300">
-                        <span className="text-slate-500">Mobile:</span>
+                        <span className="text-slate-500">Reg Mobile:</span>
                         <span className="font-bold text-amber-400">{sub.registrationMobile}</span>
                       </div>
                       <div className="flex justify-between text-slate-300">
                         <span className="text-slate-500">User:</span>
-                        <span className="truncate max-w-[140px] text-slate-200">{sub.userFullName || sub.telegramUsername || sub.userId}</span>
+                        <span className="truncate max-w-[130px] text-slate-200">{sub.userFullName || sub.telegramUsername || sub.userId}</span>
                       </div>
                       <div className="flex justify-between text-slate-300">
-                        <span className="text-slate-500">TG ID:</span>
+                        <span className="text-slate-500">Telegram ID:</span>
                         <span className="text-slate-400">{sub.telegramUserId}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-300">
+                        <span className="text-slate-500">User UID:</span>
+                        <span className="text-slate-400">{sub.userAppUid || sub.userId}</span>
                       </div>
                       <div className="flex justify-between text-slate-300">
                         <span className="text-slate-500">Submitted:</span>
@@ -1438,10 +1611,619 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
         </div>
       )}
 
+      {/* SUBTAB 3: CONNECTED PROMOTION CHANNELS */}
+      {activeSubTab === 'channels' && (
+        <div className="space-y-5">
+          {/* Header & Main Actions */}
+          <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
+            <div>
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <Tv className="w-4 h-4 text-amber-400" />
+                <span>Connected Telegram Channels</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                New tasks will automatically be promoted to all active connected channels.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleVerifyAllChannels}
+                disabled={isVerifyingAllChannels}
+                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 transition flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isVerifyingAllChannels ? 'animate-spin text-amber-400' : ''}`} />
+                <span>VERIFY ALL CHANNELS</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setAddChannelErrorDiagnostic(null);
+                  setShowAddChannelModal(true);
+                }}
+                className="flex items-center gap-1.5 py-2.5 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg transition shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>ADD CHANNEL</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Connected Channels Stats Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Connected</span>
+              <p className="text-lg font-black text-amber-400">{channels.length}</p>
+            </div>
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Active Channels</span>
+              <p className="text-lg font-black text-emerald-400">{activeChannelsCount}</p>
+            </div>
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Failed / Issues</span>
+              <p className="text-lg font-black text-rose-400">{failedChannelsCount}</p>
+            </div>
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Posts Sent</span>
+              <p className="text-lg font-black text-purple-400">{totalPostsSentCount}</p>
+            </div>
+          </div>
+
+          {/* Channel Cards Grid */}
+          {isLoadingChannels ? (
+            <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
+              <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+              <span>Loading promotion channels...</span>
+            </div>
+          ) : channels.length === 0 ? (
+            <div className="p-10 rounded-3xl bg-slate-900/40 border border-slate-800 text-center space-y-2">
+              <p className="text-xs text-slate-400">No promotion channels connected yet.</p>
+              <button
+                onClick={() => setShowAddChannelModal(true)}
+                className="text-xs text-amber-400 hover:underline font-bold inline-flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add your first Telegram channel
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {channels.map((ch) => (
+                <div
+                  key={ch.id}
+                  className={`p-5 rounded-3xl border transition space-y-3 shadow-lg ${
+                    ch.active && ch.botAdminStatus
+                      ? 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                      : 'bg-slate-950/40 border-slate-900 opacity-80'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-black text-white flex items-center gap-1.5">
+                        <Tv className="w-4 h-4 text-amber-400" />
+                        <span>{ch.title || ch.name}</span>
+                      </h4>
+                      <p className="text-xs text-sky-400 font-mono mt-0.5">{ch.username || ch.chatId}</p>
+                    </div>
+
+                    <div className="flex flex-col items-end gap-1">
+                      <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
+                        ch.active
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                          : 'bg-slate-900 text-slate-500 border border-slate-800'
+                      }`}>
+                        {ch.active ? '🟢 ACTIVE' : '🔴 INACTIVE'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Channel Health Status Tags */}
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                    <div className={`p-2 rounded-xl border flex items-center justify-between ${
+                      ch.botAdminStatus ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300' : 'bg-rose-500/10 border-rose-500/20 text-rose-300'
+                    }`}>
+                      <span>🤖 Bot Admin:</span>
+                      <strong>{ch.botAdminStatus ? 'YES' : 'NO'}</strong>
+                    </div>
+
+                    <div className={`p-2 rounded-xl border flex items-center justify-between ${
+                      ch.canPost ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300' : 'bg-rose-500/10 border-rose-500/20 text-rose-300'
+                    }`}>
+                      <span>📤 Can Post:</span>
+                      <strong>{ch.canPost ? 'YES' : 'NO'}</strong>
+                    </div>
+                  </div>
+
+                  {ch.lastError && (
+                    <div className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-xl space-y-0.5 font-mono">
+                      <span className="font-bold block">⚠️ Telegram Error:</span>
+                      <p>{ch.lastError}</p>
+                    </div>
+                  )}
+
+                  {/* Stats line */}
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono pt-1">
+                    <span>Auto Promote: <strong className="text-amber-400">{ch.autoPromotion !== false ? 'ON' : 'OFF'}</strong></span>
+                    <span>Posts Sent: <strong className="text-emerald-400">{ch.postsSentCount || 0}</strong></span>
+                  </div>
+
+                  {/* Card Actions */}
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-800 text-xs flex-wrap gap-2">
+                    <button
+                      onClick={() => handleToggleChannel(ch.id, ch.active)}
+                      className={`flex items-center gap-1 font-bold ${
+                        ch.active ? 'text-emerald-400' : 'text-slate-500'
+                      }`}
+                    >
+                      {ch.active ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
+                      <span>{ch.active ? 'Disable' : 'Enable'}</span>
+                    </button>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => handleTestChannel(ch.id)}
+                        className="py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-lg transition text-[11px]"
+                      >
+                        🧪 Test
+                      </button>
+
+                      <button
+                        onClick={() => setSelectedChannelForSettings(ch)}
+                        className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+                        title="Channel Settings"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        onClick={() => handleDeleteChannel(ch.id)}
+                        className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition"
+                        title="Remove Channel"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* POST HISTORY SECTION */}
+          <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h4 className="text-xs font-black text-white flex items-center gap-2">
+                <Clock className="w-4 h-4 text-amber-400" />
+                <span>📜 Channel Auto-Post History</span>
+              </h4>
+              <button
+                onClick={loadPostHistory}
+                className="text-xs text-amber-400 hover:underline flex items-center gap-1 font-bold"
+              >
+                <RefreshCw className={`w-3 h-3 ${isLoadingPostHistory ? 'animate-spin' : ''}`} />
+                <span>Refresh History</span>
+              </button>
+            </div>
+
+            {isLoadingPostHistory ? (
+              <p className="text-xs text-slate-400 py-4 text-center">Loading post history...</p>
+            ) : postHistory.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4 text-center">No channel posts executed yet.</p>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {postHistory.map((post) => (
+                  <div key={post.id} className="p-3 rounded-2xl bg-slate-950 border border-slate-850 text-xs flex flex-col md:flex-row md:items-center justify-between gap-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-white">{post.taskTitle || 'Earning Task'}</span>
+                        <span className="text-slate-500">→</span>
+                        <span className="text-sky-400 font-bold">{post.channelTitle || post.channelChatId}</span>
+                      </div>
+                      {post.lastError && (
+                        <p className="text-[11px] text-rose-400 font-mono">Error: {post.lastError}</p>
+                      )}
+                      <span className="text-[10px] text-slate-500 font-mono block">
+                        {new Date(post.postedAt || post.failedAt).toLocaleString()}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${
+                        post.status === 'SUCCESS'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                          : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                      }`}>
+                        {post.status}
+                      </span>
+
+                      {post.status !== 'SUCCESS' && (
+                        <button
+                          onClick={() => handleRetryPost(post.id)}
+                          disabled={retryingPostId === post.id}
+                          className="py-1 px-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-black rounded-lg transition flex items-center gap-1"
+                        >
+                          <RotateCcw className={`w-3 h-3 ${retryingPostId === post.id ? 'animate-spin' : ''}`} />
+                          <span>Retry</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* TASK PREVIEW MODAL */}
+      {previewTaskModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <Eye className="w-4 h-4 text-amber-400" />
+                <span>Task Preview</span>
+              </h3>
+              <button
+                onClick={() => setPreviewTaskModal(null)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-850 space-y-3">
+              {previewTaskModal.taskImage && (
+                <img src={previewTaskModal.taskImage} alt="Task" className="w-full h-32 object-cover rounded-xl border border-slate-800" />
+              )}
+              <h4 className="text-sm font-black text-white">{previewTaskModal.title}</h4>
+              <p className="text-xs text-slate-300 leading-relaxed">{previewTaskModal.description}</p>
+              <div className="flex items-center gap-3 text-xs font-bold pt-1">
+                <span className="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">₹{previewTaskModal.reward} Reward</span>
+                <span className="text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">+{previewTaskModal.coins} Coins</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setPreviewTaskModal(null)}
+                className="py-2 px-4 rounded-xl bg-slate-800 text-slate-200 text-xs font-bold"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PUBLISH & PROMOTIONS REAL-TIME MODAL */}
+      {showPublishModal && publishingTask && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <Megaphone className="w-4 h-4 text-amber-400" />
+                <span>Publish & Broadcast Task</span>
+              </h3>
+              <button
+                onClick={() => setShowPublishModal(false)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {!publishProgress ? (
+              <>
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-850 space-y-2">
+                  <h4 className="text-sm font-black text-amber-400">{publishingTask.title}</h4>
+                  <div className="flex items-center gap-3 text-xs font-bold text-slate-300">
+                    <span>Reward: ₹{publishingTask.reward}</span>
+                    <span>Coins: +{publishingTask.coins || 0}</span>
+                  </div>
+                  <p className="text-[11px] text-sky-400 font-mono break-all pt-1">
+                    Deep Link: https://t.me/Roy_wallett_bot?start=task_{publishingTask.id}
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  <span className="text-xs font-bold text-slate-300 block">Distribution Settings:</span>
+
+                  <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-bold text-white block">Notify Roy Share Wallet Users</span>
+                      <span className="text-[10px] text-slate-400 block">Send task notification in background to active users</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={notifyUsersCheck}
+                      onChange={(e) => setNotifyUsersCheck(e.target.checked)}
+                      className="w-4 h-4 accent-amber-500 rounded"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-bold text-white block">Post to Connected Channels</span>
+                      <span className="text-[10px] text-slate-400 block">Auto-post task card with Start Task deep link to active channels</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={postChannelsCheck}
+                      onChange={(e) => setPostChannelsCheck(e.target.checked)}
+                      className="w-4 h-4 accent-amber-500 rounded"
+                    />
+                  </label>
+
+                  {publishingTask.taskImage && (
+                    <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-bold text-white block">Include Task Image</span>
+                        <span className="text-[10px] text-slate-400 block">Send task photo card in channel posts</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={includeImageCheck}
+                        onChange={(e) => setIncludeImageCheck(e.target.checked)}
+                        className="w-4 h-4 accent-amber-500 rounded"
+                      />
+                    </label>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowPublishModal(false)}
+                    className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExecutePublish}
+                    disabled={isPublishing}
+                    className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition flex items-center gap-1.5"
+                  >
+                    {isPublishing ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
+                    <span>🚀 Publish & Broadcast Now</span>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 space-y-1">
+                  <h4 className="text-sm font-black flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>TASK PUBLISHED SUCCESSFULLY</span>
+                  </h4>
+                  <p className="text-xs">Task is now live for Roy Share Wallet users.</p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-950 border border-slate-850 space-y-2 text-xs">
+                  <div className="flex justify-between text-slate-300">
+                    <span>Eligible Users Target:</span>
+                    <strong className="text-sky-400">{publishProgress.eligibleUsersCount}</strong>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Channels Posted:</span>
+                    <strong className="text-emerald-400">{publishProgress.channelsSuccess} / {publishProgress.channelsTargeted}</strong>
+                  </div>
+                  <p className="text-[11px] text-slate-400 pt-1">
+                    User notification broadcast is processing in background queue.
+                  </p>
+                </div>
+
+                {publishProgress.channelResults && publishProgress.channelResults.length > 0 && (
+                  <div className="space-y-1.5">
+                    <span className="text-xs font-bold text-slate-300 block">Channel Posting Results:</span>
+                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                      {publishProgress.channelResults.map((chRes: any) => (
+                        <div key={chRes.channelId} className="p-2.5 rounded-xl bg-slate-950 border border-slate-850 text-xs flex items-center justify-between">
+                          <span className="font-bold text-white">{chRes.title}</span>
+                          <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${
+                            chRes.status === 'SUCCESS' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
+                          }`}>
+                            {chRes.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={() => setShowPublishModal(false)}
+                    className="py-2.5 px-5 rounded-xl bg-amber-500 text-slate-950 font-black text-xs"
+                  >
+                    Done / Close
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ADD CHANNEL MODAL WITH DIAGNOSTIC BOX */}
+      {showAddChannelModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <form onSubmit={handleAddChannel} className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <Tv className="w-4 h-4 text-amber-400" />
+                <span>Connect Promotion Channel</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAddChannelModal(false)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Channel Label / Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Roy Share Official Channel"
+                  value={newChannelName}
+                  onChange={(e) => setNewChannelName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Telegram Chat ID or Username *</label>
+                <input
+                  type="text"
+                  placeholder="e.g. @royshare_channel or -1001234567890"
+                  value={newChannelChatId}
+                  onChange={(e) => setNewChannelChatId(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Invite URL (Optional)</label>
+                <input
+                  type="url"
+                  placeholder="https://t.me/+xxxxxx"
+                  value={newChannelInviteUrl}
+                  onChange={(e) => setNewChannelInviteUrl(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs text-white outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <span className="text-xs font-bold text-slate-300">Auto Task Promotion</span>
+                <button
+                  type="button"
+                  onClick={() => setNewAutoPromotion(!newAutoPromotion)}
+                  className={`text-xs font-black px-3 py-1 rounded-lg transition ${
+                    newAutoPromotion ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-500'
+                  }`}
+                >
+                  {newAutoPromotion ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              {addChannelErrorDiagnostic && (
+                <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 space-y-2 text-xs">
+                  <div className="font-black text-rose-400">{addChannelErrorDiagnostic.error}</div>
+                  {addChannelErrorDiagnostic.diagnostic?.reasons && (
+                    <div className="space-y-1 text-[11px] text-rose-200">
+                      <span className="font-bold block">Possible Reasons:</span>
+                      <ul className="list-disc list-inside space-y-0.5 text-slate-300">
+                        {addChannelErrorDiagnostic.diagnostic.reasons.map((r: string, idx: number) => (
+                          <li key={idx}>{r}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowAddChannelModal(false)}
+                className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isAddingChannel}
+                className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
+              >
+                {isAddingChannel ? 'Verifying...' : 'VERIFY & CONNECT CHANNEL'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* CHANNEL SETTINGS MODAL */}
+      {selectedChannelForSettings && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+          <form onSubmit={handleUpdateChannelSettings} className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="text-sm font-black text-white flex items-center gap-2">
+                <Settings className="w-4 h-4 text-amber-400" />
+                <span>Channel Settings</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setSelectedChannelForSettings(null)}
+                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-850 space-y-1">
+                <span className="text-xs font-bold text-white block">{selectedChannelForSettings.title}</span>
+                <span className="text-[11px] font-mono text-sky-400 block">{selectedChannelForSettings.username || selectedChannelForSettings.chatId}</span>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">Invite URL</label>
+                <input
+                  type="url"
+                  placeholder="https://t.me/..."
+                  value={selectedChannelForSettings.inviteUrl || ''}
+                  onChange={(e) => setSelectedChannelForSettings({ ...selectedChannelForSettings, inviteUrl: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs text-white outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800">
+                <span className="text-xs font-bold text-slate-300">Auto Task Promotion</span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedChannelForSettings({ ...selectedChannelForSettings, autoPromotion: !selectedChannelForSettings.autoPromotion })}
+                  className={`text-xs font-black px-3 py-1 rounded-lg transition ${
+                    selectedChannelForSettings.autoPromotion ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-500'
+                  }`}
+                >
+                  {selectedChannelForSettings.autoPromotion ? 'ON' : 'OFF'}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSelectedChannelForSettings(null)}
+                className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
+              >
+                Save Settings
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* FULL-SIZE PROOF SCREENSHOT MODAL */}
       {selectedSubmissionForModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <div>
                 <h3 className="text-sm font-black text-white">{selectedSubmissionForModal.taskTitle}</h3>
@@ -1514,7 +2296,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
       {/* REJECTION REASON MODAL */}
       {showRejectModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <h3 className="text-sm font-black text-white flex items-center gap-2">
                 <XCircle className="w-4 h-4 text-rose-500" />
@@ -1572,319 +2354,6 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
               </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* SUBTAB 3: CONNECTED PROMOTION CHANNELS */}
-      {activeSubTab === 'channels' && (
-        <div className="space-y-5">
-          <div className="flex items-center justify-between p-5 rounded-3xl bg-slate-900/60 border border-slate-800">
-            <div>
-              <h3 className="text-sm font-black text-white flex items-center gap-2">
-                <Tv className="w-4 h-4 text-amber-400" />
-                <span>Connected Promotion Channels</span>
-              </h3>
-              <p className="text-xs text-slate-400 mt-1">
-                Auto-post published tasks directly to these connected Telegram channels.
-              </p>
-            </div>
-            <button
-              onClick={() => setShowAddChannelModal(true)}
-              className="flex items-center gap-1.5 py-2 px-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl transition"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Connect Channel</span>
-            </button>
-          </div>
-
-          {isLoadingChannels ? (
-            <div className="p-8 rounded-3xl bg-slate-900/40 border border-slate-800 text-center text-xs text-slate-400">
-              Loading promotion channels...
-            </div>
-          ) : channels.length === 0 ? (
-            <div className="p-8 rounded-3xl bg-slate-900/40 border border-slate-800 text-center space-y-2">
-              <p className="text-xs text-slate-400">No promotion channels connected yet.</p>
-              <button
-                onClick={() => setShowAddChannelModal(true)}
-                className="text-xs text-amber-400 hover:underline font-bold inline-flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add your first Telegram channel
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {channels.map((ch) => (
-                <div
-                  key={ch.id}
-                  className={`p-5 rounded-3xl border transition space-y-3 ${
-                    ch.active
-                      ? 'bg-slate-900/60 border-slate-800'
-                      : 'bg-slate-950/40 border-slate-900 opacity-60'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="text-sm font-black text-white">{ch.title}</h4>
-                      <p className="text-xs text-sky-400 font-mono">{ch.username || ch.chatId}</p>
-                    </div>
-                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${
-                      ch.canPost
-                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                    }`}>
-                      {ch.canPost ? 'Admin & Can Post' : ch.isAdmin ? 'Admin' : 'Member'}
-                    </span>
-                  </div>
-
-                  {ch.lastError && (
-                    <p className="text-[11px] text-rose-400 bg-rose-500/10 border border-rose-500/20 p-2 rounded-xl">
-                      ⚠️ {ch.lastError}
-                    </p>
-                  )}
-
-                  <div className="flex items-center justify-between pt-3 border-t border-slate-800 text-xs">
-                    <button
-                      onClick={() => handleToggleChannel(ch.id, ch.active)}
-                      className={`flex items-center gap-1 font-bold ${
-                        ch.active ? 'text-emerald-400' : 'text-slate-500'
-                      }`}
-                    >
-                      {ch.active ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
-                      <span>{ch.active ? 'Active' : 'Disabled'}</span>
-                    </button>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleTestChannel(ch.id)}
-                        className="py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-lg transition"
-                      >
-                        Test Post
-                      </button>
-                      <button
-                        onClick={() => handleDeleteChannel(ch.id)}
-                        className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg transition"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* SUBTAB 4: DISTRIBUTION ANALYTICS */}
-      {activeSubTab === 'analytics' && (
-        <div className="space-y-5">
-          <div className="p-5 rounded-3xl bg-slate-900/60 border border-slate-800">
-            <h3 className="text-sm font-black text-white flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-amber-400" />
-              <span>Task & Promotion Distribution Analytics</span>
-            </h3>
-            <p className="text-xs text-slate-400 mt-1">
-              Performance metrics for Roy Share Wallet task system and promotion channel broadcasts.
-            </p>
-          </div>
-
-          {isLoadingOverallStats ? (
-            <div className="p-8 rounded-3xl bg-slate-900/40 border border-slate-800 text-center text-xs text-slate-400">
-              Loading distribution analytics...
-            </div>
-          ) : overallStats ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase">Total Tasks</span>
-                <p className="text-xl font-black text-amber-400">{overallStats.totalTasks || 0}</p>
-                <span className="text-[10px] text-slate-500">{overallStats.totalPublished || 0} Published</span>
-              </div>
-              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase">Eligible Users</span>
-                <p className="text-xl font-black text-sky-400">{overallStats.eligibleUsersCount || 0}</p>
-                <span className="text-[10px] text-slate-500">Roy Share Wallet</span>
-              </div>
-              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase">Channels</span>
-                <p className="text-xl font-black text-purple-400">{overallStats.connectedChannelsCount || 0}</p>
-                <span className="text-[10px] text-slate-500">Connected</span>
-              </div>
-              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase">Audits Approved</span>
-                <p className="text-xl font-black text-emerald-400">{overallStats.totalApproved || 0}</p>
-                <span className="text-[10px] text-slate-500">{overallStats.totalPending || 0} Pending</span>
-              </div>
-              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-1">
-                <span className="text-[10px] font-bold text-slate-400 uppercase">Total Paid Out</span>
-                <p className="text-xl font-black text-amber-400">₹{overallStats.totalPaidOut || 0}</p>
-                <span className="text-[10px] text-slate-500">Rewards</span>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      )}
-
-      {/* PUBLISH & PROMOTIONS MODAL */}
-      {showPublishModal && publishingTask && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="text-sm font-black text-white flex items-center gap-2">
-                <Megaphone className="w-4 h-4 text-amber-400" />
-                <span>Publish & Broadcast Task</span>
-              </h3>
-              <button
-                onClick={() => setShowPublishModal(false)}
-                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-850 space-y-2">
-              <h4 className="text-sm font-black text-amber-400">{publishingTask.title}</h4>
-              <div className="flex items-center gap-3 text-xs font-bold text-slate-300">
-                <span>Reward: ₹{publishingTask.reward}</span>
-                <span>Coins: +{publishingTask.coins || 0}</span>
-              </div>
-              <p className="text-[11px] text-sky-400 font-mono break-all pt-1">
-                Link: https://t.me/Roy_wallett_bot?start=task_{publishingTask.id}
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              <span className="text-xs font-bold text-slate-300 block">Distribution Settings:</span>
-
-              <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
-                <div className="space-y-0.5">
-                  <span className="text-xs font-bold text-white block">Auto Broadcast to Eligible Users</span>
-                  <span className="text-[10px] text-slate-400 block">Send task notification to all Roy Share Wallet users</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={notifyUsersCheck}
-                  onChange={(e) => setNotifyUsersCheck(e.target.checked)}
-                  className="w-4 h-4 accent-amber-500 rounded"
-                />
-              </label>
-
-              <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
-                <div className="space-y-0.5">
-                  <span className="text-xs font-bold text-white block">Post to Promotion Channels</span>
-                  <span className="text-[10px] text-slate-400 block">Auto-post task card with Start Task deep link to connected channels</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={postChannelsCheck}
-                  onChange={(e) => setPostChannelsCheck(e.target.checked)}
-                  className="w-4 h-4 accent-amber-500 rounded"
-                />
-              </label>
-
-              {publishingTask.taskImage && (
-                <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
-                  <div className="space-y-0.5">
-                    <span className="text-xs font-bold text-white block">Include Task Image</span>
-                    <span className="text-[10px] text-slate-400 block">Send task photo card in channel posts and messages</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={includeImageCheck}
-                    onChange={(e) => setIncludeImageCheck(e.target.checked)}
-                    className="w-4 h-4 accent-amber-500 rounded"
-                  />
-                </label>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={() => setShowPublishModal(false)}
-                className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleExecutePublish}
-                disabled={isPublishing}
-                className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition flex items-center gap-1.5"
-              >
-                {isPublishing ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Send className="w-3.5 h-3.5" />
-                )}
-                <span>Confirm Publish & Broadcast Now</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ADD CHANNEL MODAL */}
-      {showAddChannelModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
-          <form onSubmit={handleAddChannel} className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="text-sm font-black text-white flex items-center gap-2">
-                <Tv className="w-4 h-4 text-amber-400" />
-                <span>Connect Promotion Channel</span>
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowAddChannelModal(false)}
-                className="p-1 rounded-lg bg-slate-800 text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">Telegram Channel Chat ID or Username *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. @royshare_announcements or -1001234567890"
-                  value={newChannelChatId}
-                  onChange={(e) => setNewChannelChatId(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">Channel Label / Title (Optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Roy Share Official Channel"
-                  value={newChannelTitle}
-                  onChange={(e) => setNewChannelTitle(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs font-bold text-white outline-none"
-                />
-              </div>
-              <p className="text-[10px] text-amber-400 bg-amber-500/10 p-2.5 rounded-xl border border-amber-500/20">
-                📌 Note: Make sure the Roy Share Wallet Bot is added as an <b>Admin</b> in the channel with permission to post messages.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={() => setShowAddChannelModal(false)}
-                className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isAddingChannel}
-                className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition"
-              >
-                {isAddingChannel ? 'Connecting...' : 'Connect Channel'}
-              </button>
-            </div>
-          </form>
         </div>
       )}
     </div>
