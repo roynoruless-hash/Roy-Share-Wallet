@@ -1003,10 +1003,36 @@ async function handleWithdrawalWizardInput(bot: any, message: any, chatSession: 
     });
 
   } else if (chatSession.step === 'AWAITING_WITHDRAW_DETAILS') {
-    if (!text || text.length < 3) {
+    const method = chatSession.method || 'UPI';
+    let isValid = true;
+    let errorMsg = '';
+
+    if (method === 'UPI') {
+      const isUpi = /^\S+@\S+$/.test(text);
+      if (!isUpi) {
+        isValid = false;
+        errorMsg = `❌ <b>Invalid UPI ID!</b> Please enter a valid UPI ID (e.g. <code>username@bank</code>):`;
+      }
+    } else if (method === 'ULTRA_PAY') {
+      const isMobile = /^\d{10}$/.test(text);
+      if (!isMobile) {
+        isValid = false;
+        errorMsg = `❌ <b>Invalid Ultra Pay Number!</b> Please enter a valid 10-digit registered mobile number (e.g. <code>9876543210</code>):`;
+      }
+    } else if (method === 'REDEEM_CODE') {
+      if (!text || text.length < 3) {
+        isValid = false;
+        errorMsg = `❌ <b>Invalid entry!</b> Please enter valid brand details (minimum 3 characters):`;
+      }
+    } else {
+      isValid = false;
+      errorMsg = `❌ <b>Unsupported withdrawal method!</b>`;
+    }
+
+    if (!isValid) {
       await sendTelegramApi(bot.token, 'sendMessage', {
         chat_id: userId,
-        text: `❌ <b>Invalid entry.</b> Please provide valid details:`,
+        text: errorMsg,
         parse_mode: 'HTML',
       });
       return;
@@ -1067,7 +1093,40 @@ async function handleConfirmWithdrawal(bot: any, userId: string) {
   const payoutAmount = Number((amount - taxAmount).toFixed(2));
   const totalDeduction = amount; // Lock the full amount requested
 
+  if (method === 'UPI' && !(chatSession as any).upiId) {
+    await sendTelegramApi(bot.token, 'sendMessage', {
+      chat_id: userId,
+      text: `❌ <b>UPI ID is required for UPI withdrawal.</b> Please initiate again using /start.`,
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+  if (method === 'ULTRA_PAY' && !(chatSession as any).paytoNumber) {
+    await sendTelegramApi(bot.token, 'sendMessage', {
+      chat_id: userId,
+      text: `❌ <b>Ultra Pay number is required for Ultra Pay withdrawal.</b> Please initiate again using /start.`,
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+  if (method === 'REDEEM_CODE' && !(chatSession as any).redeemCode) {
+    await sendTelegramApi(bot.token, 'sendMessage', {
+      chat_id: userId,
+      text: `❌ <b>Details are required for Redeem Code withdrawal.</b> Please initiate again using /start.`,
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
   const detailsValue = (chatSession as any).upiId || (chatSession as any).redeemCode || (chatSession as any).paytoNumber || '';
+  if (!detailsValue) {
+    await sendTelegramApi(bot.token, 'sendMessage', {
+      chat_id: userId,
+      text: `❌ <b>Payout details are missing.</b> Please try again.`,
+      parse_mode: 'HTML',
+    });
+    return;
+  }
 
   const userRef = doc(db, 'users', `${bot.botId}_${userId}`);
 
@@ -1075,22 +1134,40 @@ async function handleConfirmWithdrawal(bot: any, userId: string) {
     const withdrawalId = `EWD_${bot.botId}_${userId}_${Date.now()}`;
     const nowIso = new Date().toISOString();
 
+    const upiIdVal = method === 'UPI' ? detailsValue : '';
+    const paytoNumberVal = method === 'ULTRA_PAY' ? detailsValue : '';
+    const redeemCodeVal = method === 'REDEEM_CODE' ? detailsValue : '';
+
     const newWithdrawalRecord = {
+      id: withdrawalId,
       withdrawalId,
       botId: bot.botId,
+      earningBotId: bot.botId,
       uid: `${bot.botId}_${userId}`,
+      userId: `${bot.botId}_${userId}`,
       telegramId: userId,
       fullName: (chatSession as any).firstName || 'User',
       amount: amount,
+      amountRequested: amount,
       deductionAmount: totalDeduction,
+      totalDeduction,
       processingFee: 0,
       taxAmount: taxAmount,
       payoutAmount: payoutAmount,
+      finalPayout: payoutAmount,
+      grossAmount: amount,
+      netAmount: payoutAmount,
       method: method,
+      paymentMethod: method,
+      accountInfo: detailsValue,
+      accountInformation: detailsValue,
+      upiId: upiIdVal,
+      paytoNumber: paytoNumberVal,
+      redeemCodeDetails: redeemCodeVal,
       paymentDetails: {
-        upiId: (chatSession as any).upiId || '',
-        redeemCode: (chatSession as any).redeemCode || '',
-        paytoNumber: (chatSession as any).paytoNumber || '',
+        upiId: upiIdVal,
+        redeemCode: redeemCodeVal,
+        paytoNumber: paytoNumberVal,
       },
       status: 'PENDING',
       riskStatus: 'LOW',

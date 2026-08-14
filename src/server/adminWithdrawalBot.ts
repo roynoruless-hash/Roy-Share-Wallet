@@ -90,11 +90,14 @@ export async function sendAdminWithdrawalNotification(
   const riskInfo = calculateUserRiskLevel(userData, Number(wData.amount) || 0);
 
   // 3. Format UPI / Payment Details
-  let methodDetail = wData.upiId || 'N/A';
-  if (wData.method === 'qr') {
-    methodDetail = wData.qrImageUrl ? `<a href="${wData.qrImageUrl}">View QR Photo</a>` : 'QR Code Uploaded';
-  } else if (wData.method === 'redeem_code') {
-    methodDetail = `Redeem Code (${wData.redeemCodeDetails || 'N/A'})`;
+  let methodDetail = wData.accountInformation || wData.accountInfo || wData.upiId || 'N/A';
+  const normMethodLower = String(wData.method || '').toLowerCase();
+  if (normMethodLower === 'qr') {
+    methodDetail = (wData.qrImageUrl || wData.qrData) ? `<a href="${wData.qrImageUrl || wData.qrData}">View QR Photo</a>` : 'QR Code Uploaded';
+  } else if (normMethodLower === 'redeem_code') {
+    methodDetail = `Redeem Code (${wData.accountInformation || wData.accountInfo || wData.redeemCodeDetails || 'N/A'})`;
+  } else if (normMethodLower === 'ultra_pay' || normMethodLower === 'ultrapay' || normMethodLower.includes('ultra')) {
+    methodDetail = `Ultra Pay (${wData.accountInformation || wData.accountInfo || wData.paytoNumber || 'N/A'})`;
   }
 
   const reqTime = wData.createdAt
@@ -985,11 +988,14 @@ export async function handleAdminWithdrawalCallback(token: string, cb: any, admi
 
       const riskInfo = calculateUserRiskLevel(userData, Number(wData.amount) || 0);
 
-      let methodDetail = wData.upiId || 'N/A';
-      if (wData.method === 'qr') {
-        methodDetail = wData.qrImageUrl ? `<a href="${wData.qrImageUrl}">View QR Photo</a>` : 'QR Code Uploaded';
-      } else if (wData.method === 'redeem_code') {
-        methodDetail = `Redeem Code (${wData.redeemCodeDetails || 'N/A'})`;
+      let methodDetail = wData.accountInformation || wData.accountInfo || wData.upiId || 'N/A';
+      const normMethodLower = String(wData.method || '').toLowerCase();
+      if (normMethodLower === 'qr') {
+        methodDetail = (wData.qrImageUrl || wData.qrData) ? `<a href="${wData.qrImageUrl || wData.qrData}">View QR Photo</a>` : 'QR Code Uploaded';
+      } else if (normMethodLower === 'redeem_code') {
+        methodDetail = `Redeem Code (${wData.accountInformation || wData.accountInfo || wData.redeemCodeDetails || 'N/A'})`;
+      } else if (normMethodLower === 'ultra_pay' || normMethodLower === 'ultrapay' || normMethodLower.includes('ultra')) {
+        methodDetail = `Ultra Pay (${wData.accountInformation || wData.accountInfo || wData.paytoNumber || 'N/A'})`;
       }
 
       const reqTime = wData.createdAt
