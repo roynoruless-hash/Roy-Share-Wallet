@@ -98,8 +98,21 @@ export async function getReferralTokenInfo(tokenStr: string) {
 }
 
 /**
- * Perform complete Anti Self-Referral Device Verification & Fraud Checks (Version 2.0)
+ * Perform complete Anti Self-Referral Device Verification & Fraud Checks (Version 3.0)
  */
+function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371; // Radius of the Earth in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c;
+  return d;
+}
+
 export async function processReferralVerification(params: VerifyReferralParams) {
   const {
     token,
@@ -164,7 +177,7 @@ export async function processReferralVerification(params: VerifyReferralParams) 
     }
 
     // Check existing status
-    if (status === 'verified') {
+    if (status === 'verified' || status === 'approved') {
       return {
         success: true,
         alreadyVerified: true,
@@ -180,17 +193,46 @@ export async function processReferralVerification(params: VerifyReferralParams) 
       };
     }
 
-    // 2. ANTI-FRAUD CHECKS
-    let isFraud = false;
-    let fraudReason = '';
-
-    // Check A: Self Referral Check (Same Telegram ID or Same UID)
-    if (String(referrerUid) === String(referredUid)) {
-      isFraud = true;
-      fraudReason = 'Self Referral Detected: Referrer and Referred user have the same UID.';
+    // REQUIREMENT 6: VERIFIED REGISTRATION STATUS FILTER
+    // Check if referred user is fully registered, active, and verified
+    let referredSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', String(referredUid))));
+    if (referredSnap.empty) {
+      referredSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', String(referredUid))));
     }
 
-    // Check referrer's Telegram ID
+    if (referredSnap.empty) {
+      return {
+        success: false,
+        reason: 'VERIFICATION_INCOMPLETE',
+        message: 'Referred user registration not found. Please complete bot registration first.',
+      };
+    }
+
+    const refdUserData = referredSnap.docs[0].data();
+    const referredDocRef = referredSnap.docs[0].ref;
+
+    const isMobileVerified = refdUserData.mobileVerified === true || refdUserData.contactVerified === true;
+    const isTelegramVerified = refdUserData.telegramVerified === true || refdUserData.channelVerified === true;
+    const isActive = refdUserData.status === 'active' || refdUserData.accountActive === true;
+
+    if (!isMobileVerified || !isTelegramVerified || !isActive) {
+      return {
+        success: false,
+        reason: 'VERIFICATION_INCOMPLETE',
+        message: 'Referred user is not fully registration-completed or mobile-verified. Please ensure bot setup is complete.',
+      };
+    }
+
+    // 2. MULTI-SIGNAL RISK SCORING ENGINE
+    let riskScore = 0;
+    const riskFlags: string[] = [];
+
+    // Check A: Self Referral Check (Same Telegram ID or Same UID) -> 100 points
+    let isSelfReferral = false;
+    if (String(referrerUid) === String(referredUid)) {
+      isSelfReferral = true;
+    }
+
     let referrerTelegramId = '';
     let referrerSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', String(referrerUid))));
     if (referrerSnap.empty) {
@@ -200,106 +242,167 @@ export async function processReferralVerification(params: VerifyReferralParams) 
       const refUser = referrerSnap.docs[0].data();
       referrerTelegramId = String(refUser.telegramId || '');
       if (referrerTelegramId && String(referrerTelegramId) === String(referredTelegramId)) {
-        isFraud = true;
-        fraudReason = 'Self Referral Detected: Referrer and Referred user share the same Telegram ID.';
+        isSelfReferral = true;
       }
     }
 
-    // Check B: Banned Device or User Check
-    try {
-      const bannedDevQuery = query(
-        collection(db, 'bannedDevices'),
-        where('deviceFingerprint', '==', deviceFingerprint)
-      );
-      const bannedDevSnap = await getDocs(bannedDevQuery);
-      if (!bannedDevSnap.empty) {
-        isFraud = true;
-        fraudReason = 'Banned Device: This device has been banned from referral verification.';
-      }
-
-      if (localStorageId && localStorageId !== 'ls_unavailable') {
-        const bannedLsQuery = query(
-          collection(db, 'bannedDevices'),
-          where('localStorageId', '==', localStorageId)
-        );
-        const bannedLsSnap = await getDocs(bannedLsQuery);
-        if (!bannedLsSnap.empty) {
-          isFraud = true;
-          fraudReason = 'Banned Device: This device identifier has been banned.';
-        }
-      }
-    } catch (bErr) {
-      console.warn('Error checking banned devices:', bErr);
+    if (isSelfReferral) {
+      riskScore += 100;
+      riskFlags.push('Self Referral Detected');
     }
 
-    // Check C: Already Rewarded Check
-    let referredSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', String(referredUid))));
-    if (referredSnap.empty) {
-      referredSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', String(referredUid))));
-    }
-    let referredDocRef: any = null;
-    if (!referredSnap.empty) {
-      referredDocRef = doc(db, 'users', referredSnap.docs[0].id);
-      const refdUserData = referredSnap.docs[0].data();
-      if (refdUserData.referralRewardReceived === true) {
-        isFraud = true;
-        fraudReason = 'Already Rewarded: This user account has already received a referral reward.';
-      }
-      if (refdUserData.banned === true) {
-        isFraud = true;
-        fraudReason = 'Account Banned: This user account has been banned.';
-      }
+    // Check B: Already Rewarded Check -> 100 points
+    if (refdUserData.referralRewardReceived === true) {
+      riskScore += 100;
+      riskFlags.push('Already Rewarded Referral');
     }
 
-    // Check D: Same Device Fingerprint or LocalStorage ID Reuse
+    // Check C: Duplicate Device Fingerprint Registry -> 40 points
+    let isDuplicateFp = false;
     const fpQuery = query(
       collection(db, 'referralTokens'),
       where('deviceFingerprint', '==', deviceFingerprint),
       where('status', '==', 'verified')
     );
     const fpSnap = await getDocs(fpQuery);
-
     if (!fpSnap.empty) {
-      isFraud = true;
-      fraudReason = 'Same Device Detected: This device has already been used for another verified referral.';
+      isDuplicateFp = true;
+    } else {
+      // Check users collection
+      const uFpQuery = query(collection(db, 'users'), where('deviceFingerprint', '==', deviceFingerprint));
+      const uFpSnap = await getDocs(uFpQuery);
+      uFpSnap.forEach((dDoc) => {
+        if (dDoc.id !== referredUid && dDoc.id !== referrerUid) {
+          isDuplicateFp = true;
+        }
+      });
+    }
+    if (isDuplicateFp) {
+      riskScore += 40;
+      riskFlags.push('Duplicate Device Fingerprint');
     }
 
-    if (localStorageId && localStorageId !== 'ls_unavailable') {
-      const lsQuery = query(
-        collection(db, 'referralTokens'),
-        where('localStorageId', '==', localStorageId),
-        where('status', '==', 'verified')
-      );
-      const lsSnap = await getDocs(lsQuery);
-      if (!lsSnap.empty) {
-        isFraud = true;
-        fraudReason = 'Same Device Detected: Local storage identifier matches existing referral history.';
-      }
-    }
-
-    // Check Device Fingerprint Registry
+    // Check D: Same Device Registry (Device Fingerprints Collection) -> 35 points per extra account
+    let sameDeviceExtraAccounts = 0;
     const fpDocRef = doc(db, 'deviceFingerprints', deviceFingerprint);
     const fpRegistryDoc = await getDoc(fpDocRef);
-
     if (fpRegistryDoc.exists()) {
       const regData = fpRegistryDoc.data();
       const knownTelegramIds = regData.telegramIds || [];
-      const knownUids = regData.uids || [];
+      const otherTgs = knownTelegramIds.filter((id: string) => String(id) !== String(referredTelegramId));
+      sameDeviceExtraAccounts = otherTgs.length;
+    }
+    if (sameDeviceExtraAccounts > 0) {
+      riskScore += (sameDeviceExtraAccounts * 35);
+      riskFlags.push(`Same Device Registry: ${sameDeviceExtraAccounts} other account(s)`);
+    }
 
-      if (
-        (knownTelegramIds.length > 0 && !knownTelegramIds.includes(String(referredTelegramId))) ||
-        (knownUids.length > 0 && knownUids.includes(String(referrerUid)))
-      ) {
-        isFraud = true;
-        fraudReason = 'Same Device Detected: Device fingerprint matches existing referral history.';
+    // Check E: IP Reuse Check -> 15 points
+    let ipReuseCount = 0;
+    if (clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1' && clientIp !== 'localhost' && clientIp !== 'unknown') {
+      const ipQuery = query(collection(db, 'users'), where('ipAddress', '==', clientIp));
+      const ipSnap = await getDocs(ipQuery);
+      ipSnap.forEach((docSnap) => {
+        if (docSnap.id !== referredUid) {
+          ipReuseCount++;
+        }
+      });
+    }
+    if (ipReuseCount >= 3) {
+      riskScore += 15;
+      riskFlags.push(`Suspicious IP Reuse: ${ipReuseCount} other account(s)`);
+    }
+
+    // Check F: Enhanced Location Discrepancy (GPS vs IP) -> 30 points
+    let ipLat: number | null = null;
+    let ipLon: number | null = null;
+    let distanceKm = 0;
+    let locationDiscrepancy = false;
+
+    const isPrivateIp = !clientIp ||
+      clientIp === '127.0.0.1' ||
+      clientIp === '::1' ||
+      clientIp === 'localhost' ||
+      clientIp.startsWith('10.') ||
+      clientIp.startsWith('192.168.') ||
+      clientIp.startsWith('172.');
+
+    if (!isPrivateIp && locationCoords && typeof locationCoords.latitude === 'number' && typeof locationCoords.longitude === 'number') {
+      try {
+        const ipRes = await fetch(`http://ip-api.com/json/${clientIp}?fields=status,lat,lon`);
+        const ipData = await ipRes.json();
+        if (ipData && ipData.status === 'success' && typeof ipData.lat === 'number' && typeof ipData.lon === 'number') {
+          ipLat = ipData.lat;
+          ipLon = ipData.lon;
+
+          const gpsLat = locationCoords.latitude;
+          const gpsLon = locationCoords.longitude;
+
+          const isGpsValid = gpsLat >= -90 && gpsLat <= 90 && gpsLon >= -180 && gpsLon <= 180 && !(gpsLat === 0 && gpsLon === 0);
+          const isIpValid = ipLat >= -90 && ipLat <= 90 && ipLon >= -180 && ipLon <= 180 && !(ipLat === 0 && ipLon === 0);
+
+          if (isGpsValid && isIpValid) {
+            distanceKm = calculateHaversineDistance(gpsLat, gpsLon, ipLat, ipLon);
+            if (distanceKm > 1000) {
+              locationDiscrepancy = true;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[processReferralVerification] Resilient IP location look up failed:', err);
       }
     }
+
+    if (locationDiscrepancy) {
+      riskScore += 30;
+      riskFlags.push(`Location Discrepancy: ${Math.round(distanceKm)} km between GPS & IP`);
+    }
+
+    // Check G: Browser/Environment Signal & Bot Attack Detectors -> 50 points
+    let isBotOrHeadless = false;
+    if (rawSignals?.webdriver === true || rawSignals?.headless === true || (userAgent && (userAgent.toLowerCase().includes('headless') || userAgent.toLowerCase().includes('selenium') || userAgent.toLowerCase().includes('puppeteer')))) {
+      isBotOrHeadless = true;
+    }
+    if (isBotOrHeadless) {
+      riskScore += 50;
+      riskFlags.push('Automated/Headless Browser Detected');
+    }
+
+    // Check H: Referrer Abuse History -> 25 points
+    let referrerAbuseCount = 0;
+    const refAbuseQuery = query(
+      collection(db, 'referralLogs'),
+      where('referrerUid', '==', String(referrerUid)),
+      where('status', '==', 'rejected')
+    );
+    const refAbuseSnap = await getDocs(refAbuseQuery);
+    referrerAbuseCount = refAbuseSnap.size;
+    if (referrerAbuseCount >= 3) {
+      riskScore += 25;
+      riskFlags.push(`Referrer Abuse History: ${referrerAbuseCount} rejected referrals`);
+    }
+
+    // Determine Status
+    let statusValue: 'approved' | 'pending' | 'rejected' = 'approved';
+    const rejectReasonText = riskFlags.join(', ') || 'Security policy rejection.';
+
+    if (riskScore >= 80) {
+      statusValue = 'rejected';
+    } else if (riskScore >= 50) {
+      statusValue = 'pending';
+    } else {
+      statusValue = 'approved';
+    }
+
+    // Retrieve referred user's username for logging
+    const referredUsername = refdUserData?.username || 'Anonymous';
 
     // 3. LOG TO referralLogs COLLECTION
     try {
       await addDoc(collection(db, 'referralLogs'), {
         token,
         uid: String(referredUid),
+        referredUsername,
         referrerUid: String(referrerUid),
         telegramId: String(referredTelegramId),
         referredName: String(referredName || 'User'),
@@ -311,25 +414,36 @@ export async function processReferralVerification(params: VerifyReferralParams) 
         locationPermissionStatus: locationPermissionStatus || 'denied',
         locationCoords: locationCoords || null,
         verificationTime: new Date().toISOString(),
-        status: isFraud ? 'rejected' : 'approved',
-        rejectReason: isFraud ? fraudReason : '',
+        status: statusValue,
+        riskScore,
+        rejectReason: statusValue === 'rejected' ? rejectReasonText : '',
         rawSignals: rawSignals || {},
       });
     } catch (logErr) {
       console.warn('Failed recording referralLog:', logErr);
     }
 
-    // 4. IF FRAUD DETECTED -> REJECT REFERRAL
-    if (isFraud) {
+    // 4. ACTION BASED ON RISK VALUE
+    // A. HIGH RISK (>= 80) -> REJECT REFERRAL AND BAN USER
+    if (statusValue === 'rejected') {
       // Mark token as rejected
       await updateDoc(tokenRef, {
         status: 'rejected',
-        rejectReason: fraudReason,
+        riskScore,
+        rejectReason: rejectReasonText,
         deviceFingerprint,
         localStorageId,
         ipAddress: clientIp,
         userAgent,
         verifiedAt: new Date().toISOString(),
+      });
+
+      // BAN repeat offenders
+      await updateDoc(referredDocRef, {
+        banned: true,
+        status: 'banned',
+        banReason: `Fraudulent self-referral: ${rejectReasonText}`,
+        updatedAt: new Date().toISOString(),
       });
 
       // Update Device Fingerprint Log
@@ -360,10 +474,10 @@ export async function processReferralVerification(params: VerifyReferralParams) 
       try {
         await addDoc(collection(db, 'adminLogs'), {
           adminId: 'system_antifraud',
-          action: 'referral_rejected',
+          action: 'referral_rejected_and_user_banned',
           targetUid: String(referredUid),
           targetTelegramId: String(referredTelegramId),
-          reason: `Rejected: ${fraudReason} (Device FP: ${deviceFingerprint})`,
+          reason: `Auto Banned: ${rejectReasonText} (Device FP: ${deviceFingerprint})`,
           timestamp: new Date().toISOString(),
         });
       } catch (logErr) {
@@ -376,20 +490,52 @@ export async function processReferralVerification(params: VerifyReferralParams) 
         await sendTelegramMessage(
           botToken,
           referredTelegramId,
-          `❌ <b>Referral Verification Failed</b>\n\n` +
-            `<b>Reason:</b> Same Device Detected.\n\n` +
-            `Self-referrals or multiple Telegram accounts on the same device are not allowed. No referral reward has been granted.`
+          `❌ <b>Referral Blocked & Account Suspended</b>\n\n` +
+            `<b>Reason:</b> Multiple device registry or anti-fraud trigger.\n\n` +
+            `Your account has been placed under suspension for violating referral safety guidelines. No referral reward has been granted.`
         );
       }
 
       return {
         success: false,
         reason: 'SAME_DEVICE_DETECTED',
-        message: 'Self referrals or multiple Telegram accounts on the same device are not allowed.',
+        message: 'Self referrals or duplicate devices are not allowed. The account has been suspended.',
       };
     }
 
-    // 5. VERIFICATION PASSED -> CREDIT REFERRAL REWARD VIA TRANSACTION
+    // B. MEDIUM RISK (50 - 79) -> SUBMIT AS PENDING REVIEW
+    if (statusValue === 'pending') {
+      // Mark token as pending
+      await updateDoc(tokenRef, {
+        status: 'pending',
+        riskScore,
+        deviceFingerprint,
+        localStorageId,
+        ipAddress: clientIp,
+        userAgent,
+        verifiedAt: new Date().toISOString(),
+      });
+
+      // Notify Telegram referrer & user of verification review
+      const botToken = await getBotToken();
+      if (botToken && referredTelegramId) {
+        await sendTelegramMessage(
+          botToken,
+          referredTelegramId,
+          `🟡 <b>Referral Verification Under Review</b>\n\n` +
+            `Your referral of friend <b>${referredName}</b> is currently being reviewed by an administrator to verify safety guidelines.\n\n` +
+            `Rewards will be released automatically upon approval.`
+        );
+      }
+
+      return {
+        success: true,
+        pendingReview: true,
+        message: 'Your referral is under pending review by administrators. Rewards will be credited upon manual approval.',
+      };
+    }
+
+    // C. LOW RISK (< 50) -> CREDIT REFERRAL REWARD VIA TRANSACTION
     const botToken = await getBotToken();
 
     // Read Admin Config for reward rate
@@ -531,7 +677,7 @@ export async function processReferralVerification(params: VerifyReferralParams) 
           `🎉 <b>Referral Reward Verified & Credited!</b>\n\n` +
             `Your friend <b>${referredName}</b> (UID: <code>${referredUid}</code>) passed device verification!\n\n` +
             `💰 <b>Reward Credited:</b> ₹${rewardAmount}\n` +
-            `👛 <b>New Balance:</b> ₹${updatedReferrerBalance}`
+            `👛 <b>Status:</b> Credited Instantly`
         );
       }
 

@@ -7141,6 +7141,261 @@ Respond with a JSON object containing two properties:
     }
   });
 
+  app.post('/api/admin/referrals/approve', async (req, res) => {
+    try {
+      const { logId, adminId } = req.body;
+      if (!logId) {
+        return res.status(400).json({ success: false, error: 'logId is required' });
+      }
+
+      // 1. Fetch referral log
+      const logRef = doc(db, 'referralLogs', logId);
+      const logSnap = await getDoc(logRef);
+      if (!logSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Referral log not found' });
+      }
+
+      const logData = logSnap.data();
+      if (logData.status === 'verified' || logData.status === 'approved') {
+        return res.status(400).json({ success: false, error: 'Referral is already verified/approved' });
+      }
+
+      const {
+        token,
+        uid: referredUid,
+        referredUsername,
+        referrerUid,
+        telegramId: referredTelegramId,
+        referredName,
+      } = logData;
+
+      // 2. Fetch system configuration for reward amount
+      const sysConfigDoc = await getDoc(doc(db, 'settings', 'config'));
+      const sysConfig = sysConfigDoc.exists() ? sysConfigDoc.data() : null;
+      const rewardAmount = Number(sysConfig?.rewardPerReferral ?? sysConfig?.referralBonus ?? 5);
+      const botToken = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+
+      // 3. Fetch referrer doc
+      let referrerSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', String(referrerUid))));
+      if (referrerSnap.empty) {
+        referrerSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', String(referrerUid))));
+      }
+
+      if (referrerSnap.empty) {
+        return res.status(404).json({ success: false, error: 'Referrer account not found' });
+      }
+
+      const referrerDocRef = doc(db, 'users', referrerSnap.docs[0].id);
+
+      // 4. Fetch referred doc to update
+      let referredSnap = await getDocs(query(collection(db, 'users'), where('appUid', '==', String(referredUid))));
+      if (referredSnap.empty) {
+        referredSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', String(referredUid))));
+      }
+      const referredDocRef = !referredSnap.empty ? doc(db, 'users', referredSnap.docs[0].id) : null;
+
+      // 5. Fetch token document to update
+      let tokenDocRef: any = null;
+      if (token) {
+        const tokenQuery = query(collection(db, 'referralTokens'), where('token', '==', token));
+        const tokenSnap = await getDocs(tokenQuery);
+        if (!tokenSnap.empty) {
+          tokenDocRef = doc(db, 'referralTokens', tokenSnap.docs[0].id);
+        }
+      }
+
+      // 6. Atomically update database status and referrer counts
+      let newReferralCount = 1;
+      await runTransaction(db, async (transaction) => {
+        const refFreshSnap = await transaction.get(referrerDocRef);
+        if (!refFreshSnap.exists()) {
+          throw new Error('Referrer account not found during transaction');
+        }
+
+        const refData = refFreshSnap.data();
+        const currentTotal = Number(refData.totalReferrals || 0);
+        const currentSucc = Number(refData.successfulReferrals || 0);
+        const currentEarned = Number(refData.totalReferralEarnings || 0);
+
+        newReferralCount = currentSucc + 1;
+
+        // Update statistics
+        transaction.update(referrerDocRef, {
+          totalReferrals: currentTotal + 1,
+          successfulReferrals: newReferralCount,
+          totalReferralEarnings: currentEarned + rewardAmount,
+        });
+
+        // Update referred user reward flag
+        if (referredDocRef) {
+          transaction.update(referredDocRef, {
+            referralRewardReceived: true,
+            referredBy: referrerUid,
+          });
+        }
+
+        // Update token if found
+        if (tokenDocRef) {
+          transaction.update(tokenDocRef, {
+            status: 'approved',
+            verifiedAt: new Date().toISOString(),
+          });
+        }
+
+        // Update log
+        transaction.update(logRef, {
+          status: 'approved',
+          verificationTime: new Date().toISOString(),
+        });
+      });
+
+      // 7. Record transaction for referrer atomically
+      try {
+        await recordWalletTransaction({
+          uid: String(referrerUid),
+          type: 'Referral Bonus',
+          amount: rewardAmount,
+          status: 'completed',
+          description: `Manual Referral Approval for Friend (UID #${referredUid})`,
+          botToken: botToken,
+        });
+      } catch (txErr) {
+        console.warn('[Admin Approve Referral] Error recording wallet transaction:', txErr);
+      }
+
+      // 8. Notify Referrer via Telegram if telegramId exists
+      const referrerTelegramId = referrerSnap.docs[0].data()?.telegramId;
+      if (botToken && referrerTelegramId) {
+        try {
+          await sendTelegramMessage(
+            botToken,
+            referrerTelegramId,
+            `🎉 <b>Referral Reward Approved & Credited!</b>\n\n` +
+              `Your referral of friend <b>${referredName || 'User'}</b> (UID: <code>${referredUid}</code>) has been manually approved by an administrator!\n\n` +
+              `💰 <b>Reward Credited:</b> ₹${rewardAmount}\n` +
+              `👛 <b>Status:</b> Approved after manual review`
+          );
+        } catch (tgErr) {
+          console.warn('[Admin Approve Referral] Telegram notification failed:', tgErr);
+        }
+      }
+
+      // 9. Add system admin log
+      try {
+        await addDoc(collection(db, 'adminLogs'), {
+          adminId: adminId || 'admin_dashboard',
+          action: 'referral_manual_approved',
+          targetUid: String(referredUid),
+          targetTelegramId: String(referredTelegramId || ''),
+          amount: rewardAmount,
+          reason: `Manual Referral Approval for log ${logId}`,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (logErr) {
+        console.warn('[Admin Approve Referral] Error saving admin log:', logErr);
+      }
+
+      return res.json({ success: true, message: 'Referral manually approved and credited successfully' });
+    } catch (err: any) {
+      console.error('[Admin Approve Referral Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/admin/referrals/reject', async (req, res) => {
+    try {
+      const { logId, reason, adminId } = req.body;
+      if (!logId) {
+        return res.status(400).json({ success: false, error: 'logId is required' });
+      }
+
+      // 1. Fetch referral log
+      const logRef = doc(db, 'referralLogs', logId);
+      const logSnap = await getDoc(logRef);
+      if (!logSnap.exists()) {
+        return res.status(404).json({ success: false, error: 'Referral log not found' });
+      }
+
+      const logData = logSnap.data();
+      if (logData.status === 'verified' || logData.status === 'approved') {
+        return res.status(400).json({ success: false, error: 'Referral is already verified/approved and cannot be rejected' });
+      }
+
+      const {
+        token,
+        uid: referredUid,
+        referrerUid,
+        telegramId: referredTelegramId,
+        referredName,
+      } = logData;
+
+      // 2. Fetch token document to update
+      let tokenDocRef: any = null;
+      if (token) {
+        const tokenQuery = query(collection(db, 'referralTokens'), where('token', '==', token));
+        const tokenSnap = await getDocs(tokenQuery);
+        if (!tokenSnap.empty) {
+          tokenDocRef = doc(db, 'referralTokens', tokenSnap.docs[0].id);
+        }
+      }
+
+      const rejectReasonText = reason || 'Manual review rejection by administrator';
+
+      // 3. Update token and log documents
+      if (tokenDocRef) {
+        await updateDoc(tokenDocRef, {
+          status: 'rejected',
+          rejectReason: rejectReasonText,
+          verifiedAt: new Date().toISOString(),
+        });
+      }
+
+      await updateDoc(logRef, {
+        status: 'rejected',
+        rejectReason: rejectReasonText,
+        verificationTime: new Date().toISOString(),
+      });
+
+      // 4. Fetch bot details and notify referred user if applicable
+      const sysConfigDoc = await getDoc(doc(db, 'settings', 'config'));
+      const sysConfig = sysConfigDoc.exists() ? sysConfigDoc.data() : null;
+      const botToken = sysConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN || '';
+
+      if (botToken && referredTelegramId) {
+        try {
+          await sendTelegramMessage(
+            botToken,
+            referredTelegramId,
+            `❌ <b>Referral Rejected after Manual Review</b>\n\n` +
+              `<b>Reason:</b> ${rejectReasonText}\n\n` +
+              `The administrator has declined this referral reward based on safety and verification guidelines.`
+          );
+        } catch (tgErr) {
+          console.warn('[Admin Reject Referral] Telegram notification failed:', tgErr);
+        }
+      }
+
+      // 5. Add system admin log
+      try {
+        await addDoc(collection(db, 'adminLogs'), {
+          adminId: adminId || 'admin_dashboard',
+          action: 'referral_manual_rejected',
+          targetUid: String(referredUid),
+          targetTelegramId: String(referredTelegramId || ''),
+          reason: rejectReasonText,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (logErr) {
+        console.warn('[Admin Reject Referral] Error saving admin log:', logErr);
+      }
+
+      return res.json({ success: true, message: 'Referral manually rejected successfully' });
+    } catch (err: any) {
+      console.error('[Admin Reject Referral Error]:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // ==================================================
   // WITHDRAWAL SYSTEM V2 ENDPOINTS
   // ==================================================

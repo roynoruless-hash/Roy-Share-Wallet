@@ -426,6 +426,51 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
     }
   };
 
+  const handleApproveReferral = async (log: ReferralLogItem) => {
+    if (!confirm(`Are you sure you want to manually APPROVE this referral? This will credit the referrer and mark it approved.`)) return;
+
+    try {
+      const res = await fetch('/api/admin/referrals/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logId: log.id, adminId: 'admin_dashboard' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        triggerToast('Referral approved and reward credited successfully.', 'success');
+        fetchLogs();
+        fetchStats();
+      } else {
+        triggerToast(data.error || 'Failed to approve referral', 'error');
+      }
+    } catch (err: any) {
+      triggerToast(err.message || 'Server error', 'error');
+    }
+  };
+
+  const handleRejectReferral = async (log: ReferralLogItem) => {
+    const reason = prompt('Please enter a rejection reason (optional):') || 'Referred account did not pass manual check';
+    if (reason === null) return; // user cancelled prompt
+
+    try {
+      const res = await fetch('/api/admin/referrals/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logId: log.id, reason, adminId: 'admin_dashboard' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        triggerToast('Referral manually rejected.', 'success');
+        fetchLogs();
+        fetchStats();
+      } else {
+        triggerToast(data.error || 'Failed to reject referral', 'error');
+      }
+    } catch (err: any) {
+      triggerToast(err.message || 'Server error', 'error');
+    }
+  };
+
   // Filter logs logic
   const filteredLogs = logs.filter((item) => {
     const q = searchQuery.toLowerCase().trim();
@@ -1322,6 +1367,24 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
                     {/* Action buttons */}
                     <td className="py-3 px-3 text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        {item.status === 'pending' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleApproveReferral(item)}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-650 hover:bg-emerald-600 text-emerald-100 text-[11px] font-bold flex items-center gap-1 border border-emerald-500/30"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRejectReferral(item)}
+                              className="px-2.5 py-1 rounded-lg bg-rose-650 hover:bg-rose-600 text-rose-100 text-[11px] font-bold flex items-center gap-1 border border-rose-500/30"
+                            >
+                              <XCircle className="w-3.5 h-3.5" /> Reject
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           onClick={() => setSelectedLog(item)}
@@ -1443,14 +1506,38 @@ export const ReferralSettingsView: React.FC<ReferralSettingsViewProps> = ({
 
             {/* Modal Controls */}
             <div className="flex items-center justify-between border-t border-slate-850 pt-4">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedLog.status === 'pending' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleApproveReferral(selectedLog);
+                        setSelectedLog(null);
+                      }}
+                      className="px-4 py-2 rounded-xl bg-emerald-650 hover:bg-emerald-600 text-white font-bold text-xs flex items-center gap-1.5 transition"
+                    >
+                      <CheckCircle2 className="w-4 h-4" /> Approve Referral
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleRejectReferral(selectedLog);
+                        setSelectedLog(null);
+                      }}
+                      className="px-4 py-2 rounded-xl bg-rose-650 hover:bg-rose-600 text-white font-bold text-xs flex items-center gap-1.5 transition"
+                    >
+                      <XCircle className="w-4 h-4" /> Reject Referral
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => {
                     handleBanDevice(selectedLog);
                     setSelectedLog(null);
                   }}
-                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 transition"
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-rose-300 font-bold text-xs flex items-center gap-1.5 transition border border-slate-750"
                 >
                   <Ban className="w-4 h-4" /> Ban Device
                 </button>
