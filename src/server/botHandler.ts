@@ -1216,7 +1216,8 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     // 2. CREATE OR FETCH ACCOUNT
     let currentUser = await getUserByTelegramId(chatId);
-    let regBonus = 15;
+    const adminConfig = await getAdminConfig();
+    let regBonus = Number(adminConfig?.registrationBonus ?? 0);
     const nowIso = new Date().toISOString();
 
     if (!currentUser) {
@@ -1233,7 +1234,7 @@ export async function processTelegramUpdate(token: string, update: any) {
         firstName: message.from?.first_name || 'User',
         lastName: message.from?.last_name || '',
         mobile: sharedPhoneNorm,
-        walletBalance: regBonus,
+        walletBalance: 0, // Starts at 0, recordWalletTransaction will credit it atomically if eligible
         lockedBalance: 0,
         totalWithdrawn: 0,
         channelVerified: true,
@@ -1257,20 +1258,48 @@ export async function processTelegramUpdate(token: string, update: any) {
       currentUser = newUserRecord as any;
       console.log(`[ACCOUNT_CREATED] Main Bot user doc created for userId: ${chatId}`);
 
-      if (regBonus > 0) {
+      // Check whether a REGISTRATION_BONUS transaction already exists for this user (Idempotent check)
+      let alreadyCredited = false;
+      const uniqueTxId = `registration_bonus_${chatId}`;
+      try {
+        const txSnap = await getDoc(doc(db, 'transactions', uniqueTxId));
+        const oldTxSnap = await getDoc(doc(db, 'transactions', `REG_BONUS_${chatId}`));
+        if (txSnap.exists() || oldTxSnap.exists()) {
+          alreadyCredited = true;
+        } else {
+          // Additional fallback check by type query
+          const q = query(
+            collection(db, 'transactions'),
+            where('userId', '==', chatId),
+            where('type', 'in', ['REGISTRATION_BONUS', 'Registration Bonus', 'REGISTRATION BONUS'])
+          );
+          const qSnap = await getDocs(q);
+          if (!qSnap.empty) {
+            alreadyCredited = true;
+          }
+        }
+      } catch (checkErr) {
+        console.warn('[Idempotency Check Warning] Error checking existing registration bonus:', checkErr);
+      }
+
+      if (regBonus > 0 && !alreadyCredited) {
         try {
           await recordWalletTransaction({
             uid: chatId,
-            type: 'Registration Bonus',
+            type: 'REGISTRATION_BONUS',
             amount: regBonus,
             status: 'completed',
             description: `Welcome registration bonus for joining Roy Share Wallet`,
-            transactionId: `REG_BONUS_${chatId}`,
+            transactionId: uniqueTxId,
           });
+          currentUser.walletBalance = regBonus;
           console.log(`[REGISTRATION_BONUS_CREDITED] ₹${regBonus} registration bonus credited to userId: ${chatId}`);
         } catch (txErr) {
           console.warn('[Ledger Warning] Main bot registration bonus log:', txErr);
         }
+      } else {
+        currentUser.walletBalance = 0;
+        console.log(`[REGISTRATION_BONUS_SKIPPED] Idempotency block: registration bonus already credited or is ₹0 for user ${chatId}`);
       }
 
       // Check referral attribution for main bot
