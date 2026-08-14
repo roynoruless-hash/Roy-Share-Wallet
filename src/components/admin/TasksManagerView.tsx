@@ -103,6 +103,8 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   // Task Form states
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isPublishingTask, setIsPublishingTask] = useState(false);
+  const [publishFormError, setPublishFormError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [reward, setReward] = useState<number>(10);
   const [coins, setCoins] = useState<number>(25);
@@ -454,6 +456,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     setMaxSubmissionsPerUser(task.maxSubmissionsPerUser || 1);
     setActive(task.active);
     setGroupVerifyStatus(null);
+    setPublishFormError(null);
     setShowForm(true);
   };
 
@@ -476,6 +479,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     setMaxSubmissionsPerUser(1);
     setActive(true);
     setGroupVerifyStatus(null);
+    setPublishFormError(null);
     setShowForm(true);
   };
 
@@ -589,22 +593,41 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
   const handleSaveTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) {
-      showToast('Task title is required', 'error');
+    if (isPublishingTask) return; // Prevent double submission
+
+    setPublishFormError(null);
+
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      const msg = 'Task title is required';
+      setPublishFormError(msg);
+      showToast(msg, 'error');
+      return;
+    }
+
+    const numReward = Number(reward);
+    if (isNaN(numReward) || numReward < 0) {
+      const msg = 'Cash reward must be a valid non-negative number';
+      setPublishFormError(msg);
+      showToast(msg, 'error');
       return;
     }
 
     if (verificationType === 'manual') {
       if (!privateAdminGroupChatId.trim()) {
-        showToast('PRIVATE REVIEW GROUP CHAT ID is required for manual audit tasks', 'error');
+        const msg = 'PRIVATE REVIEW GROUP CHAT ID is required when Manual Admin Audit is selected';
+        setPublishFormError(msg);
+        showToast(msg, 'error');
         return;
       }
     }
 
+    setIsPublishingTask(true);
+
     try {
       const taskData: Partial<TaskItem> = {
-        title: title.trim(),
-        reward: Number(reward) || 0,
+        title: cleanTitle,
+        reward: numReward,
         coins: Number(coins) || 0,
         verificationType,
         icon,
@@ -619,6 +642,9 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
         allowResubmission,
         maxSubmissionsPerUser: Number(maxSubmissionsPerUser) || 1,
         active,
+        published: true,
+        status: active ? 'ACTIVE' : 'DISABLED',
+        earningBotId: 'roy_share_wallet',
       };
 
       if (editingId) {
@@ -626,11 +652,16 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
       }
 
       await saveTaskToDb(taskData);
-      showToast(editingId ? 'Task updated successfully' : 'Task created successfully', 'success');
+
+      showToast(editingId ? '✅ Task Updated & Published Successfully' : '✅ Task Published Successfully', 'success');
       setShowForm(false);
-      loadData();
+      await loadData();
     } catch (err: any) {
-      showToast('Error saving task: ' + err.message, 'error');
+      const errMsg = err.message || 'Failed to publish task';
+      setPublishFormError(errMsg);
+      showToast('❌ Failed to publish task: ' + errMsg, 'error');
+    } finally {
+      setIsPublishingTask(false);
     }
   };
 
@@ -1284,20 +1315,49 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                 </div>
               </div>
 
+              {publishFormError && (
+                <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-medium flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>❌ Failed to publish task: {publishFormError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPublishFormError(null)}
+                    className="text-slate-400 hover:text-white text-xs font-bold px-2 py-1 bg-slate-800/80 rounded-lg"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-800">
                 <button
                   type="button"
                   onClick={() => setShowForm(false)}
-                  className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition"
+                  disabled={isPublishingTask}
+                  className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-lg shadow-amber-500/10 transition"
+                  disabled={isPublishingTask}
+                  className={`py-2.5 px-6 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-2 shadow-lg shadow-amber-500/10 transition ${
+                    isPublishingTask ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''
+                  }`}
                 >
-                  <Check className="w-4 h-4" />
-                  <span>{editingId ? 'Save Edits' : 'Create Task'}</span>
+                  {isPublishingTask ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Publishing Task...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      <span>{editingId ? 'Save & Publish Edits' : 'Publish Task'}</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

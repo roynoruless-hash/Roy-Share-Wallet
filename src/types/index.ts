@@ -892,6 +892,8 @@ export interface TaskItem {
   campaignId?: string; // Optional campaign ID
   earningBotId?: string; // Earning Bot scope ID
   active: boolean;
+  published?: boolean;
+  status?: string;
   createdAt: string;
 }
 

@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { TaskItem, ManualTaskSubmission, TaskCampaign, TaskAttempt } from '../types';
+import { apiFetch } from '../utils/api';
 
 /**
  * Helper to map Firestore doc to TaskItem
@@ -91,51 +92,80 @@ export async function fetchTasksFromDb(earningBotId?: string): Promise<TaskItem[
 }
 
 /**
- * Save or Update Task
+ * Save or Update Task via backend API with client fallback
  */
 export async function saveTaskToDb(t: Partial<TaskItem>): Promise<string> {
-  const ref = collection(db, 'tasks');
-  const payload = {
-    title: t.title || 'New Task',
-    reward: Number(t.reward) || 0,
-    rewardType: t.rewardType || 'fixed',
-    coins: Number(t.coins) || 0,
-    verificationType: t.verificationType || 'none',
-    icon: t.icon || 'CheckSquare',
-    sortOrder: t.sortOrder !== undefined ? Number(t.sortOrder) : 10,
-    url: t.url || t.externalDestinationUrl || '',
-    externalDestinationUrl: t.externalDestinationUrl || t.url || '',
-    taskImage: t.taskImage || '',
-    description: t.description || '',
-    detailedInstructions: t.detailedInstructions || '',
-    proofDemoImage: t.proofDemoImage || '',
-    privateAdminGroupChatId: t.privateAdminGroupChatId || '',
-    telegramAdminChatId: t.telegramAdminChatId || '',
-    allowResubmission: t.allowResubmission !== false,
-    maxResubmissions: Number(t.maxResubmissions) || 2,
-    maxSubmissionsPerUser: Number(t.maxSubmissionsPerUser) || 1,
-    deadlineEnabled: Boolean(t.deadlineEnabled),
-    deadlineMinutes: Number(t.deadlineMinutes) || 1440,
-    maxApprovedUsers: Number(t.maxApprovedUsers) || 0,
-    approvedCount: Number(t.approvedCount) || 0,
-    isFull: Boolean(t.isFull),
-    campaignId: t.campaignId || '',
-    earningBotId: t.earningBotId || '',
-    active: t.active !== false,
-    createdAt: t.createdAt || new Date().toISOString(),
-  };
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-  if (t.id) {
-    const docRef = doc(db, 'tasks', t.id);
-    await updateDoc(docRef, payload);
-    return t.id;
-  } else {
-    const existing = await fetchTasksFromDb(t.earningBotId);
-    const nextOrder = existing.length > 0 ? Math.max(...existing.map(x => x.sortOrder)) + 10 : 10;
-    payload.sortOrder = t.sortOrder !== undefined ? Number(t.sortOrder) : nextOrder;
+  try {
+    const res = await apiFetch('/api/admin/save-and-publish-task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(t),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    const data = await res.json();
+    if (res.ok && data.success && data.taskId) {
+      return data.taskId;
+    } else {
+      throw new Error(data.error || 'Failed to save and publish task.');
+    }
+  } catch (apiErr: any) {
+    clearTimeout(timeoutId);
+    if (apiErr.name === 'AbortError') {
+      throw new Error('Publish request timed out (20s). Please try again.');
+    }
     
-    const newDoc = await addDoc(ref, payload);
-    return newDoc.id;
+    // If it's a specific user error from API, rethrow directly
+    if (apiErr.message && !apiErr.message.includes('fetch')) {
+      throw apiErr;
+    }
+
+    // Direct Firestore fallback if network/route issue
+    console.warn('API save-and-publish-task failed, attempting direct Firestore save:', apiErr);
+    const ref = collection(db, 'tasks');
+    const payload: any = {
+      title: t.title || 'New Task',
+      reward: Number(t.reward) || 0,
+      rewardType: t.rewardType || 'fixed',
+      coins: Number(t.coins) || 0,
+      verificationType: t.verificationType || 'none',
+      icon: t.icon || 'CheckSquare',
+      sortOrder: t.sortOrder !== undefined ? Number(t.sortOrder) : 10,
+      url: t.url || t.externalDestinationUrl || '',
+      externalDestinationUrl: t.externalDestinationUrl || t.url || '',
+      taskImage: t.taskImage || '',
+      description: t.description || '',
+      detailedInstructions: t.detailedInstructions || t.description || '',
+      proofDemoImage: t.proofDemoImage || '',
+      privateAdminGroupChatId: t.privateAdminGroupChatId || '',
+      privateReviewGroupChatId: t.privateAdminGroupChatId || '',
+      telegramAdminChatId: t.telegramAdminChatId || '',
+      adminReviewChatId: t.telegramAdminChatId || '',
+      allowResubmission: t.allowResubmission !== false,
+      allowResubmissionAfterRejection: t.allowResubmission !== false,
+      maxResubmissions: Number(t.maxResubmissions) || 2,
+      maxSubmissionsPerUser: Number(t.maxSubmissionsPerUser) || 1,
+      active: t.active !== false,
+      published: true,
+      status: t.active !== false ? 'ACTIVE' : 'DISABLED',
+      earningBotId: 'roy_share_wallet',
+      accountScope: 'ROY_SHARE_WALLET',
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (t.id) {
+      const docRef = doc(db, 'tasks', t.id);
+      await updateDoc(docRef, payload);
+      return t.id;
+    } else {
+      payload.createdAt = new Date().toISOString();
+      const newDoc = await addDoc(ref, payload);
+      return newDoc.id;
+    }
   }
 }
 

@@ -1444,6 +1444,175 @@ async function startServer() {
     }
   });
 
+  // 3.5.9 ROY SHARE WALLET — SAVE & PUBLISH TASK ENDPOINT
+  app.post('/api/admin/save-and-publish-task', requireAdminSession, async (req, res) => {
+    const startTime = Date.now();
+    const payload = req.body || {};
+
+    console.log('[TASK_PUBLISH_START]', {
+      id: payload.id || 'NEW_TASK',
+      title: payload.title,
+      reward: payload.reward,
+      coins: payload.coins,
+      verificationType: payload.verificationType,
+      earningBotId: 'roy_share_wallet',
+      timestamp: new Date().toISOString()
+    });
+
+    try {
+      const {
+        id,
+        title,
+        reward,
+        coins,
+        verificationType,
+        icon,
+        sortOrder,
+        url,
+        externalDestinationUrl,
+        taskImage,
+        description,
+        proofDemoImage,
+        privateAdminGroupChatId,
+        privateReviewGroupChatId,
+        telegramAdminChatId,
+        adminReviewChatId,
+        allowResubmission,
+        allowResubmissionAfterRejection,
+        maxSubmissionsPerUser,
+        active
+      } = payload;
+
+      // 1. Field Validation
+      const cleanTitle = typeof title === 'string' ? title.trim() : '';
+      if (!cleanTitle || cleanTitle.length < 2) {
+        console.log('[TASK_VALIDATION] Failed: Task title missing or too short');
+        return res.status(400).json({
+          success: false,
+          error: 'Task title is required and must be at least 2 characters.'
+        });
+      }
+
+      const numReward = Number(reward);
+      if (isNaN(numReward) || numReward < 0) {
+        console.log('[TASK_VALIDATION] Failed: Cash reward invalid');
+        return res.status(400).json({
+          success: false,
+          error: 'Cash reward must be a valid non-negative number.'
+        });
+      }
+
+      const numCoins = isNaN(Number(coins)) ? 0 : Math.max(0, Number(coins));
+      const cleanUrl = typeof externalDestinationUrl === 'string' ? externalDestinationUrl.trim() : (typeof url === 'string' ? url.trim() : '');
+      const cleanVerificationType = (verificationType || 'none').toString().toLowerCase();
+
+      const effectivePrivateGroupChatId = (privateAdminGroupChatId || privateReviewGroupChatId || '').toString().trim();
+      const effectiveAdminReviewChatId = (telegramAdminChatId || adminReviewChatId || '').toString().trim();
+
+      if (cleanVerificationType === 'manual') {
+        if (!effectivePrivateGroupChatId) {
+          console.log('[TASK_VALIDATION] Failed: Manual Admin Audit missing Private Review Group Chat ID');
+          return res.status(400).json({
+            success: false,
+            error: 'PRIVATE REVIEW GROUP CHAT ID (e.g. -1001234567890) is required when Manual Admin Audit is selected.'
+          });
+        }
+      }
+
+      console.log('[TASK_VALIDATION] Passed', {
+        title: cleanTitle,
+        reward: numReward,
+        coins: numCoins,
+        verificationType: cleanVerificationType,
+        privateGroupChatId: effectivePrivateGroupChatId || 'N/A'
+      });
+
+      // 2. Database Write
+      const nowIso = new Date().toISOString();
+      const isEdit = Boolean(id && String(id).trim().length > 0);
+      const taskId = isEdit ? String(id).trim() : doc(collection(db, 'tasks')).id;
+
+      let targetSortOrder = Number(sortOrder);
+      if (isNaN(targetSortOrder)) {
+        targetSortOrder = 10;
+        if (!isEdit) {
+          try {
+            const existingSnap = await getDocs(collection(db, 'tasks'));
+            if (!existingSnap.empty) {
+              const orders = existingSnap.docs.map(d => Number(d.data().sortOrder) || 0);
+              targetSortOrder = Math.max(...orders, 0) + 10;
+            }
+          } catch (e) {
+            console.warn('[TASK_DB_WRITE] Could not compute auto sortOrder:', e);
+          }
+        }
+      }
+
+      const isTaskActive = active !== false;
+
+      const taskDocPayload: any = {
+        id: taskId,
+        title: cleanTitle,
+        reward: numReward,
+        rewardType: 'fixed',
+        coins: numCoins,
+        verificationType: cleanVerificationType,
+        icon: icon || 'CheckSquare',
+        sortOrder: targetSortOrder,
+        url: cleanUrl,
+        externalDestinationUrl: cleanUrl,
+        taskImage: typeof taskImage === 'string' ? taskImage : '',
+        description: typeof description === 'string' ? description.trim() : '',
+        detailedInstructions: typeof description === 'string' ? description.trim() : '',
+        proofDemoImage: typeof proofDemoImage === 'string' ? proofDemoImage : '',
+        privateAdminGroupChatId: effectivePrivateGroupChatId,
+        privateReviewGroupChatId: effectivePrivateGroupChatId,
+        telegramAdminChatId: effectiveAdminReviewChatId,
+        adminReviewChatId: effectiveAdminReviewChatId,
+        allowResubmission: allowResubmission !== false && allowResubmissionAfterRejection !== false,
+        allowResubmissionAfterRejection: allowResubmission !== false && allowResubmissionAfterRejection !== false,
+        maxSubmissionsPerUser: Number(maxSubmissionsPerUser) > 0 ? Number(maxSubmissionsPerUser) : 1,
+        active: isTaskActive,
+        status: isTaskActive ? 'ACTIVE' : 'DISABLED',
+        published: true,
+        earningBotId: 'roy_share_wallet',
+        accountScope: 'ROY_SHARE_WALLET',
+        updatedAt: nowIso
+      };
+
+      if (!isEdit) {
+        taskDocPayload.createdAt = nowIso;
+        taskDocPayload.approvedCount = 0;
+        taskDocPayload.isFull = false;
+      }
+
+      console.log('[TASK_DB_WRITE]', { collection: 'tasks', taskId, isEdit });
+      const taskRef = doc(db, 'tasks', taskId);
+      await setDoc(taskRef, taskDocPayload, { merge: true });
+
+      console.log('[TASK_DB_SUCCESS]', { taskId, durationMs: Date.now() - startTime });
+      console.log('[TASK_PUBLISH_SUCCESS]', { taskId, title: cleanTitle, message: 'Task published successfully' });
+
+      return res.json({
+        success: true,
+        taskId,
+        message: 'Task published successfully',
+        task: taskDocPayload
+      });
+
+    } catch (err: any) {
+      console.error('[TASK_PUBLISH_ERROR]', {
+        error: err.message || err,
+        stack: err.stack,
+        durationMs: Date.now() - startTime
+      });
+      return res.status(500).json({
+        success: false,
+        error: err.message || 'Failed to publish task due to database write exception.'
+      });
+    }
+  });
+
   // 3.6 ROY SHARE WALLET — TASK PUBLISH & PROMOTION CHANNELS ENDPOINTS
   app.post('/api/admin/publish-task', requireAdminSession, async (req, res) => {
     try {
