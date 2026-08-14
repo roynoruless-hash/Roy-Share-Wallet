@@ -1032,6 +1032,7 @@ export default function App() {
                   updateConfig={updateConfig}
                   onSave={handleSaveConfiguration}
                   isSaving={isSaving}
+                  showToast={showToast}
                 />
               )}
 

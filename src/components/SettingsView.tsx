@@ -153,6 +153,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             updateConfig={updateConfig}
             onSave={onSave}
             isSaving={isSaving}
+            showToast={showToast}
           />
         )}
       </div>

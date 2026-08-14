@@ -1,12 +1,14 @@
-import React from 'react';
-import { ShieldAlert, AlertTriangle, Clock, Users, ToggleLeft, ToggleRight, Save, Cpu, Image as ImageIcon, Key, ExternalLink, CheckCircle2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { ShieldAlert, AlertTriangle, Clock, Users, ToggleLeft, ToggleRight, Save, Cpu, Image as ImageIcon, Key, ExternalLink, CheckCircle2, RefreshCw } from 'lucide-react';
 import { AdminConfig } from '../types';
+import { apiFetch } from '../utils/api';
 
 interface SecurityViewProps {
   config: AdminConfig;
   updateConfig: (fields: Partial<AdminConfig>) => void;
   onSave: () => void;
   isSaving: boolean;
+  showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
 export const SecurityView: React.FC<SecurityViewProps> = ({
@@ -14,7 +16,49 @@ export const SecurityView: React.FC<SecurityViewProps> = ({
   updateConfig,
   onSave,
   isSaving,
+  showToast,
 }) => {
+  const [isTestingImgbb, setIsTestingImgbb] = useState(false);
+  const [imgbbStatus, setImgbbStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [imgbbError, setImgbbError] = useState('');
+
+  const handleTestImgbb = async () => {
+    const key = config.imgbbApiKey?.trim() || '';
+    if (!key) {
+      showToast('Please enter an ImgBB API key first.', 'error');
+      return;
+    }
+
+    setIsTestingImgbb(true);
+    setImgbbStatus('idle');
+    setImgbbError('');
+
+    try {
+      const res = await apiFetch('/api/admin/test-imgbb-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setImgbbStatus('success');
+        showToast('✓ ImgBB API Key verified successfully!', 'success');
+        // Automatically save config
+        onSave();
+      } else {
+        setImgbbStatus('error');
+        setImgbbError(data.error || 'Verification failed.');
+        showToast(data.error || 'ImgBB verification failed.', 'error');
+      }
+    } catch (err: any) {
+      setImgbbStatus('error');
+      setImgbbError(err.message || 'Network error.');
+      showToast('Network error while testing ImgBB key.', 'error');
+    } finally {
+      setIsTestingImgbb(false);
+    }
+  };
   return (
     <div className="space-y-6 max-w-4xl">
       {/* Header */}
@@ -117,7 +161,34 @@ export const SecurityView: React.FC<SecurityViewProps> = ({
               placeholder="e.g. 3a7b9c1d2e3f4g5h6i7j8k9l0m"
               className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition font-mono"
             />
-            <div className="flex items-center justify-between text-[11px] text-slate-500 flex-wrap gap-1">
+            <div className="flex flex-col sm:flex-row gap-3 pt-1">
+              <button
+                type="button"
+                onClick={handleTestImgbb}
+                disabled={isTestingImgbb || !config.imgbbApiKey?.trim()}
+                className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/20 hover:border-sky-500/35 text-xs font-black tracking-wider uppercase transition disabled:opacity-50 disabled:hover:bg-sky-500/10 disabled:hover:border-sky-500/20"
+              >
+                {isTestingImgbb ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                )}
+                <span>Save & Test</span>
+              </button>
+
+              {imgbbStatus === 'success' && (
+                <div className="flex items-center gap-1.5 text-xs font-black text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-3.5 py-2 rounded-xl">
+                  <span>✓ ImgBB Connected</span>
+                </div>
+              )}
+
+              {imgbbStatus === 'error' && (
+                <div className="flex items-center gap-1.5 text-xs font-black text-rose-400 bg-rose-500/10 border border-rose-500/20 px-3.5 py-2 rounded-xl">
+                  <span>❌ Failed: {imgbbError.substring(0, 50)}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-500 flex-wrap gap-1 pt-1">
               <span>This key is securely stored in Admin Config and used for uploading contest image banners.</span>
               <a
                 href="https://api.imgbb.com/"

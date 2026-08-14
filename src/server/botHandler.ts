@@ -1149,8 +1149,8 @@ export async function processTelegramUpdate(token: string, update: any) {
   // --- TELEGRAM OTP MESSAGE HANDLER ---
   const isOtp = /^\d{6}$/.test(text);
   if (isOtp) {
-    console.log(`[OTP] Telegram ID: ${chatId}`);
-    console.log(`[OTP] OTP received: [REDACTED_SECURE_MASK_PREFIX_${text.substring(0, 2)}]`);
+    // Add temporary SERVER-SIDE diagnostic logs
+    console.log(`[OTP_RECEIVED] botId=roy-share-wallet telegramId=${chatId}`);
 
     // Fetch existing registered user
     const existingUser = await getUserByTelegramId(chatId);
@@ -1168,6 +1168,9 @@ export async function processTelegramUpdate(token: string, update: any) {
     // Find pending verification session
     const sessionDocRef = doc(db, 'registrationSessions', chatId);
     const sessionSnap = await getDoc(sessionDocRef);
+
+    // Add temporary SERVER-SIDE diagnostic lookup log
+    console.log(`[REG_SESSION_LOOKUP] botId=roy-share-wallet telegramId=${chatId} found=${sessionSnap.exists()}`);
 
     if (!sessionSnap.exists()) {
       console.log(`[OTP] Session status: Not Found`);
@@ -1212,6 +1215,7 @@ export async function processTelegramUpdate(token: string, update: any) {
     const isExpired = Date.now() > (session.otpExpiry || 0);
     console.log(`[OTP] Expiry status: ${isExpired ? 'Expired' : 'Valid'}`);
     if (isExpired) {
+      console.log(`[OTP_VALIDATION] sessionId=${chatId} status=PENDING expired=true result=FAIL`);
       console.log(`[OTP] OTP validation result: Failed (Expired)`);
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
@@ -1223,6 +1227,7 @@ export async function processTelegramUpdate(token: string, update: any) {
 
     // Check attempt limit
     if ((session.attempts || 0) >= 5) {
+      console.log(`[OTP_VALIDATION] sessionId=${chatId} status=PENDING expired=false result=FAIL`);
       console.log(`[OTP] OTP validation result: Blocked (Max attempts reached)`);
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
@@ -1232,11 +1237,17 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    // Check OTP match
-    const correctOtp = String(session.otp).trim();
-    if (correctOtp !== text) {
+    // Check OTP match (supports both plaintext otp and sha256 otpHash)
+    const crypto = await import('crypto');
+    const inputHash = crypto.createHash('sha256').update(text).digest('hex');
+
+    const isPlaintextMatch = String(session.otp || '').trim() === text;
+    const isHashMatch = session.otpHash === inputHash;
+
+    if (!isPlaintextMatch && !isHashMatch) {
       const newAttempts = (session.attempts || 0) + 1;
       await setDoc(sessionDocRef, { attempts: newAttempts }, { merge: true });
+      console.log(`[OTP_VALIDATION] sessionId=${chatId} status=PENDING expired=false result=FAIL`);
       console.log(`[OTP] OTP validation result: Mismatch (Attempt ${newAttempts}/5)`);
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
@@ -1246,6 +1257,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
+    console.log(`[OTP_VALIDATION] sessionId=${chatId} status=PENDING expired=false result=SUCCESS`);
     console.log(`[OTP] OTP validation result: Match`);
 
     // Match found! Let's trigger verify-otp endpoint to process security pipeline, create account & credit bonus safely and idempotently!

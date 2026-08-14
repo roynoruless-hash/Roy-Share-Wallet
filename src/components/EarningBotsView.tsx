@@ -1601,6 +1601,47 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
                         />
                       </div>
 
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Review Group Chat ID (for Task Review Group)</label>
+                        <input
+                          type="text"
+                          value={editingBot.reviewGroupId || ''}
+                          onChange={(e) => updateEditField('reviewGroupId', e.target.value)}
+                          placeholder="e.g. -100xxxxxxxxxx"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none mb-2"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!editingBot.reviewGroupId) {
+                              showToast('Please enter a Review Group Chat ID first.', 'error');
+                              return;
+                            }
+                            try {
+                              const res = await apiFetch('/api/admin/send-test-review-message', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({
+                                    botId: editingBot.id,
+                                    privateReviewGroupChatId: editingBot.reviewGroupId,
+                                  }),
+                                });
+                                const data = await res.json();
+                                if (data.success) {
+                                  showToast('✓ Test Review Message Sent Successfully!', 'success');
+                                } else {
+                                  showToast(data.error || 'Failed to send test message.', 'error');
+                                }
+                            } catch (err) {
+                              showToast('Network error sending test message.', 'error');
+                            }
+                          }}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 border border-slate-800 hover:bg-slate-850 text-slate-300 rounded-lg text-[10px] font-bold uppercase transition"
+                        >
+                          <span>✓ Send Test Review Message</span>
+                        </button>
+                      </div>
+
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Daily Ref Limit</label>

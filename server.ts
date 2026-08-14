@@ -679,6 +679,12 @@ async function startServer() {
             reviewGroupId = sysReviewSnap.data().privateReviewGroupChatId || '';
           }
         }
+        if (!reviewGroupId && eBotId && eBotId !== 'roy_share_wallet') {
+          const botSnap = await getDoc(doc(db, 'earningBots', eBotId));
+          if (botSnap.exists()) {
+            reviewGroupId = botSnap.data().reviewGroupId || botSnap.data().adminChatId || '';
+          }
+        }
         if (!reviewGroupId) {
           const configSnap = await getDoc(doc(db, 'earningBotReviewConfigs', eBotId));
           if (configSnap.exists()) {
@@ -910,6 +916,12 @@ async function startServer() {
           const sysReviewSnap = await getDoc(doc(db, 'settings', 'telegramReview'));
           if (sysReviewSnap.exists()) {
             privateReviewGroupChatId = sysReviewSnap.data().privateReviewGroupChatId || '';
+          }
+        }
+        if (!privateReviewGroupChatId && eBotId && eBotId !== 'roy_share_wallet') {
+          const botSnap = await getDoc(doc(db, 'earningBots', eBotId));
+          if (botSnap.exists()) {
+            privateReviewGroupChatId = botSnap.data().reviewGroupId || botSnap.data().adminChatId || '';
           }
         }
         if (!privateReviewGroupChatId) {
@@ -1500,6 +1512,25 @@ async function startServer() {
       throw new Error('ImgBB API response did not contain a valid image URL.');
     }
   }
+
+  // API TO TEST IMGBB KEY
+  app.post('/api/admin/test-imgbb-key', requireAdminSession, async (req, res) => {
+    try {
+      const { apiKey } = req.body;
+      if (!apiKey || !apiKey.trim()) {
+        return res.status(400).json({ success: false, error: 'ImgBB API key is required.' });
+      }
+
+      // 1-pixel transparent PNG base64
+      const dummyBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+      const cdnUrl = await uploadBase64ToImgBBServer(dummyBase64, apiKey.trim());
+      
+      return res.json({ success: true, url: cdnUrl, message: 'ImgBB API Key verified successfully!' });
+    } catch (err: any) {
+      console.error('[API Test ImgBB Key Error]:', err);
+      return res.status(400).json({ success: false, error: err.message || 'Verification failed.' });
+    }
+  });
 
   // 3.5.9 ROY SHARE WALLET — SAVE & PUBLISH TASK ENDPOINT
   app.post('/api/admin/save-and-publish-task', requireAdminSession, async (req, res) => {
@@ -6007,6 +6038,35 @@ Respond with a JSON object containing two properties:
         createdAt: now.toISOString(),
         verified: false,
       });
+
+      // Synchronize/Create registrationSessions/{telegramId}
+      const regSessionRef = doc(db, 'registrationSessions', cleanTgId);
+      const regSessionSnap = await getDoc(regSessionRef);
+      const regSessionData = regSessionSnap.exists() ? regSessionSnap.data() : {};
+
+      const contactVerified = regSessionData.contactVerified !== undefined ? regSessionData.contactVerified : true;
+
+      await setDoc(regSessionRef, {
+        telegramId: cleanTgId,
+        otp: otpCode,
+        otpHash: otpHash,
+        otpExpiry: now.getTime() + (otpExpirySeconds * 1000),
+        expiresAt: expiresAt,
+        createdAt: regSessionData.createdAt || Date.now(),
+        attempts: 0,
+        status: 'PENDING',
+        contactVerified: contactVerified,
+        mobile: regSessionData.mobile || '',
+        username: regSessionData.username || '',
+        fullName: regSessionData.fullName || '',
+        botId: 'roy-share-wallet',
+        sessionId: cleanTgId,
+        deviceFingerprint: regSessionData.deviceFingerprint || '',
+        ipAddress: regSessionData.ipAddress || '',
+      }, { merge: true });
+
+      // Add temporary SERVER-SIDE diagnostic log for session creation
+      console.log(`[REG_SESSION_CREATE] botId=roy-share-wallet telegramId=${cleanTgId} sessionId=${cleanTgId} status=PENDING expiresAt=${expiresAt}`);
 
       // Log event
       await addDoc(collection(db, 'logs'), {
@@ -12251,15 +12311,24 @@ Respond with a JSON object containing two properties:
         });
       }
 
-      // Verify OTP match
-      if (String(session.otp).trim() !== cleanOtp) {
+      // Verify OTP match (supports both plaintext otp and sha256 otpHash)
+      const crypto = await import('crypto');
+      const inputHash = crypto.createHash('sha256').update(cleanOtp).digest('hex');
+
+      const isPlaintextMatch = String(session.otp || '').trim() === cleanOtp;
+      const isHashMatch = session.otpHash === inputHash;
+
+      if (!isPlaintextMatch && !isHashMatch) {
         const newAttempts = (session.attempts || 0) + 1;
         await setDoc(sessionDocRef, { attempts: newAttempts }, { merge: true });
+        console.log(`[OTP_VALIDATION] sessionId=${cleanTgId} status=PENDING expired=false result=FAIL`);
         return res.status(400).json({
           success: false,
           error: `❌ Invalid OTP. Attempt ${newAttempts} of 5.`
         });
       }
+
+      console.log(`[OTP_VALIDATION] sessionId=${cleanTgId} status=PENDING expired=false result=SUCCESS`);
 
       // OTP is VALID -> Detect public IP address server-side
       let clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
