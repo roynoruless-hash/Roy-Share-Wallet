@@ -552,8 +552,10 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
     return;
   }
 
-  const phone = String(contact.phone_number || '').replace(/[^0-9]/g, '');
-  if (!phone || phone.length < 7) {
+  const normalizePhone = (p: string) => (p || '').replace(/\D/g, '').slice(-10);
+  const sharedPhoneNorm = normalizePhone(contact.phone_number);
+
+  if (!sharedPhoneNorm || sharedPhoneNorm.length < 7) {
     await sendTelegramApi(bot.token, 'sendMessage', {
       chat_id: userId,
       text: `❌ <b>Invalid mobile number received.</b>\n\nPlease tap the button below to share your contact number.`,
@@ -569,14 +571,67 @@ async function handleContactSharing(bot: any, message: any, sessionRef: any) {
     return;
   }
 
+  console.log(`[CONTACT_VERIFIED] botId: ${bot.botId} | userId: ${userId} | phone: ${sharedPhoneNorm}`);
+
+  // Fetch the pending registration session from Firestore for Earning Bots
+  const regSessionDocRef = doc(db, 'registrationSessions', `${bot.botId}_${userId}`);
+  const regSessionSnap = await getDoc(regSessionDocRef);
+
+  if (regSessionSnap.exists()) {
+    const regSession = regSessionSnap.data();
+    // Compare entered mobile with shared contact number
+    const enteredPhone = normalizePhone(regSession.mobile || '');
+    if (enteredPhone && enteredPhone !== sharedPhoneNorm) {
+      await sendTelegramApi(bot.token, 'sendMessage', {
+        chat_id: userId,
+        text: `❌ <b>Mobile Number Mismatch</b>\n\nThe phone number linked to your Telegram account (ending in <b>${sharedPhoneNorm.slice(-4)}</b>) does not match the mobile number you entered during registration (ending in <b>${enteredPhone.slice(-4)}</b>).\n\nPlease open the Mobile Verification Mini App and enter the correct mobile number.`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          remove_keyboard: true,
+        }
+      });
+      return;
+    }
+
+    // Generate random 6-digit OTP code
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpiry = Date.now() + 120000; // 2 minutes expiry
+
+    // Save OTP to the registration session in Firestore
+    await setDoc(regSessionDocRef, {
+      contactVerified: true,
+      otp: otpCode,
+      otpExpiry: otpExpiry,
+      attempts: 0
+    }, { merge: true });
+
+    console.log(`[EarningBot Auth] OTP verification started`);
+    console.log(`[EarningBot Auth] Generated OTP ${otpCode} for Telegram ID: ${userId} under Bot: ${bot.botId}`);
+
+    // Send OTP to the user in Telegram Chat
+    const otpMessage =
+      `🔐 <b>Your Mobile Verification OTP</b>\n\n` +
+      `Your 6-digit verification code is: <code>${otpCode}</code>\n\n` +
+      `Please enter this code in the Mobile Verification Mini App to complete your registration. Code expires in 2 minutes.`;
+
+    await sendTelegramApi(bot.token, 'sendMessage', {
+      chat_id: userId,
+      text: otpMessage,
+      parse_mode: 'HTML',
+      reply_markup: {
+        remove_keyboard: true // Clear the custom share contact keyboard
+      }
+    });
+
+    return;
+  }
+
   // Save/merge contact verified state to session
   await setDoc(sessionRef, {
     contactVerified: true,
-    phone,
+    phone: sharedPhoneNorm,
     updatedAt: new Date().toISOString(),
   }, { merge: true });
-
-  console.log(`[CONTACT_VERIFIED] botId: ${bot.botId} | userId: ${userId} | phone: ${phone}`);
 
   // Construct Mini App Verification URL
   const baseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://ais-dev-iecssl5uoae4d72ttmqrhh-963220536272.asia-southeast1.run.app').replace(/\/$/, '');

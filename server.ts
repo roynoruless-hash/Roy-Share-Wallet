@@ -16,6 +16,24 @@ import { encrypt, decrypt } from './src/utils/encryption';
 import { execSync } from 'child_process';
 import { startContestScheduler } from './src/services/contestScheduler';
 
+export function sanitizeFirestoreData<T extends Record<string, any>>(data: T): T {
+  if (data === null || data === undefined) return null as any;
+  const result = {} as any;
+  for (const key of Object.keys(data)) {
+    const value = data[key];
+    if (value === undefined) {
+      continue;
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = sanitizeFirestoreData(value);
+    } else if (Array.isArray(value)) {
+      result[key] = value.map(item => (item && typeof item === 'object') ? sanitizeFirestoreData(item) : item);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 export function ensureUserAccountScope(docId: string, data: any): { accountScope: 'ROY_SHARE_WALLET' | 'EARNING_BOT' | 'UNRESOLVED'; earningBotId: string | null } {
   if (!data) return { accountScope: 'UNRESOLVED', earningBotId: null };
   if (data.accountScope === 'ROY_SHARE_WALLET') return { accountScope: 'ROY_SHARE_WALLET', earningBotId: null };
@@ -12109,7 +12127,7 @@ Respond with a JSON object containing two properties:
   // 1. INITIATE REGISTRATION
   app.post('/api/register/initiate', async (req, res) => {
     try {
-      const { telegramId, username, firstName, lastName, fullName, mobile, gmail, deviceFingerprint, ip, pendingTaskId, taskId } = req.body;
+      const { telegramId, username, firstName, lastName, fullName, mobile, gmail, deviceFingerprint, ip, pendingTaskId, taskId, botId } = req.body;
 
       const cleanTgId = String(telegramId || '').trim();
       const cleanMobile = String(mobile || '').replace(/\D/g, '').slice(-10);
@@ -12197,7 +12215,11 @@ Respond with a JSON object containing two properties:
       }
 
       // Check session rate limiting & 5 wrong attempts limit
-      const sessionDocRef = doc(db, 'registrationSessions', cleanTgId);
+      const rawBotId = String(botId || req.body.botId || '').trim();
+      const isEarningBot = rawBotId && rawBotId !== 'ROY_SHARE_WALLET' && rawBotId !== 'roy_share_wallet';
+      const targetDocId = isEarningBot ? `${rawBotId}_${cleanTgId}` : cleanTgId;
+
+      const sessionDocRef = doc(db, 'registrationSessions', targetDocId);
       const existingSessionSnap = await getDoc(sessionDocRef);
       if (existingSessionSnap.exists()) {
         const sData = existingSessionSnap.data();
@@ -12222,18 +12244,31 @@ Respond with a JSON object containing two properties:
         pendingTaskId: actualPendingTaskId || null,
         attempts: 0,
         createdAt: Date.now(),
+        botId: rawBotId,
       };
 
-      await setDoc(sessionDocRef, sessionData);
+      await setDoc(sessionDocRef, sanitizeFirestoreData(sessionData));
+
+      // Dynamically resolve correct bot token to support Earning Bot isolation
+      let botToken = '';
+      if (isEarningBot) {
+        const botSnap = await getDoc(doc(db, 'earningBots', rawBotId));
+        if (botSnap.exists()) {
+          const bData = botSnap.data();
+          botToken = bData.token || '';
+        }
+      } else {
+        const config = await getDecryptedConfig();
+        botToken = config?.botToken || '';
+      }
 
       // Send Telegram Bot message with Share Contact button
-      const config = await getDecryptedConfig();
-      if (config?.botToken) {
+      if (botToken) {
         const promptText =
           `📱 <b>Mobile Verification</b>\n\n` +
           `Please tap the button below to share the mobile number linked to this Telegram account.`;
 
-        await sendTelegramMessage(config.botToken, cleanTgId, promptText, {
+        await sendTelegramMessage(botToken, cleanTgId, promptText, {
           reply_markup: {
             keyboard: [
               [{ text: '📱 Share Contact', request_contact: true }]
@@ -12258,7 +12293,7 @@ Respond with a JSON object containing two properties:
   app.post('/api/register/verify-otp', async (req, res) => {
     try {
       console.log('[Auth] OTP verification started');
-      const { telegramId, otp } = req.body;
+      const { telegramId, otp, botId } = req.body;
       const cleanTgId = String(telegramId || '').trim();
       const cleanOtp = String(otp || '').trim();
 
@@ -12266,7 +12301,11 @@ Respond with a JSON object containing two properties:
         return res.status(400).json({ success: false, error: 'Telegram ID and OTP are required' });
       }
 
-      const sessionDocRef = doc(db, 'registrationSessions', cleanTgId);
+      const rawBotId = String(botId || req.body.botId || '').trim();
+      const isEarningBot = rawBotId && rawBotId !== 'ROY_SHARE_WALLET' && rawBotId !== 'roy_share_wallet';
+      const targetDocId = isEarningBot ? `${rawBotId}_${cleanTgId}` : cleanTgId;
+
+      const sessionDocRef = doc(db, 'registrationSessions', targetDocId);
       const sessionSnap = await getDoc(sessionDocRef);
 
       if (!sessionSnap.exists()) {
@@ -12286,12 +12325,24 @@ Respond with a JSON object containing two properties:
         });
       }
 
-      // Check 10 minute timeout
-      if (Date.now() - (session.createdAt || 0) > 600000) {
+      // Check 30 minute timeout with robust fallback
+      let createdAtMs = Date.now();
+      if (session.createdAt) {
+        if (typeof session.createdAt === 'number') {
+          createdAtMs = session.createdAt;
+        } else if (typeof session.createdAt === 'string') {
+          const parsed = Date.parse(session.createdAt);
+          if (!isNaN(parsed)) {
+            createdAtMs = parsed;
+          }
+        }
+      }
+      const sessionAge = Date.now() - createdAtMs;
+      if (sessionAge > 1800000) {
         await deleteDoc(sessionDocRef);
         return res.status(400).json({
           success: false,
-          error: 'Registration session expired (10 minutes limit). Please restart registration.'
+          error: 'Registration session expired (30 minutes limit). Please restart registration.'
         });
       }
 
@@ -12552,14 +12603,25 @@ Respond with a JSON object containing two properties:
         lastActive: nowStr,
       };
 
-      // Set user record in Firestore
-      await setDoc(userRef, newUserDoc);
+      // Set user record in Firestore with sanitization
+      await setDoc(userRef, sanitizeFirestoreData(newUserDoc));
       console.log(`[Auth] Account activation: true. Security score: ${securityScore}`);
+
+      // Securely store public IP detection metadata as requested
+      await setDoc(doc(db, 'ipDetections', cleanTgId), sanitizeFirestoreData({
+        id: cleanTgId,
+        ip: clientIp,
+        ipDetectedAt: nowStr,
+        registrationSessionId: cleanTgId,
+        telegramId: cleanTgId,
+        userId: generatedUid,
+        botId: 'roy_share_wallet',
+      }));
 
       // Credit Registration Bonus with exact uniqueId to ensure strict idempotency
       if (registrationBonus > 0) {
         const txRef = doc(db, 'transactions', uniqueTxId);
-        await setDoc(txRef, {
+        await setDoc(txRef, sanitizeFirestoreData({
           id: uniqueTxId,
           transactionId: uniqueTxId,
           userId: cleanTgId,
@@ -12576,7 +12638,7 @@ Respond with a JSON object containing two properties:
           reason: 'Welcome registration bonus for joining Roy Share Wallet',
           createdAt: nowStr,
           timestamp: nowStr,
-        });
+        }));
         console.log(`[Auth] Registration bonus: ${registrationBonus}`);
       }
 
@@ -12704,6 +12766,41 @@ Respond with a JSON object containing two properties:
               username: displayUsername,
               firstName: initDataUser?.first_name || botUserData.firstName || '',
               lastName: initDataUser?.last_name || botUserData.lastName || ''
+            },
+            webAppInitDataValid
+          });
+        }
+
+        // Active registration session check for Earning Bots
+        const botRegSessionDocId = `${cleanBotId}_${cleanTgId}`;
+        const botSessionSnap = await getDoc(doc(db, 'registrationSessions', botRegSessionDocId));
+        if (botSessionSnap.exists()) {
+          const session = botSessionSnap.data();
+          let state = 'REGISTRATION_STARTED';
+          if (session.contactVerified && session.otp) {
+            state = 'OTP_PENDING';
+          } else if (session.fullName) {
+            state = 'PROFILE_SUBMITTED';
+          }
+
+          return res.json({
+            success: true,
+            isRegistered: false,
+            isBanned: false,
+            registrationState: state,
+            session: {
+              telegramId: cleanTgId,
+              fullName: session.fullName,
+              mobile: session.mobile,
+              gmail: session.gmail,
+              contactVerified: session.contactVerified || false,
+              otpExpiry: session.otpExpiry || null,
+            },
+            telegramUser: {
+              id: cleanTgId,
+              username: displayUsername,
+              firstName: initDataUser?.first_name || '',
+              lastName: initDataUser?.last_name || ''
             },
             webAppInitDataValid
           });

@@ -430,7 +430,9 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           fullName: fullName.trim(),
           mobile: cleanMobile,
           gmail: cleanGmail,
-          deviceFingerprint: fp
+          deviceFingerprint: fp,
+          botId: earningBotId,
+          taskId: initialDeepLinkTaskId || deepLinkTaskId || ''
         })
       });
 
@@ -442,7 +444,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       }
 
       setOtpSuccessMsg('📱 Mobile Verification sent to Telegram Chat!\n\nPlease open your Telegram Bot chat and tap "📱 Share Contact" to verify your number. Your 6-digit OTP will then appear in the chat.');
-      setRegStep('OTP');
+      setRegStep('PENDING_CONTACT');
     } catch (err: any) {
       setRegError(err.message || 'Network error occurred. Please try again.');
     } finally {
@@ -476,7 +478,8 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
           mobile: mobile.replace(/\D/g, ''),
           gmail: gmail.trim().toLowerCase(),
           otp: cleanOtp,
-          deviceFingerprint: fp
+          deviceFingerprint: fp,
+          botId: earningBotId
         })
       });
 
@@ -490,6 +493,10 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
       if (data.user) {
         setUser(data.user);
         setIsRegistered(true);
+        if (data.pendingTaskId) {
+          setDeepLinkTaskId(data.pendingTaskId);
+          setActiveTab('tasks');
+        }
       }
     } catch (err: any) {
       setRegError(err.message || 'OTP verification failed.');
