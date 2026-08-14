@@ -7208,7 +7208,8 @@ Respond with a JSON object containing two properties:
     try {
       const { telegramId, method, amount, paymentDetails, idempotencyKey } = req.body;
       const cleanTgId = telegramId ? String(telegramId).trim() : '';
-      const botId = (req.body.botId || req.body.earningBotId) ? String(req.body.botId || req.body.earningBotId).trim() : '';
+      const rawBotId = (req.body.botId || req.body.earningBotId) ? String(req.body.botId || req.body.earningBotId).trim() : '';
+      const resolvedBotId = (rawBotId && rawBotId !== 'roy-share-wallet') ? rawBotId : 'roy-share-wallet';
 
       if (!cleanTgId) {
         return res.status(400).json({ success: false, error: 'Telegram ID is required.' });
@@ -7239,7 +7240,7 @@ Respond with a JSON object containing two properties:
         }
       }
 
-      const targetUserDocId = botId ? `${botId}_${cleanTgId}` : cleanTgId;
+      const targetUserDocId = resolvedBotId === 'roy-share-wallet' ? cleanTgId : `${resolvedBotId}_${cleanTgId}`;
       let userRef = doc(db, 'users', targetUserDocId);
       let userSnap = await getDoc(userRef);
 
@@ -7249,12 +7250,23 @@ Respond with a JSON object containing two properties:
 
       const uData = userSnap.data();
 
+      // Secure Context check: Ensure that the user's document has the correct botId.
+      if (resolvedBotId === 'roy-share-wallet') {
+        if (uData.botId && uData.botId !== 'roy-share-wallet') {
+          return res.status(400).json({ success: false, error: 'Security verification failed: Bot context mismatch.' });
+        }
+      } else {
+        if (uData.botId !== resolvedBotId) {
+          return res.status(400).json({ success: false, error: 'Security verification failed: Earning Bot context mismatch.' });
+        }
+      }
+
       // Settings lookup based on whether it's an Earning Bot or Roy Share Wallet
       let methodCfg: { enabled: boolean; min: number; feeType: 'PERCENTAGE' | 'FIXED'; fee: number; tax: number };
       let botData: any = null;
 
-      if (botId) {
-        const botSnap = await getDoc(doc(db, 'earningBots', botId));
+      if (resolvedBotId !== 'roy-share-wallet') {
+        const botSnap = await getDoc(doc(db, 'earningBots', resolvedBotId));
         if (!botSnap.exists()) {
           return res.status(400).json({ success: false, error: 'Earning Bot configuration not found.' });
         }
@@ -7263,7 +7275,7 @@ Respond with a JSON object containing two properties:
           return res.status(400).json({ success: false, error: 'Withdrawals are currently paused for this bot.' });
         }
 
-        const botConfigSnap = await getDoc(doc(db, 'withdrawalConfigs', botId));
+        const botConfigSnap = await getDoc(doc(db, 'withdrawalConfigs', resolvedBotId));
         const botConfigData = botConfigSnap.exists() ? botConfigSnap.data() : null;
 
         let methodSpecificCfg: any = null;
@@ -7331,12 +7343,16 @@ Respond with a JSON object containing two properties:
         return res.status(400).json({ success: false, error: `Minimum withdrawal amount for ${normMethod} is ₹${methodCfg.min}.` });
       }
 
-      // Pending withdrawal check for this specific bot context
-      const pendingQ = botId
-        ? query(collection(db, 'withdrawals'), where('telegramId', '==', cleanTgId), where('earningBotId', '==', botId), where('status', '==', 'PENDING'))
-        : query(collection(db, 'withdrawals'), where('telegramId', '==', cleanTgId), where('earningBotId', '==', ''), where('status', '==', 'PENDING'));
+      // Pending withdrawal check for this specific bot context (using manual filter to prevent index issues and catch legacy records)
+      const pendingQ = query(collection(db, 'withdrawals'), where('telegramId', '==', cleanTgId), where('status', '==', 'PENDING'));
       const pendingSnap = await getDocs(pendingQ);
-      if (pendingSnap.size >= 1) {
+      const activePendingForBot = pendingSnap.docs.filter(d => {
+        const data = d.data();
+        const recordBotId = data.botId || (data.earningBotId ? data.earningBotId : 'roy-share-wallet');
+        return recordBotId === resolvedBotId;
+      });
+
+      if (activePendingForBot.length >= 1) {
         return res.status(400).json({
           success: false,
           error: 'You already have a pending withdrawal request. Please wait for admin approval before submitting another.',
@@ -7361,8 +7377,9 @@ Respond with a JSON object containing two properties:
       const newWithdrawalRecord: any = {
         id: withdrawalId,
         withdrawalId,
-        earningBotId: botId || '',
-        botId: botId || '',
+        earningBotId: resolvedBotId === 'roy-share-wallet' ? '' : resolvedBotId,
+        botId: resolvedBotId,
+        userId: targetUserDocId,
         uid: targetUserDocId,
         telegramId: cleanTgId,
         fullName: uData.fullName || uData.firstName || uData.userName || 'User',
@@ -7388,7 +7405,7 @@ Respond with a JSON object containing two properties:
         status: 'PENDING',
         createdAt: nowIso,
         updatedAt: nowIso,
-        idempotencyKey: idempotencyKey || `withdrawal:${botId}:${cleanTgId}:${Date.now()}`,
+        idempotencyKey: idempotencyKey || `withdrawal:${resolvedBotId}:${cleanTgId}:${Date.now()}`,
         providerPaymentStarted: false,
       };
 
@@ -7423,7 +7440,7 @@ Respond with a JSON object containing two properties:
       try {
         await recordWalletTransaction({
           uid: targetUserDocId,
-          botId: botId || undefined,
+          botId: resolvedBotId || undefined,
           type: 'Withdrawal Hold',
           amount: -totalDeduction,
           status: 'pending',
@@ -7468,38 +7485,25 @@ Respond with a JSON object containing two properties:
       const tgId = (req.query.telegramId as string) || (req.headers['x-telegram-id'] as string);
       const botId = (req.query.botId as string) || (req.query.earningBotId as string) || (req.headers['x-bot-id'] as string) || '';
       const cleanTgId = tgId ? String(tgId).trim() : '';
-      const cleanBotId = botId ? String(botId).trim() : '';
+      const rawBotId = botId ? String(botId).trim() : '';
+      const targetBotId = (rawBotId && rawBotId !== 'roy-share-wallet') ? rawBotId : 'roy-share-wallet';
 
       if (!cleanTgId) {
         return res.status(400).json({ success: false, error: 'Telegram ID is required.' });
       }
 
-      let q;
-      if (cleanBotId) {
-        q = query(
-          collection(db, 'withdrawals'),
-          where('telegramId', '==', cleanTgId),
-          where('earningBotId', '==', cleanBotId)
-        );
-      } else {
-        q = query(
-          collection(db, 'withdrawals'),
-          where('telegramId', '==', cleanTgId)
-        );
-      }
+      const q = query(
+        collection(db, 'withdrawals'),
+        where('telegramId', '==', cleanTgId)
+      );
 
       const snap = await getDocs(q);
       const list: any[] = [];
       snap.forEach((d) => {
         const data = d.data() as any;
-        if (cleanBotId) {
-          if (data.earningBotId === cleanBotId) {
-            list.push({ id: d.id, ...data });
-          }
-        } else {
-          if (!data.earningBotId || data.earningBotId === '') {
-            list.push({ id: d.id, ...data });
-          }
+        const recordBotId = data.botId || (data.earningBotId ? data.earningBotId : 'roy-share-wallet');
+        if (recordBotId === targetBotId) {
+          list.push({ id: d.id, ...data });
         }
       });
 
@@ -7517,19 +7521,16 @@ Respond with a JSON object containing two properties:
     try {
       const botId = (req.query.botId as string) || '';
       const cleanBotId = botId ? String(botId).trim() : '';
+      const targetBotId = (cleanBotId && cleanBotId !== 'roy-share-wallet') ? cleanBotId : 'roy-share-wallet';
 
       const snap = await getDocs(query(collection(db, 'withdrawals'), orderBy('createdAt', 'desc')));
       const list: any[] = [];
       snap.forEach((d) => {
         const data = d.data() as any;
-        if (cleanBotId) {
-          if (data.earningBotId === cleanBotId) {
-            list.push({ id: d.id, ...data });
-          }
-        } else {
-          if (!data.earningBotId || data.earningBotId === '') {
-            list.push({ id: d.id, ...data });
-          }
+        const recordBotId = data.botId || (data.earningBotId ? data.earningBotId : 'roy-share-wallet');
+        
+        if (recordBotId === targetBotId) {
+          list.push({ id: d.id, ...data });
         }
       });
 
@@ -7543,7 +7544,7 @@ Respond with a JSON object containing two properties:
   // 5. ADMIN APPROVE WITHDRAWAL (PROTECTED & DUPLICATE PROTECTED)
   app.post('/api/admin/withdrawals/approve', requireAdminSession, async (req, res) => {
     try {
-      const { withdrawalId } = req.body;
+      const { withdrawalId, botId } = req.body;
       if (!withdrawalId) {
         return res.status(400).json({ success: false, error: 'Withdrawal ID is required.' });
       }
@@ -7555,6 +7556,12 @@ Respond with a JSON object containing two properties:
       }
 
       const wData = wSnap.data() as any;
+      const cleanReqBotId = botId ? String(botId).trim() : 'roy-share-wallet';
+      const withdrawalBotId = wData.botId || (wData.earningBotId ? wData.earningBotId : 'roy-share-wallet');
+      if (withdrawalBotId !== cleanReqBotId) {
+        return res.status(400).json({ success: false, error: 'Unauthorized: This withdrawal does not belong to the selected bot context.' });
+      }
+
       if (wData.status === 'PAID') {
         return res.status(400).json({ success: false, error: 'Withdrawal has already been processed and marked PAID.' });
       }
@@ -7841,7 +7848,7 @@ Respond with a JSON object containing two properties:
   // 6. ADMIN REJECT WITHDRAWAL (PROTECTED)
   app.post('/api/admin/withdrawals/reject', requireAdminSession, async (req, res) => {
     try {
-      const { withdrawalId, reason } = req.body;
+      const { withdrawalId, reason, botId } = req.body;
       if (!withdrawalId) {
         return res.status(400).json({ success: false, error: 'Withdrawal ID is required.' });
       }
@@ -7855,6 +7862,12 @@ Respond with a JSON object containing two properties:
       }
 
       const wData = wSnap.data() as any;
+      const cleanReqBotId = botId ? String(botId).trim() : 'roy-share-wallet';
+      const withdrawalBotId = wData.botId || (wData.earningBotId ? wData.earningBotId : 'roy-share-wallet');
+      if (withdrawalBotId !== cleanReqBotId) {
+        return res.status(400).json({ success: false, error: 'Unauthorized: This withdrawal does not belong to the selected bot context.' });
+      }
+
       if (wData.status === 'REJECTED') {
         return res.status(400).json({ success: false, error: 'Withdrawal is already REJECTED.' });
       }
@@ -9793,7 +9806,12 @@ Respond with a JSON object containing two properties:
       ]);
 
       const totalUsers = usersSnap.size || 120;
-      const withdrawals = withdrawalsSnap.docs.map(d => d.data());
+      const withdrawals = withdrawalsSnap.docs
+        .map(d => d.data() as any)
+        .filter((w: any) => {
+          const recordBotId = w.botId || (w.earningBotId ? w.earningBotId : 'roy-share-wallet');
+          return recordBotId === 'roy-share-wallet';
+        });
       const pendingWithdrawals = withdrawals.filter((w: any) => String(w.status).toLowerCase() === 'pending').length;
       const totalWithdrawalAmount = withdrawals
         .filter((w: any) => {

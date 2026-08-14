@@ -74,9 +74,10 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
         const records: any[] = [];
         snapshot.forEach((doc) => {
           const data = doc.data();
-          // ONLY include withdrawals that belong to an Earning Bot (has earningBotId)
+          const recordBotId = data.botId || (data.earningBotId ? data.earningBotId : 'roy-share-wallet');
+          // ONLY include withdrawals that belong to an Earning Bot
           // EXCLUDE withdrawals that are for the global Roy Share Wallet
-          if (data.earningBotId && data.earningBotId !== 'roy-share-wallet') {
+          if (recordBotId && recordBotId !== 'roy-share-wallet') {
             records.push({
               id: doc.id,
               ...data,
@@ -96,14 +97,14 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
     return () => unsubscribe();
   }, []);
 
-  const handleApprove = async (wdId: string) => {
+  const handleApprove = async (wdId: string, botId: string) => {
     if (!confirm('Are you sure you want to approve and payout this withdrawal request?')) return;
     setIsProcessing(wdId);
     try {
       const res = await apiFetch('/api/admin/withdrawals/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ withdrawalId: wdId }),
+        body: JSON.stringify({ withdrawalId: wdId, botId }),
       });
       const data = await res.json();
       if (data.success) {
@@ -118,7 +119,7 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
     }
   };
 
-  const handleReject = async (wdId: string) => {
+  const handleReject = async (wdId: string, botId: string) => {
     if (!rejectReason.trim()) {
       showToast('Please enter a rejection reason.', 'error');
       return;
@@ -128,7 +129,7 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
       const res = await apiFetch('/api/admin/withdrawals/reject', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ withdrawalId: wdId, reason: rejectReason }),
+        body: JSON.stringify({ withdrawalId: wdId, reason: rejectReason, botId }),
       });
       const data = await res.json();
       if (data.success) {
@@ -147,7 +148,10 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
   // Filter & Search Logic
   const filteredWithdrawals = withdrawals.filter((w) => {
     // 1. Bot Filter
-    if (selectedBotId !== 'all' && w.earningBotId !== selectedBotId) return false;
+    if (selectedBotId !== 'all') {
+      const recordBotId = w.botId || (w.earningBotId ? w.earningBotId : 'roy-share-wallet');
+      if (recordBotId !== selectedBotId) return false;
+    }
 
     // 2. Status Filter
     if (statusFilter !== 'ALL') {
@@ -406,7 +410,7 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
                       </button>
                       <button
                         disabled={isProcessing === w.id}
-                        onClick={() => handleReject(w.id)}
+                        onClick={() => handleReject(w.id, w.botId || w.earningBotId)}
                         className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-[10px] font-bold text-slate-950 rounded-lg transition-colors disabled:opacity-50"
                       >
                         {isProcessing === w.id ? 'Rejecting...' : 'Reject & Refund'}
@@ -419,7 +423,7 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
                   <div className="flex items-center gap-2 pt-1">
                     <button
                       disabled={isProcessing === w.id}
-                      onClick={() => handleApprove(w.id)}
+                      onClick={() => handleApprove(w.id, w.botId || w.earningBotId)}
                       className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all flex items-center gap-1 disabled:opacity-50"
                     >
                       <Check className="w-3.5 h-3.5" />

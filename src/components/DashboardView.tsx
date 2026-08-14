@@ -206,6 +206,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ config, setActiveT
         const docs = snapshot?.docs || [];
         docs.forEach((doc) => {
           const data = doc.data() || {};
+          const recordBotId = data.botId || (data.earningBotId ? data.earningBotId : 'roy-share-wallet');
+          if (recordBotId !== 'roy-share-wallet') return;
+
           const amt = Number(data.amount) || Number(data.requestedAmount) || 0;
           const fee = Number(data.platformFee) || 0;
 
