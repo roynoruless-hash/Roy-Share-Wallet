@@ -751,6 +751,7 @@ export default function App() {
     isTelegramContext ||
     window.location.pathname.startsWith('/wallet') ||
     window.location.pathname.startsWith('/profile') ||
+    window.location.pathname.startsWith('/task') ||
     window.location.pathname.startsWith('/tasks') ||
     window.location.pathname.startsWith('/withdraw') ||
     window.location.pathname.startsWith('/referral') ||

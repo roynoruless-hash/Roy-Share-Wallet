@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { doc, onSnapshot, collection, query, where, runTransaction, addDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, collection, query, where, runTransaction, addDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { FormattedTaskDescription } from './common/FormattedTaskDescription';
 import {
@@ -22,6 +22,7 @@ import {
   Timer,
   Key,
   ArrowRight,
+  ArrowLeft,
   Bot,
   Upload,
   Image as ImageIcon,
@@ -38,10 +39,70 @@ interface UserAppViewProps {
   botUsername: string;
 }
 
+function getDeepLinkTaskId(): string | null {
+  try {
+    const tgWebApp = (window as any).Telegram?.WebApp;
+    const tgStartParam = tgWebApp?.initDataUnsafe?.start_param || '';
+
+    let rawParam = tgStartParam;
+    const urlParams = new URLSearchParams(window.location.search);
+    if (!rawParam) {
+      rawParam = urlParams.get('startapp') || urlParams.get('tgWebAppStartParam') || urlParams.get('start') || '';
+    }
+
+    console.log('[TaskDeepLink] Raw Telegram start param:', rawParam || 'none');
+
+    let parsedTaskId: string | null = null;
+    if (rawParam) {
+      if (rawParam.startsWith('task_')) {
+        parsedTaskId = rawParam.replace(/^task_/, '').trim();
+      } else if (
+        !rawParam.startsWith('earning_') &&
+        !rawParam.startsWith('ref_') &&
+        !rawParam.startsWith('refer_') &&
+        !rawParam.startsWith('live') &&
+        rawParam !== 'giveaways'
+      ) {
+        parsedTaskId = rawParam.trim();
+      }
+    }
+
+    if (!parsedTaskId) {
+      const paramId = urlParams.get('taskId') || urlParams.get('task_id') || urlParams.get('id');
+      if (paramId) parsedTaskId = paramId.trim();
+    }
+
+    if (!parsedTaskId) {
+      const pathname = window.location.pathname;
+      const match = pathname.match(/^\/(?:task|tasks)\/([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) {
+        parsedTaskId = match[1].trim();
+      }
+    }
+
+    if (!parsedTaskId && window.location.hash) {
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      const hashId = hashParams.get('taskId') || hashParams.get('task_id') || hashParams.get('id') || hashParams.get('startapp');
+      if (hashId) {
+        parsedTaskId = hashId.startsWith('task_') ? hashId.replace(/^task_/, '').trim() : hashId.trim();
+      }
+    }
+
+    console.log('[TaskDeepLink] Parsed taskId:', parsedTaskId || 'none');
+    return parsedTaskId;
+  } catch (err) {
+    console.error('Error parsing task deep link:', err);
+    return null;
+  }
+}
+
 export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'wallet' | 'referral' | 'tasks' | 'giveaways' | 'withdraw' | 'profile'>('wallet');
+  const initialDeepLinkTaskId = getDeepLinkTaskId();
+  const [activeTab, setActiveTab] = useState<'wallet' | 'referral' | 'tasks' | 'giveaways' | 'withdraw' | 'profile'>(
+    initialDeepLinkTaskId ? 'tasks' : 'wallet'
+  );
   const [copied, setCopied] = useState(false);
   const [toasts, setToasts] = useState<Array<{ id: string; text: string; type: 'success' | 'error' | 'info' }>>([]);
 
@@ -153,6 +214,138 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
   const [isSubmittingProof, setIsSubmittingProof] = useState(false);
   const [proofError, setProofError] = useState<string | null>(null);
   const [showDemoImageModal, setShowDemoImageModal] = useState(false);
+
+  // Task Deep Link Routing & Direct Task View States
+  const [deepLinkTaskId, setDeepLinkTaskId] = useState<string | null>(initialDeepLinkTaskId);
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
+  const [directTaskDetails, setDirectTaskDetails] = useState<any | null>(null);
+  const [taskSessionState, setTaskSessionState] = useState<'available' | 'started' | 'external_opened' | 'proof_pending' | 'approved' | 'rejected' | 'expired'>('available');
+
+  useEffect(() => {
+    if (!deepLinkTaskId) {
+      return;
+    }
+
+    const tgId = getTelegramUserId();
+    console.log('[TaskDeepLink] User Telegram ID:', tgId || 'unauthenticated');
+    console.log('[TaskDeepLink] Loading task:', deepLinkTaskId);
+
+    const loadTaskDeepLink = async () => {
+      try {
+        let activeFound = tasks.find((t) => t.id === deepLinkTaskId);
+
+        if (!activeFound) {
+          const taskDocSnap = await getDoc(doc(db, 'tasks', deepLinkTaskId));
+          if (taskDocSnap.exists() && taskDocSnap.data()?.active !== false) {
+            const d = taskDocSnap.data();
+            activeFound = {
+              id: taskDocSnap.id,
+              title: d.title || 'Untitled Task',
+              reward: Number(d.reward) || 0,
+              coins: Number(d.coins) || 0,
+              verificationType: d.verificationType || 'none',
+              icon: d.icon || 'CheckSquare',
+              sortOrder: Number(d.sortOrder) || 0,
+              url: d.url || d.externalDestinationUrl || '',
+              externalDestinationUrl: d.externalDestinationUrl || d.url || '',
+              taskImage: d.taskImage || '',
+              description: d.description || '',
+              proofDemoImage: d.proofDemoImage || '',
+              privateAdminGroupChatId: d.privateAdminGroupChatId || '',
+              allowResubmission: d.allowResubmission !== false,
+              maxSubmissionsPerUser: d.maxSubmissionsPerUser || 1,
+              earningBotId: d.earningBotId || '',
+            };
+          }
+        }
+
+        if (activeFound) {
+          console.log('[TaskDeepLink] Task found:', true, activeFound.title);
+          setDirectTaskDetails(activeFound);
+          setDeepLinkError(null);
+
+          const matchingSubs = userManualSubmissions.filter((s) => s.taskId === deepLinkTaskId);
+          const latestSub = matchingSubs[0];
+
+          let computedStatus: 'available' | 'started' | 'external_opened' | 'proof_pending' | 'approved' | 'rejected' | 'expired' = 'available';
+
+          if (latestSub) {
+            if (latestSub.status === 'APPROVED') computedStatus = 'approved';
+            else if (latestSub.status === 'PENDING_APPROVAL') computedStatus = 'proof_pending';
+            else if (latestSub.status === 'REJECTED') computedStatus = 'rejected';
+          } else {
+            const savedSession = localStorage.getItem(`task_session_${tgId}_${deepLinkTaskId}`);
+            if (savedSession) {
+              try {
+                const sessData = JSON.parse(savedSession);
+                if (sessData.status === 'started') computedStatus = 'started';
+              } catch (e) {}
+            }
+          }
+
+          console.log('[TaskDeepLink] Task status:', computedStatus);
+          console.log('[TaskDeepLink] Navigating to task:', deepLinkTaskId);
+          setTaskSessionState(computedStatus);
+          setActiveTab('tasks');
+        } else {
+          console.log('[TaskDeepLink] Task found:', false);
+          const errMsg = 'This task link is missing or expired.';
+          console.log('[TaskDeepLink] Deep link failed:', errMsg);
+          setDeepLinkError(errMsg);
+          setDirectTaskDetails(null);
+        }
+      } catch (err: any) {
+        console.error('Error fetching deep-linked task:', err);
+        const errMsg = err.message || 'Failed to load deep-linked task.';
+        console.log('[TaskDeepLink] Deep link failed:', errMsg);
+        setDeepLinkError(errMsg);
+      }
+    };
+
+    loadTaskDeepLink();
+  }, [deepLinkTaskId, tasks, userManualSubmissions]);
+
+  const handleStartTaskNow = async () => {
+    if (!directTaskDetails) return;
+    const tgId = getTelegramUserId();
+    const taskId = directTaskDetails.id;
+
+    try {
+      const res = await fetch('/api/tasks/start-attempt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: taskId,
+          userId: user?.id || user?.uid || String(tgId),
+          telegramUserId: String(tgId || user?.telegramId || ''),
+          earningBotId: earningBotId || directTaskDetails.earningBotId || 'roy_share_wallet',
+        }),
+      });
+      const data = await res.json();
+      if (data.success || data.attempt) {
+        localStorage.setItem(`task_session_${tgId}_${taskId}`, JSON.stringify({ status: 'started', startedAt: new Date().toISOString() }));
+        setTaskSessionState('started');
+        showToast('🚀 Task started! Complete steps and submit proof screenshot.', 'info');
+        const destUrl = directTaskDetails.externalDestinationUrl || directTaskDetails.url;
+        if (destUrl) {
+          try {
+            const tg = (window as any).Telegram?.WebApp;
+            if (tg?.openLink) {
+              tg.openLink(destUrl);
+            } else {
+              window.open(destUrl, '_blank');
+            }
+          } catch (e) {
+            window.open(destUrl, '_blank');
+          }
+        }
+      } else {
+        showToast(data.error || 'Unable to start task attempt.', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error starting task.', 'error');
+    }
+  };
 
   const generateDeviceFingerprint = async (): Promise<string> => {
     try {
@@ -2431,12 +2624,212 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
 
         {activeTab === 'tasks' && (
           <div className="space-y-6">
-            <div className="p-4 rounded-2xl bg-slate-900/40 border border-slate-800/60">
-              <h2 className="text-xs font-black text-slate-300 uppercase tracking-widest mb-1">Earn Cash & Coins</h2>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Complete tasks below to earn real cash and coins. For manual audit tasks, upload your registration screenshot proof for instant admin verification.
-              </p>
-            </div>
+            {directTaskDetails ? (
+              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                {/* Navigation Back Button Header */}
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <button
+                    onClick={() => {
+                      setDirectTaskDetails(null);
+                      setDeepLinkTaskId(null);
+                      setDeepLinkError(null);
+                    }}
+                    className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-amber-500/10 border border-amber-500/20 transition"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    <span>Back to All Tasks</span>
+                  </button>
+
+                  <span className="text-[10px] font-bold text-slate-400 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-full uppercase tracking-widest">
+                    Task Details
+                  </span>
+                </div>
+
+                {/* Task Banner & Title Card */}
+                <div className="p-5 rounded-3xl bg-slate-900/90 border border-slate-800 space-y-4 shadow-xl">
+                  {directTaskDetails.taskImage && (
+                    <div className="rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 max-h-52 flex items-center justify-center">
+                      <img src={directTaskDetails.taskImage} alt={directTaskDetails.title} className="w-full h-full object-cover max-h-52" />
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <h2 className="text-lg font-black text-white leading-snug">{directTaskDetails.title}</h2>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-black bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-xl">
+                        Reward: ₹{directTaskDetails.reward} Cash
+                      </span>
+                      {directTaskDetails.coins > 0 && (
+                        <span className="text-xs font-black bg-amber-500/15 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-xl">
+                          +{directTaskDetails.coins} Coins
+                        </span>
+                      )}
+                      <span className="text-xs font-bold bg-sky-500/15 text-sky-400 border border-sky-500/20 px-2.5 py-1 rounded-xl flex items-center gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>{directTaskDetails.verificationType === 'manual' ? 'Manual Audit' : 'Auto Verification'}</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Formatted Description / Instructions */}
+                  {directTaskDetails.description && (
+                    <FormattedTaskDescription description={directTaskDetails.description} cardStyle={true} />
+                  )}
+
+                  {/* Demo Screenshot Button if provided */}
+                  {directTaskDetails.proofDemoImage && (
+                    <div className="pt-1">
+                      <button
+                        onClick={() => {
+                          setActiveProofTask(directTaskDetails);
+                          setShowDemoImageModal(true);
+                        }}
+                        className="w-full py-2.5 px-4 rounded-xl bg-slate-950 hover:bg-slate-850 border border-slate-800 text-sky-400 font-bold text-xs flex items-center justify-center gap-2 transition"
+                      >
+                        <ImageIcon className="w-4 h-4 text-sky-400" />
+                        <span>🖼️ View Screenshot Proof Example</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Task Actions & Session Control */}
+                  <div className="pt-3 border-t border-slate-800 space-y-3">
+                    {taskSessionState === 'available' && (
+                      <button
+                        onClick={handleStartTaskNow}
+                        className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-black text-sm shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2 transition"
+                      >
+                        <ExternalLink className="w-4.5 h-4.5" />
+                        <span>🚀 TASK NOW</span>
+                      </button>
+                    )}
+
+                    {(taskSessionState === 'started' || taskSessionState === 'external_opened') && (
+                      <div className="space-y-3">
+                        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-400 text-xs font-bold flex items-center gap-2">
+                          <Clock className="w-4 h-4 shrink-0 animate-pulse" />
+                          <span>Task Session Active! Perform required steps then submit screenshot proof.</span>
+                        </div>
+
+                        {(directTaskDetails.externalDestinationUrl || directTaskDetails.url) && (
+                          <a
+                            href={directTaskDetails.externalDestinationUrl || directTaskDetails.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => {
+                              try {
+                                const tg = (window as any).Telegram?.WebApp;
+                                if (tg?.openLink) {
+                                  tg.openLink(directTaskDetails.externalDestinationUrl || directTaskDetails.url);
+                                }
+                              } catch (e) {}
+                            }}
+                            className="w-full py-3 px-4 rounded-xl bg-slate-950 hover:bg-slate-850 border border-slate-800 text-sky-400 font-black text-xs flex items-center justify-center gap-2 transition"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                            <span>🚀 CONTINUE TASK (Open Link)</span>
+                          </a>
+                        )}
+
+                        <button
+                          onClick={() => {
+                            setActiveProofTask(directTaskDetails);
+                            setProofMobile('');
+                            setProofImageBase64('');
+                            setProofError(null);
+                          }}
+                          className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-sm shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-2 transition"
+                        >
+                          <CheckSquare className="w-4.5 h-4.5" />
+                          <span>📤 COMPLETE TASK / SUBMIT PROOF</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {taskSessionState === 'proof_pending' && (
+                      <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-400 space-y-1 text-center">
+                        <div className="flex items-center justify-center gap-2 font-black text-sm">
+                          <Clock className="w-4 h-4 animate-spin" />
+                          <span>⏳ PROOF UNDER REVIEW</span>
+                        </div>
+                        <p className="text-xs text-slate-300">
+                          Your screenshot proof has been submitted and is currently undergoing admin audit.
+                        </p>
+                      </div>
+                    )}
+
+                    {taskSessionState === 'approved' && (
+                      <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 space-y-1 text-center">
+                        <div className="flex items-center justify-center gap-2 font-black text-sm">
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>✅ TASK APPROVED</span>
+                        </div>
+                        <p className="text-xs text-slate-300">
+                          Congratulations! Reward ₹{directTaskDetails.reward} Cash & +{directTaskDetails.coins} Coins credited to your wallet.
+                        </p>
+                      </div>
+                    )}
+
+                    {taskSessionState === 'rejected' && (
+                      <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-rose-400 space-y-3 text-center">
+                        <div className="flex items-center justify-center gap-2 font-black text-sm">
+                          <XCircle className="w-4 h-4" />
+                          <span>❌ TASK REJECTED</span>
+                        </div>
+                        <p className="text-xs text-slate-300">
+                          Your previous proof screenshot was rejected by admin review.
+                        </p>
+
+                        {directTaskDetails.allowResubmission !== false && (
+                          <button
+                            onClick={() => {
+                              setActiveProofTask(directTaskDetails);
+                              setProofMobile('');
+                              setProofImageBase64('');
+                              setProofError(null);
+                            }}
+                            className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2"
+                          >
+                            <CheckSquare className="w-4 h-4" />
+                            <span>📤 RESUBMIT PROOF</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : deepLinkError ? (
+              /* Invalid Task Link Fallback View */
+              <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-4 text-center max-w-md mx-auto my-8 shadow-2xl">
+                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
+                  <AlertTriangle className="w-7 h-7" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-black text-white">⚠️ Task Link Invalid</h3>
+                  <p className="text-xs text-slate-400">{deepLinkError}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setDeepLinkError(null);
+                    setDeepLinkTaskId(null);
+                    setActiveTab('tasks');
+                  }}
+                  className="w-full py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition shadow-lg shadow-amber-500/20"
+                >
+                  View Available Tasks
+                </button>
+              </div>
+            ) : (
+              /* Standard Tasks List View */
+              <div className="space-y-6">
+                <div className="p-4 rounded-2xl bg-slate-900/40 border border-slate-800/60">
+                  <h2 className="text-xs font-black text-slate-300 uppercase tracking-widest mb-1">Earn Cash & Coins</h2>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Complete tasks below to earn real cash and coins. For manual audit tasks, upload your registration screenshot proof for instant admin verification.
+                  </p>
+                </div>
 
             <div className="space-y-3">
               {tasks.length === 0 ? (
@@ -2457,7 +2850,19 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                   return (
                     <div
                       key={task.id}
-                      className={`p-4 rounded-2xl bg-slate-900/50 border border-slate-800/80 space-y-3 transition ${
+                      onClick={() => {
+                        setDirectTaskDetails(task);
+                        const matchingSubs = userManualSubmissions.filter((s) => s.taskId === task.id);
+                        const latestSub = matchingSubs[0];
+                        let computedStatus: 'available' | 'started' | 'external_opened' | 'proof_pending' | 'approved' | 'rejected' | 'expired' = 'available';
+                        if (latestSub) {
+                          if (latestSub.status === 'APPROVED') computedStatus = 'approved';
+                          else if (latestSub.status === 'PENDING_APPROVAL') computedStatus = 'proof_pending';
+                          else if (latestSub.status === 'REJECTED') computedStatus = 'rejected';
+                        }
+                        setTaskSessionState(computedStatus);
+                      }}
+                      className={`p-4 rounded-2xl bg-slate-900/50 border border-slate-800/80 space-y-3 transition cursor-pointer hover:border-amber-500/40 ${
                         isCompleted || approvedSub ? 'opacity-75' : ''
                       }`}
                     >
@@ -2608,6 +3013,8 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
             </div>
           </div>
         )}
+      </div>
+    )}
 
         {activeTab === 'giveaways' && (
           <div className="space-y-6 animate-fade-in">

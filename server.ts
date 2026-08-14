@@ -1746,7 +1746,7 @@ async function startServer() {
       }
 
       const taskData = { id: taskSnap.id, ...taskSnap.data() } as any;
-      const botDeepLink = `https://t.me/${botUsername}?start=task_${taskSnap.id}`;
+      const botDeepLink = `https://t.me/${botUsername}?startapp=${taskSnap.id}`;
 
       const nowIso = new Date().toISOString();
       await updateDoc(taskRef, {
@@ -1807,7 +1807,7 @@ async function startServer() {
         const inline_keyboard = [
           [
             {
-              text: '🪙 START TASK',
+              text: '🚀 START TASK',
               url: botDeepLink,
             },
           ],
@@ -1921,7 +1921,7 @@ async function startServer() {
             const inline_keyboard = [
               [
                 {
-                  text: '🪙 START TASK',
+                  text: '🚀 START TASK',
                   url: botDeepLink,
                 },
               ],

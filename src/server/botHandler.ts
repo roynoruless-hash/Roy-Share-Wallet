@@ -111,9 +111,9 @@ export async function sendCreateAccountPrompt(token: string, chatId: string | nu
 
 export function buildMainMenuKeyboard(hasActiveLiveEvent: boolean = false) {
   const keyboard: any[][] = [
-    [{ text: '💰 Wallet' }, { text: '🪙 Earn Tasks' }],
-    [{ text: '🎁 Refer & Earn' }, { text: '☎️ Contact Us' }],
-    [{ text: '🎉 Lucky Draw' }],
+    [{ text: '💰 Wallet' }, { text: '💸 Withdraw' }],
+    [{ text: '🌐 Earn Tasks' }, { text: '🎁 Refer' }],
+    [{ text: '☎️ Contact Us' }, { text: '🎉 Lucky Draw' }],
   ];
 
   return {
@@ -135,7 +135,7 @@ export async function sendSingleTaskCard(token: string, chatId: string | number,
   const inline_keyboard = [
     [
       {
-        text: '🪙 START TASK',
+        text: '🚀 START TASK',
         web_app: { url: taskMiniAppUrl },
       },
     ],
@@ -833,13 +833,7 @@ export async function processTelegramUpdate(token: string, update: any) {
               chat_id: chatId,
               text: `👋 <b>Welcome back, ${existingUser.firstName}!</b>\n\n👛 <b>Wallet Balance:</b> ₹${existingUser.walletBalance || 0}`,
               parse_mode: 'HTML',
-              reply_markup: {
-                keyboard: [
-                  [{ text: '👛 Wallet' }, { text: '💸 Withdraw' }],
-                  [{ text: '🎁 Refer & Earn' }, { text: '☎ Contact Us' }],
-                ],
-                resize_keyboard: true,
-              },
+              reply_markup: buildMainMenuKeyboard(),
             });
           }
         } else {
@@ -1804,11 +1798,11 @@ export async function processTelegramUpdate(token: string, update: any) {
     }
 
     // Reset active withdrawal session if user clicks a main menu button
-    if (text === '💰 Wallet' || text === '👛 Wallet' || text === '👤 ACCOUNT' || text === '💰 BALANCE' || text === '🪙 Earn Tasks' || text === '🪙 EARN TASKS' || text === 'Earn Tasks' || text === 'Tasks' || text === '📊 HISTORY' || text === '💸 Withdraw' || text === '🎁 Refer & Earn' || text === '🎁 REFER & EARN' || text === '☎️ Contact Us' || text === '☎ Contact Us' || text === '📞 CONTACT US' || text === '🎁 Lucky Draw') {
+    if (text === '💰 Wallet' || text === '👛 Wallet' || text === '👤 ACCOUNT' || text === '💰 BALANCE' || text === '🪙 Earn Tasks' || text === '🪙 EARN TASKS' || text === 'Earn Tasks' || text === 'Tasks' || text === '📊 HISTORY' || text === '💸 Withdraw' || text === '🎁 Refer & Earn' || text === '🎁 REFER & EARN' || text === '🎁 Refer' || text === '☎️ Contact Us' || text === '☎ Contact Us' || text === '📞 CONTACT US' || text === '🎁 Lucky Draw' || text === '🎉 Lucky Draw' || text === '🌐 Earn Tasks') {
       userSessions.delete(chatId);
     }
 
-    if (text === '🪙 Earn Tasks' || text === '🪙 EARN TASKS' || text === 'Earn Tasks' || text === 'Tasks' || text === '/tasks') {
+    if (text === '🪙 Earn Tasks' || text === '🪙 EARN TASKS' || text === 'Earn Tasks' || text === 'Tasks' || text === '/tasks' || text === '🌐 Earn Tasks') {
       await sendAvailableTasksList(token, chatId, existingUser);
       return;
     }
@@ -1940,7 +1934,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    if (text === '🎁 Refer & Earn') {
+    if (text === '🎁 Refer & Earn' || text === '🎁 Refer' || text === 'Refer' || text === '/refer') {
       let botUser = adminConfig?.botUsername || '';
       if (!botUser) {
         const getMe = await sendTelegramApi(token, 'getMe', {});
@@ -1990,7 +1984,7 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    if (text === '🎁 Lucky Draw' || text === '👥 Open Waiting Lobby' || text === 'Open Waiting Lobby' || text === '/lobby' || text === '/waitingroom' || text === '/lucky' || text === '/giveaway') {
+    if (text === '🎁 Lucky Draw' || text === '🎉 Lucky Draw' || text === '👥 Open Waiting Lobby' || text === 'Open Waiting Lobby' || text === '/lobby' || text === '/waitingroom' || text === '/lucky' || text === '/giveaway') {
       console.log('[LUCKY_DRAW_CLICK] Lucky Draw command clicked or typed:', text, 'Chat ID:', chatId);
       console.log('[LUCKY_DRAW_HANDLER] Beginning processing for Lucky Draw action...');
 
