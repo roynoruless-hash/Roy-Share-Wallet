@@ -1256,43 +1256,69 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
 
                       {/* Payout Destination */}
                       <td className="p-4 font-mono">
-                        {method === 'upi' && (
-                          <span className="px-2.5 py-1 rounded-lg bg-slate-950 text-blue-300 border border-slate-800 font-bold block truncate max-w-[200px]">
-                            {w.upiId || 'N/A'}
-                          </span>
-                        )}
-                        {method === 'qr' && (
-                          <div>
-                            {w.qrImageUrl ? (
+                        {method === 'upi' && (() => {
+                          const value = w.accountInformation || w.upiId || w.paymentDetails?.upiId;
+                          if (!value) {
+                            return (
+                              <span className="px-2.5 py-1 rounded-lg bg-slate-950 text-rose-400 border border-rose-500/20 font-bold block max-w-[200px]">
+                                ⚠️ Account details unavailable for this request
+                              </span>
+                            );
+                          }
+                          return (
+                            <div className="bg-slate-950 p-2.5 rounded-xl border border-blue-500/20 text-[11px] space-y-1 select-all">
+                              <span className="text-[9px] font-black text-blue-400 block uppercase tracking-wider">UPI METHOD</span>
+                              <span className="text-white font-bold block">{value}</span>
+                            </div>
+                          );
+                        })()}
+                        {method === 'qr' && (() => {
+                          const qrUrl = w.qrImageUrl || w.accountInformation || w.qrData || w.paymentDetails?.qrData || w.paymentDetails?.qrUrl;
+                          if (!qrUrl) {
+                            return (
+                              <span className="px-2.5 py-1 rounded-lg bg-slate-950 text-rose-400 border border-rose-500/20 font-bold block max-w-[200px]">
+                                ⚠️ Account details unavailable for this request
+                              </span>
+                            );
+                          }
+                          return (
+                            <div className="space-y-1">
+                              <span className="text-[9px] font-black text-purple-400 block uppercase tracking-wider">QR CODE METHOD</span>
                               <button
-                                onClick={() => setPreviewQrUrl(w.qrImageUrl!)}
+                                onClick={() => setPreviewQrUrl(qrUrl)}
                                 className="group relative rounded-lg border border-purple-500/30 overflow-hidden bg-slate-950 px-2 py-1 flex items-center gap-1.5 text-purple-300 hover:text-white hover:border-purple-400 transition"
                               >
                                 <Eye className="w-3.5 h-3.5 text-purple-400" />
                                 <span className="text-[10px] font-bold">Open QR Code</span>
                               </button>
-                            ) : (
-                              <span className="text-slate-500 italic text-[11px]">No QR Image</span>
-                            )}
-                          </div>
-                        )}
-                        {method === 'redeem_code' && (
-                          <span className="px-2.5 py-1 rounded-lg bg-slate-950 text-pink-300 border border-slate-800 font-bold block truncate max-w-[200px]">
-                            {w.redeemCodeDetails || 'N/A'}
-                          </span>
-                        )}
-                        {(method.includes('ultra') || method === 'ultra_pay' || method === 'ultrapay') && (() => {
-                          const payNumber = w.paytoNumber || w.paymentDetails?.paytoNumber || w.upiId || w.redeemCodeDetails || w.qrData;
-                          if (!payNumber) {
-                            return <span className="text-slate-500 italic text-[11.5px] font-bold bg-slate-950 p-2 rounded-xl border border-slate-900 block max-w-[200px]">Details unavailable for legacy request</span>;
+                            </div>
+                          );
+                        })()}
+                        {method === 'redeem_code' && (() => {
+                          const details = w.accountInformation || w.redeemCodeDetails || w.paymentDetails?.redeemCodeDetails;
+                          if (!details) {
+                            return (
+                              <span className="px-2.5 py-1 rounded-lg bg-slate-950 text-rose-400 border border-rose-500/20 font-bold block max-w-[200px]">
+                                ⚠️ Account details unavailable for this request
+                              </span>
+                            );
                           }
-                          const maskPayNumber = (num: string) => {
-                            const clean = String(num).trim();
-                            if (clean.length >= 4) {
-                              return '*'.repeat(clean.length - 4) + clean.slice(-4);
-                            }
-                            return clean;
-                          };
+                          return (
+                            <div className="bg-slate-950 p-2.5 rounded-xl border border-pink-500/20 text-[11px] space-y-1 select-all">
+                              <span className="text-[9px] font-black text-pink-400 block uppercase tracking-wider">REDEEM CODE BRAND</span>
+                              <span className="text-white font-bold block truncate max-w-[200px]">{details}</span>
+                            </div>
+                          );
+                        })()}
+                        {(method.includes('ultra') || method === 'ultra_pay' || method === 'ultrapay') && (() => {
+                          const payNumber = w.accountInformation || w.paytoNumber || w.paymentDetails?.paytoNumber;
+                          if (!payNumber) {
+                            return (
+                              <span className="px-2.5 py-1 rounded-lg bg-slate-950 text-rose-400 border border-rose-500/20 font-bold block max-w-[200px]">
+                                ⚠️ Account details unavailable for this request
+                              </span>
+                            );
+                          }
                           const amountVal = w.payoutAmount !== undefined ? w.payoutAmount : (w.finalPayout !== undefined ? w.finalPayout : w.amount);
                           return (
                             <div className="bg-slate-950 p-3 rounded-2xl border border-amber-500/20 text-[10.5px] text-slate-300 space-y-1.5 max-w-[250px] leading-relaxed select-all">
@@ -1302,7 +1328,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-500 font-medium">Pay Number</span>
-                                <span className="font-black text-slate-200">{maskPayNumber(payNumber)}</span>
+                                <span className="font-black text-slate-200 select-all">{payNumber}</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-500 font-medium">Amount</span>
@@ -1321,7 +1347,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                               <div className="flex justify-between">
                                 <span className="text-slate-500 font-medium">Gateway Ref</span>
                                 <span className="font-mono text-slate-400 truncate max-w-[120px]" title={w.providerReference || 'Not yet assigned'}>
-                                  {w.providerReference || 'Gateway Reference: Not yet assigned'}
+                                  {w.providerReference || 'Not yet assigned'}
                                 </span>
                               </div>
                               <div className="flex justify-between pt-1 border-t border-slate-850 text-[9px] text-slate-500 mt-1">

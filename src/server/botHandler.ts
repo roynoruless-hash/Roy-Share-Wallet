@@ -1146,6 +1146,162 @@ export async function processTelegramUpdate(token: string, update: any) {
   const text = message.text ? message.text.trim() : '';
   const contact = message.contact;
 
+  // --- TELEGRAM OTP MESSAGE HANDLER ---
+  const isOtp = /^\d{6}$/.test(text);
+  if (isOtp) {
+    console.log(`[OTP] Telegram ID: ${chatId}`);
+    console.log(`[OTP] OTP received: [REDACTED_SECURE_MASK_PREFIX_${text.substring(0, 2)}]`);
+
+    // Fetch existing registered user
+    const existingUser = await getUserByTelegramId(chatId);
+    if (existingUser && existingUser.status !== 'banned' && existingUser.banned !== true) {
+      console.log(`[OTP] Account activation result: Already Verified`);
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `✅ <b>Your account is already verified and active!</b>\n\n👛 <b>Wallet Balance:</b> ₹${existingUser.walletBalance || 0}`,
+        parse_mode: 'HTML',
+        reply_markup: buildMainMenuKeyboard(),
+      });
+      return;
+    }
+
+    // Find pending verification session
+    const sessionDocRef = doc(db, 'registrationSessions', chatId);
+    const sessionSnap = await getDoc(sessionDocRef);
+
+    if (!sessionSnap.exists()) {
+      console.log(`[OTP] Session status: Not Found`);
+      const appBaseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
+      const verificationUrl = `${appBaseUrl}/?action=otp_verify&tgId=${chatId}`;
+
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `⚠️ <b>No active registration session found.</b>\n\nPlease open the Mobile Verification Mini App first to initiate registration.`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📱 Open Verification Mini App', web_app: { url: verificationUrl } }]
+          ]
+        }
+      });
+      return;
+    }
+
+    const session = sessionSnap.data();
+    console.log(`[OTP] Session ID: ${chatId}`);
+    console.log(`[OTP] Session status: Pending`);
+
+    if (!session.contactVerified) {
+      console.log(`[OTP] OTP validation result: Contact Not Shared`);
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `📱 <b>Mobile number not verified yet.</b>\n\nPlease tap the button below to share the mobile number linked to this Telegram account first.`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [{ text: '📱 Share Contact', request_contact: true }]
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true
+        }
+      });
+      return;
+    }
+
+    // Check expiry
+    const isExpired = Date.now() > (session.otpExpiry || 0);
+    console.log(`[OTP] Expiry status: ${isExpired ? 'Expired' : 'Valid'}`);
+    if (isExpired) {
+      console.log(`[OTP] OTP validation result: Failed (Expired)`);
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `⚠️ <b>OTP Expired</b>\n\nPlease open the Verification Mini App and generate a new code.`,
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    // Check attempt limit
+    if ((session.attempts || 0) >= 5) {
+      console.log(`[OTP] OTP validation result: Blocked (Max attempts reached)`);
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `❌ <b>Maximum 5 wrong OTP attempts reached.</b>\n\nPlease wait 30 minutes before trying again.`,
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    // Check OTP match
+    const correctOtp = String(session.otp).trim();
+    if (correctOtp !== text) {
+      const newAttempts = (session.attempts || 0) + 1;
+      await setDoc(sessionDocRef, { attempts: newAttempts }, { merge: true });
+      console.log(`[OTP] OTP validation result: Mismatch (Attempt ${newAttempts}/5)`);
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `❌ <b>Invalid OTP.</b> Attempt ${newAttempts} of 5.`,
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    console.log(`[OTP] OTP validation result: Match`);
+
+    // Match found! Let's trigger verify-otp endpoint to process security pipeline, create account & credit bonus safely and idempotently!
+    try {
+      console.log(`[OTP] Forwarding to internal verification pipeline...`);
+      // Since the app runs locally on port 3000, let's call the registration endpoint!
+      const verifyRes = await fetch(`http://localhost:3000/api/register/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegramId: chatId, otp: text }),
+      });
+
+      const verifyData = await verifyRes.json() as any;
+
+      if (verifyData.success) {
+        console.log(`[OTP] Security check result: Passed`);
+        console.log(`[OTP] Account activation result: Success`);
+
+        // Format success response
+        const userBonus = verifyData.user?.bonus ?? 1;
+        const successMsg =
+          `✅ <b>MOBILE VERIFIED SUCCESSFULLY!</b>\n\n` +
+          `📱 <b>Mobile:</b> +91 ${session.mobile.slice(-10)}\n` +
+          `🛡 <b>Security Check:</b> Passed\n` +
+          `🔐 <b>Device Check:</b> Passed\n\n` +
+          `🎉 <b>Account Activated!</b>\n\n` +
+          `💰 <b>Registration Bonus:</b> ₹${userBonus}\n` +
+          `💼 <b>Wallet Balance:</b> ₹${userBonus}\n\n` +
+          `Welcome to <b>Roy Share Wallet Bot</b>! Use the menu below to navigate:`;
+
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: successMsg,
+          parse_mode: 'HTML',
+          reply_markup: buildMainMenuKeyboard(),
+        });
+      } else {
+        console.log(`[OTP] Security check result: Failed (${verifyData.error || 'Unknown Error'})`);
+        console.log(`[OTP] Account activation result: Failed`);
+        await sendTelegramApi(token, 'sendMessage', {
+          chat_id: chatId,
+          text: `🛡 <b>Verification Failed:</b>\n\n${verifyData.error || 'Could not verify OTP.'}`,
+          parse_mode: 'HTML',
+        });
+      }
+    } catch (fetchErr: any) {
+      console.error(`[OTP] Error during internal verify fetch:`, fetchErr);
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `⚠️ <b>Service temporarily unavailable.</b> Please try verifying inside the Mobile Verification Mini App instead.`,
+        parse_mode: 'HTML',
+      });
+    }
+    return;
+  }
+
   // TELEGRAM CONTACT VERIFICATION HANDLER
   if (contact) {
     const contactUserId = String(contact.user_id || message.from?.id || '');

@@ -7327,16 +7327,35 @@ Respond with a JSON object containing two properties:
       }
 
       // Payment details verification
+      let accountInformation = '';
       if (normMethod === 'UPI') {
         const upiId = String(paymentDetails?.upiId || '').trim();
         if (!upiId || !/^\S+@\S+$/.test(upiId)) {
-          return res.status(400).json({ success: false, error: 'Please enter a valid UPI ID (e.g. name@upi).' });
+          return res.status(400).json({ success: false, error: '⚠️ Please enter/verify your payout details before submitting withdrawal.' });
         }
+        accountInformation = upiId;
       } else if (normMethod === 'ULTRA_PAY') {
         const paytoNumber = String(paymentDetails?.paytoNumber || '').trim();
         if (!paytoNumber || !/^\d{10}$/.test(paytoNumber)) {
-          return res.status(400).json({ success: false, error: 'Please enter a valid 10-digit mobile number registered with Ultra Pay.' });
+          return res.status(400).json({ success: false, error: '⚠️ Please enter/verify your payout details before submitting withdrawal.' });
         }
+        accountInformation = paytoNumber;
+      } else if (normMethod === 'QR') {
+        const qrData = String(paymentDetails?.qrData || paymentDetails?.qrUrl || '').trim();
+        if (!qrData) {
+          return res.status(400).json({ success: false, error: '⚠️ Please enter/verify your payout details before submitting withdrawal.' });
+        }
+        accountInformation = qrData;
+      } else if (normMethod === 'REDEEM_CODE') {
+        const rDetails = String(paymentDetails?.redeemCodeDetails || '').trim();
+        if (!rDetails) {
+          return res.status(400).json({ success: false, error: '⚠️ Please enter/verify your payout details before submitting withdrawal.' });
+        }
+        accountInformation = rDetails;
+      }
+
+      if (!accountInformation) {
+        return res.status(400).json({ success: false, error: '⚠️ Please enter/verify your payout details before submitting withdrawal.' });
       }
 
       if (numAmount < methodCfg.min) {
@@ -7398,6 +7417,7 @@ Respond with a JSON object containing two properties:
         taxType: methodCfg.feeType,
         paymentMethod: normMethod,
         method: normMethod as any,
+        accountInformation,
         upiId: paymentDetails?.upiId || '',
         qrData: paymentDetails?.qrData || paymentDetails?.qrUrl || '',
         paytoNumber: paymentDetails?.paytoNumber || '',
@@ -7611,7 +7631,12 @@ Respond with a JSON object containing two properties:
         const apiToken = configData?.ultraPayApiToken || '';
         const apiKey = configData?.ultraPayApiKey || '';
         const endpoint = configData?.ultraPayEndpoint || 'https://www.ultra-pay.store/APIs/api';
-        const paytoNumber = wData.paymentDetails?.paytoNumber || wData.paytoNumber || '';
+        const paytoNumber = String(wData.accountInformation || wData.paymentDetails?.paytoNumber || wData.paytoNumber || '').trim();
+
+        if (!paytoNumber || !/^\d{10}$/.test(paytoNumber)) {
+          await setDoc(wDocRef, { providerPaymentStarted: false, status: 'PENDING' }, { merge: true });
+          return res.status(400).json({ success: false, error: 'Payout cannot be executed: Account information is missing or not a valid 10-digit mobile number on this withdrawal request.' });
+        }
 
         if (!apiToken || !apiKey) {
           await setDoc(wDocRef, { providerPaymentStarted: false, status: 'PENDING' }, { merge: true });
@@ -12132,6 +12157,7 @@ Respond with a JSON object containing two properties:
         mobile: cleanMobile,
         gmail: cleanGmail,
         deviceFingerprint: fingerprint,
+        ipAddress: clientIp,
         contactVerified: false,
         pendingTaskId: actualPendingTaskId || null,
         attempts: 0,
@@ -12236,7 +12262,10 @@ Respond with a JSON object containing two properties:
       }
 
       // OTP is VALID -> Detect public IP address server-side
-      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+      let clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+      if ((clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost' || clientIp.includes('127.0.0.1')) && session.ipAddress) {
+        clientIp = session.ipAddress;
+      }
       const nowStr = new Date().toISOString();
       console.log(`[Auth] OTP verification successful. Server-side IP detected: ${clientIp}`);
       console.log(`[Auth] Verified mobile: ${session.mobile}`);
