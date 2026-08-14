@@ -7840,6 +7840,26 @@ Respond with a JSON object containing two properties:
     }
   });
 
+  // Helper to extract and normalize payout/address details across diverse schemas
+  function getNormalizedDetails(w: any) {
+    const rawMethod = String(w.method || w.paymentMethod || 'UPI');
+    const method = rawMethod.toUpperCase();
+    if (method === 'UPI') {
+      const upi = w.upiId || w.accountInfo || w.accountInformation || w.account || w.upi_id || w.upiAddress || w.upi_address ||
+                  w.paymentDetails?.upiId || w.paymentDetails?.upi || w.paymentDetails?.upi_id || w.payoutDetails?.upiId || w.withdrawalDetails?.upiId;
+      return upi ? String(upi).trim() : '';
+    } else if (method === 'ULTRA_PAY' || method === 'ULTRAPAY' || method.includes('ULTRA')) {
+      const payNum = w.paytoNumber || w.accountInfo || w.accountInformation || w.account ||
+                     w.paymentDetails?.paytoNumber || w.payoutDetails?.paytoNumber || w.withdrawalDetails?.paytoNumber;
+      return payNum ? String(payNum).trim() : '';
+    } else if (method === 'REDEEM_CODE' || method === 'REDEEMCODE' || method.includes('REDEEM')) {
+      const code = w.redeemCodeDetails || w.redeemCode || w.accountInfo || w.accountInformation || w.account ||
+                   w.paymentDetails?.redeemCodeDetails || w.paymentDetails?.redeemCode || w.payoutDetails?.redeemCodeDetails || w.withdrawalDetails?.redeemCodeDetails;
+      return code ? String(code).trim() : '';
+    }
+    return String(w.accountInfo || w.accountInformation || w.upiId || w.paytoNumber || w.redeemCodeDetails || w.paymentDetails?.upiId || w.paymentDetails?.paytoNumber || w.paymentDetails?.redeemCode || '').trim();
+  }
+
   // 3. GET USER WITHDRAWAL HISTORY
   app.get('/api/user/withdrawals/history', async (req, res) => {
     try {
@@ -7864,7 +7884,24 @@ Respond with a JSON object containing two properties:
         const data = d.data() as any;
         const recordBotId = data.botId || (data.earningBotId ? data.earningBotId : 'roy-share-wallet');
         if (recordBotId === targetBotId) {
-          list.push({ id: d.id, ...data });
+          const normDetails = getNormalizedDetails(data);
+          const normMethod = String(data.method || data.paymentMethod || 'UPI').toUpperCase();
+          const normalizedRecord = {
+            ...data,
+            id: d.id,
+            paymentMethod: normMethod,
+            method: normMethod,
+            accountInfo: normDetails,
+            accountInformation: normDetails,
+          };
+          if (normMethod === 'UPI') {
+            normalizedRecord.upiId = normDetails;
+          } else if (normMethod === 'ULTRA_PAY') {
+            normalizedRecord.paytoNumber = normDetails;
+          } else if (normMethod === 'REDEEM_CODE') {
+            normalizedRecord.redeemCodeDetails = normDetails;
+          }
+          list.push(normalizedRecord);
         }
       });
 
@@ -7891,7 +7928,28 @@ Respond with a JSON object containing two properties:
         const recordBotId = data.botId || (data.earningBotId ? data.earningBotId : 'roy-share-wallet');
         
         if (recordBotId === targetBotId) {
-          list.push({ id: d.id, ...data });
+          const normDetails = getNormalizedDetails(data);
+          const normMethod = String(data.method || data.paymentMethod || 'UPI').toUpperCase();
+          const normalizedRecord = {
+            ...data,
+            id: d.id,
+            paymentMethod: normMethod,
+            method: normMethod,
+            accountInfo: normDetails,
+            accountInformation: normDetails,
+          };
+          if (normMethod === 'UPI') {
+            normalizedRecord.upiId = normDetails;
+          } else if (normMethod === 'ULTRA_PAY') {
+            normalizedRecord.paytoNumber = normDetails;
+          } else if (normMethod === 'REDEEM_CODE') {
+            normalizedRecord.redeemCodeDetails = normDetails;
+          }
+
+          // TEMPORARY DEBUG LOGGING (for admin/development)
+          console.log(`[WITHDRAWAL DEBUG] id=${d.id} | method=${normMethod} | raw fields found=[upiId:${data.upiId || 'none'}, paymentDetails.upiId:${data.paymentDetails?.upiId || 'none'}, accountInformation:${data.accountInformation || 'none'}] | normalized upiId=${normalizedRecord.upiId || 'none'} | normalized accountInfo=${normalizedRecord.accountInfo || 'none'}`);
+
+          list.push(normalizedRecord);
         }
       });
 

@@ -16,7 +16,8 @@ import {
   Filter,
   Check,
   X,
-  CreditCard
+  CreditCard,
+  Copy
 } from 'lucide-react';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from '../services/firebase';
@@ -28,6 +29,26 @@ interface EarningBot {
   botUsername: string;
   botId: string;
 }
+
+// Helper to extract and normalize payout/address details across diverse schemas
+const getNormalizedDetails = (w: any) => {
+  const rawMethod = String(w.method || w.paymentMethod || 'UPI');
+  const method = rawMethod.toUpperCase();
+  if (method === 'UPI') {
+    const upi = w.upiId || w.accountInfo || w.accountInformation || w.account || w.upi_id || w.upiAddress || w.upi_address ||
+                w.paymentDetails?.upiId || w.paymentDetails?.upi || w.paymentDetails?.upi_id || w.payoutDetails?.upiId || w.withdrawalDetails?.upiId;
+    return upi ? String(upi).trim() : '';
+  } else if (method === 'ULTRA_PAY' || method === 'ULTRAPAY' || method.includes('ULTRA')) {
+    const payNum = w.paytoNumber || w.accountInfo || w.accountInformation || w.account ||
+                   w.paymentDetails?.paytoNumber || w.payoutDetails?.paytoNumber || w.withdrawalDetails?.paytoNumber;
+    return payNum ? String(payNum).trim() : '';
+  } else if (method === 'REDEEM_CODE' || method === 'REDEEMCODE' || method.includes('REDEEM')) {
+    const code = w.redeemCodeDetails || w.redeemCode || w.accountInfo || w.accountInformation || w.account ||
+                 w.paymentDetails?.redeemCodeDetails || w.paymentDetails?.redeemCode || w.payoutDetails?.redeemCodeDetails || w.withdrawalDetails?.redeemCodeDetails;
+    return code ? String(code).trim() : '';
+  }
+  return String(w.accountInfo || w.accountInformation || w.upiId || w.paytoNumber || w.redeemCodeDetails || w.paymentDetails?.upiId || w.paymentDetails?.paytoNumber || w.paymentDetails?.redeemCode || '').trim();
+};
 
 interface EarningBotWithdrawalsViewProps {
   showToast: (msg: string, type: 'success' | 'error' | 'info') => void;
@@ -48,6 +69,7 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('Details verification failed');
   const [isProcessing, setIsProcessing] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Fetch Bots list for selection
   const fetchBots = async () => {
@@ -378,17 +400,105 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
                 </div>
 
                 {/* Details grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-950 p-3.5 rounded-xl border border-slate-900 text-xs">
-                  <div className="flex flex-col">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-900 text-xs">
+                  <div className="flex flex-col justify-center">
                     <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Payment Method</span>
-                    <span className="text-xs font-bold text-slate-300 font-mono mt-0.5">{w.method}</span>
+                    <span className="text-xs font-bold text-slate-300 font-mono mt-1">{w.method || 'UPI'}</span>
                   </div>
-                  <div className="flex flex-col">
-                    <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Account Information</span>
-                    <span className="text-xs font-bold text-white font-mono break-all mt-0.5">
-                      {w.method === 'UPI' ? w.upiId : w.paytoNumber || 'N/A'}
-                    </span>
+
+                  <div className="flex flex-col sm:col-span-1 justify-center">
+                    <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider mb-1">Account Information</span>
+                    {(() => {
+                      const methodStr = String(w.method || 'UPI').toUpperCase();
+                      const value = getNormalizedDetails(w);
+                      
+                      if (!value) {
+                        return (
+                          <span className="text-[10px] font-black text-rose-400 font-mono flex items-center gap-1 mt-0.5 animate-pulse">
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            {methodStr === 'UPI' ? '⚠️ UPI ID NOT STORED' : '⚠️ DETAILS NOT STORED'}
+                          </span>
+                        );
+                      }
+
+                      const isCopied = copiedId === w.id;
+                      if (methodStr === 'UPI') {
+                        return (
+                          <div className="flex flex-col gap-1.5 mt-1">
+                            <div className="relative flex items-center justify-between w-full max-w-[240px] bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-white group/cell">
+                              <span className="truncate pr-12 select-all font-bold">{value}</span>
+                              <button
+                                onClick={() => {
+                                  if (value && value !== 'N/A') {
+                                    navigator.clipboard.writeText(value);
+                                    setCopiedId(w.id);
+                                    setTimeout(() => setCopiedId(null), 2000);
+                                  }
+                                }}
+                                className="absolute right-1 px-1.5 py-1 text-[9px] bg-slate-950 hover:bg-slate-850 text-blue-400 hover:text-blue-300 border border-slate-800 rounded flex items-center gap-1 transition-all duration-150"
+                                title="Copy UPI ID"
+                              >
+                                {isCopied ? (
+                                  <span className="text-emerald-400 font-black flex items-center gap-0.5 text-[9px] uppercase tracking-wider">
+                                    <Check className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                                    Copied!
+                                  </span>
+                                ) : (
+                                  <span className="flex items-center gap-0.5 font-black uppercase text-[9px] tracking-wider">
+                                    <Copy className="w-2.5 h-2.5 shrink-0" />
+                                    Copy
+                                  </span>
+                                )}
+                              </button>
+                            </div>
+                            {isCopied && (
+                              <span className="text-[9px] font-bold text-emerald-400">
+                                ✅ UPI ID Copied!
+                              </span>
+                            )}
+                          </div>
+                        );
+                      } else {
+                        // Other methods
+                        return (
+                          <div className="flex flex-col gap-1.5 mt-1">
+                            <div className="relative flex items-center justify-between w-full max-w-[240px] bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-white group/cell">
+                              <span className="truncate pr-12 select-all font-bold">{value}</span>
+                              <button
+                                onClick={() => {
+                                  if (value && value !== 'N/A') {
+                                    navigator.clipboard.writeText(value);
+                                    setCopiedId(w.id);
+                                    setTimeout(() => setCopiedId(null), 2000);
+                                  }
+                                }}
+                                className="absolute right-1 px-1.5 py-1 text-[9px] bg-slate-950 hover:bg-slate-850 text-amber-400 hover:text-amber-300 border border-slate-800 rounded flex items-center gap-1 transition-all duration-150"
+                                title="Copy Details"
+                              >
+                                {isCopied ? (
+                                  <span className="text-emerald-400 font-black flex items-center gap-0.5 text-[9px] uppercase tracking-wider">
+                                    <Check className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                                    Copied!
+                                  </span>
+                                ) : (
+                                  <span className="flex items-center gap-0.5 font-black uppercase text-[9px] tracking-wider">
+                                    <Copy className="w-2.5 h-2.5 shrink-0" />
+                                    Copy
+                                  </span>
+                                )}
+                              </button>
+                            </div>
+                            {isCopied && (
+                              <span className="text-[9px] font-bold text-emerald-400">
+                                ✅ Copied!
+                              </span>
+                            )}
+                          </div>
+                        );
+                      }
+                    })()}
                   </div>
+
                   <div className="flex flex-col sm:col-span-2 bg-slate-900/50 p-2 rounded-lg border border-slate-800">
                     <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">Financial Breakdown</span>
                     <div className="grid grid-cols-3 gap-2 text-[10.5px]">
