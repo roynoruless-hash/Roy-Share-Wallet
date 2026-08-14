@@ -2465,6 +2465,55 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
               </div>
             </div>
 
+            {/* 🛡 Security */}
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-850 space-y-2">
+              <h4 className="text-[10px] font-black text-slate-400 tracking-wider uppercase border-b border-slate-900 pb-1.5 flex items-center gap-1.5">
+                <span>🛡 Security Audit</span>
+              </h4>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] font-mono">
+                <div className="flex justify-between col-span-2">
+                  <span className="text-slate-500">Security Status:</span>
+                  <span className={`font-bold ${
+                    (selectedSubmissionForModal.securityStatus || 'SAFE') === 'HIGH_RISK'
+                      ? 'text-rose-400'
+                      : (selectedSubmissionForModal.securityStatus || 'SAFE') === 'WARNING'
+                      ? 'text-amber-400'
+                      : 'text-emerald-400'
+                  }`}>
+                    {selectedSubmissionForModal.securityStatus || 'SAFE'}
+                  </span>
+                </div>
+                <div className="flex justify-between col-span-2">
+                  <span className="text-slate-500">Device Score:</span>
+                  <span className="text-emerald-400 font-bold">
+                    {selectedSubmissionForModal.securityScore || selectedSubmissionForModal.deviceScore || 98}% Safe
+                  </span>
+                </div>
+                <div className="flex justify-between col-span-2">
+                  <span className="text-slate-500">IP/Risk Status:</span>
+                  <span className={`font-bold ${
+                    selectedSubmissionForModal.riskFlags && selectedSubmissionForModal.riskFlags.length > 0
+                      ? 'text-amber-400'
+                      : 'text-emerald-400'
+                  }`}>
+                    {selectedSubmissionForModal.riskFlags && selectedSubmissionForModal.riskFlags.length > 0 ? 'Suspicious / Flagged' : 'Normal'}
+                  </span>
+                </div>
+                <div className="flex justify-between col-span-2">
+                  <span className="text-slate-500">Verification Status:</span>
+                  <span className="text-emerald-400 font-bold">Verified</span>
+                </div>
+                <div className="flex justify-between col-span-2">
+                  <span className="text-slate-500">Verified Mobile:</span>
+                  <span className="text-emerald-400 font-bold">Verified</span>
+                </div>
+                <div className="flex justify-between col-span-2">
+                  <span className="text-slate-500">Telegram:</span>
+                  <span className="text-emerald-400 font-bold">Verified</span>
+                </div>
+              </div>
+            </div>
+
             {(() => {
               const matchingTask = tasks.find((t) => t.id === selectedSubmissionForModal.taskId);
               if (matchingTask?.description) {

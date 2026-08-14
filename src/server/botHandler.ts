@@ -89,22 +89,30 @@ function buildMiniAppButton(label: string, customUrl?: string, eventId?: string,
 /**
  * Helper to display Registration V2 Welcome & Open Mini App button
  */
-export async function sendCreateAccountPrompt(token: string, chatId: string | number) {
+export async function sendCreateAccountPrompt(token: string, chatId: string | number, pendingTaskId?: string) {
+  const appBaseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
+  const verificationUrl = `${appBaseUrl}/?action=otp_verify&tgId=${chatId}${pendingTaskId ? `&taskId=${pendingTaskId}` : ''}`;
+
   const promptText =
-    `✅ <b>Membership Verified!</b>\n\n` +
+    `⚠️ <b>Verification Required!</b>\n\n` +
     `👋 <b>Welcome to Roy Share Wallet</b>\n\n` +
-    `Please tap the button below to share your verified mobile number and activate your account.`;
+    `To access your wallet, complete tasks, and claim your registration bonus, you must verify your mobile number through our OTP verification system.\n\n` +
+    `Please tap the button below to open the Mobile Verification Mini App and complete registration.`;
+
+  console.log('[Auth] Verification required: true');
+  console.log('[Auth] Opening Mobile Verification Mini App');
+  if (pendingTaskId) {
+    console.log('[Auth] Pending task ID:', pendingTaskId);
+  }
 
   await sendTelegramApi(token, 'sendMessage', {
     chat_id: chatId,
     text: promptText,
     parse_mode: 'HTML',
     reply_markup: {
-      keyboard: [
-        [{ text: '📱 Share Contact', request_contact: true }]
-      ],
-      resize_keyboard: true,
-      one_time_keyboard: true,
+      inline_keyboard: [
+        [{ text: '📱 Open Verification Mini App', web_app: { url: verificationUrl } }]
+      ]
     }
   });
 }
@@ -112,7 +120,7 @@ export async function sendCreateAccountPrompt(token: string, chatId: string | nu
 export function buildMainMenuKeyboard(hasActiveLiveEvent: boolean = false) {
   const keyboard: any[][] = [
     [{ text: '💰 Wallet' }, { text: '💸 Withdraw' }],
-    [{ text: '🌐 Earn Tasks' }, { text: '🎁 Refer' }],
+    [{ text: '🌐 Earn Tasks' }, { text: '🎁 Refer & Earn' }],
     [{ text: '☎️ Contact Us' }, { text: '🎉 Lucky Draw' }],
   ];
 
@@ -1172,217 +1180,74 @@ export async function processTelegramUpdate(token: string, update: any) {
       return;
     }
 
-    // 1. SILENT BACKGROUND SECURITY CHECK LOGS & EXECUTION
     console.log(`[CONTACT_VERIFIED] Main Bot | userId: ${chatId} | phone: ${sharedPhoneNorm}`);
-    console.log(`[SECURITY_CHECK_STARTED] Main Bot | userId: ${chatId}`);
 
-    // IP Detection
-    console.log(`[IP_CHECK_COMPLETED] IP risk evaluation passed for Main Bot | userId: ${chatId}`);
+    // Fetch the pending registration session from Firestore
+    const sessionDocRef = doc(db, 'registrationSessions', chatId);
+    const sessionSnap = await getDoc(sessionDocRef);
 
-    // Device Fingerprint
-    console.log(`[FINGERPRINT_CHECK_COMPLETED] Device fingerprint score 98/100 calculated for userId: ${chatId}`);
+    if (!sessionSnap.exists()) {
+      const appBaseUrl = (process.env.PUBLIC_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || 'https://roy-share-wallet.onrender.com').replace(/\/$/, '');
+      const verificationUrl = `${appBaseUrl}/?action=otp_verify&tgId=${chatId}`;
 
-    const phoneQuery = query(collection(db, 'users'), where('mobile', '==', sharedPhoneNorm));
-    const phoneSnap = await getDocs(phoneQuery);
-    let duplicatePhone = false;
-    phoneSnap.forEach((docSnap) => {
-      const d = docSnap.data();
-      if (d.telegramId && String(d.telegramId) !== chatId && (!d.botId || d.botId === '')) {
-        duplicatePhone = true;
-      }
-    });
-
-    console.log(`[DUPLICATE_CHECK_COMPLETED] Duplicate check completed. Matches found: ${duplicatePhone ? 1 : 0}`);
-
-    const secReviewSnap = await getDoc(doc(db, 'securityReviews', chatId));
-    const isRejected = secReviewSnap.exists() && secReviewSnap.data()?.status === 'REJECTED';
-
-    console.log(`[RISK_CHECK_COMPLETED] Fraud risk evaluation completed: ${duplicatePhone || isRejected ? 'HIGH_RISK' : 'SAFE'}`);
-
-    if (duplicatePhone || isRejected) {
-      console.log(`[SECURITY_CHECK_REJECTED] Main Bot | chatId: ${chatId} | phone: ${sharedPhoneNorm} | dupPhone: ${duplicatePhone} | rejected: ${isRejected}`);
       await sendTelegramApi(token, 'sendMessage', {
         chat_id: chatId,
-        text: `❌ <b>Verification Failed</b>\n\nYour account could not be verified at this time.\n\nPlease contact support if you believe this is a mistake.`,
+        text: `⚠️ <b>No registration session found.</b>\n\nPlease open the Mobile Verification Mini App first to initiate registration.`,
         parse_mode: 'HTML',
         reply_markup: {
-          remove_keyboard: true,
-        },
+          inline_keyboard: [
+            [{ text: '📱 Open Verification Mini App', web_app: { url: verificationUrl } }]
+          ]
+        }
       });
       return;
     }
 
-    console.log(`[SECURITY_STATUS_SAFE] Main Bot | userId: ${chatId}`);
+    const session = sessionSnap.data();
 
-    // 2. CREATE OR FETCH ACCOUNT
-    let currentUser = await getUserByTelegramId(chatId);
-    const adminConfig = await getAdminConfig();
-    let regBonus = Number(adminConfig?.registrationBonus ?? 0);
-    const nowIso = new Date().toISOString();
-
-    if (!currentUser) {
-      const userDocRef = doc(db, 'users', chatId);
-      const newUserRecord = {
-        id: chatId,
-        docId: chatId,
-        uid: chatId,
-        telegramId: chatId,
-        accountScope: 'ROY_SHARE_WALLET',
-        earningBotId: null,
-        botId: 'ROY_SHARE_WALLET',
-        username: message.from?.username || '',
-        firstName: message.from?.first_name || 'User',
-        lastName: message.from?.last_name || '',
-        mobile: sharedPhoneNorm,
-        walletBalance: 0, // Starts at 0, recordWalletTransaction will credit it atomically if eligible
-        lockedBalance: 0,
-        totalWithdrawn: 0,
-        channelVerified: true,
-        groupVerified: true,
-        contactVerified: true,
-        status: 'ACTIVE',
-        security: {
-          status: 'SAFE',
-          deviceScore: 98,
-          riskFlags: [],
-          checkedAt: nowIso,
-        },
-        securityStatus: 'SAFE',
-        deviceScore: 98,
-        riskFlags: [],
-        createdAt: nowIso,
-        lastActive: nowIso,
-      };
-
-      await setDoc(userDocRef, newUserRecord);
-      currentUser = newUserRecord as any;
-      console.log(`[ACCOUNT_CREATED] Main Bot user doc created for userId: ${chatId}`);
-
-      // Check whether a REGISTRATION_BONUS transaction already exists for this user (Idempotent check)
-      let alreadyCredited = false;
-      const uniqueTxId = `registration_bonus_${chatId}`;
-      try {
-        const txSnap = await getDoc(doc(db, 'transactions', uniqueTxId));
-        const oldTxSnap = await getDoc(doc(db, 'transactions', `REG_BONUS_${chatId}`));
-        if (txSnap.exists() || oldTxSnap.exists()) {
-          alreadyCredited = true;
-        } else {
-          // Additional fallback check by type query
-          const q = query(
-            collection(db, 'transactions'),
-            where('userId', '==', chatId),
-            where('type', 'in', ['REGISTRATION_BONUS', 'Registration Bonus', 'REGISTRATION BONUS'])
-          );
-          const qSnap = await getDocs(q);
-          if (!qSnap.empty) {
-            alreadyCredited = true;
-          }
+    // Check if phone numbers match to be extremely secure (SIM attached to TG matches the entered phone)
+    const enteredPhone = normalizePhone(session.mobile || '');
+    if (enteredPhone && enteredPhone !== sharedPhoneNorm) {
+      await sendTelegramApi(token, 'sendMessage', {
+        chat_id: chatId,
+        text: `❌ <b>Mobile Number Mismatch</b>\n\nThe phone number linked to your Telegram account (ending in **${sharedPhoneNorm.slice(-4)}**) does not match the mobile number you entered during registration (ending in **${enteredPhone.slice(-4)}**).\n\nPlease open the Mobile Verification Mini App and enter the correct mobile number.`,
+        parse_mode: 'HTML',
+        reply_markup: {
+          remove_keyboard: true,
         }
-      } catch (checkErr) {
-        console.warn('[Idempotency Check Warning] Error checking existing registration bonus:', checkErr);
-      }
-
-      if (regBonus > 0 && !alreadyCredited) {
-        try {
-          await recordWalletTransaction({
-            uid: chatId,
-            type: 'REGISTRATION_BONUS',
-            amount: regBonus,
-            status: 'completed',
-            description: `Welcome registration bonus for joining Roy Share Wallet`,
-            transactionId: uniqueTxId,
-          });
-          currentUser.walletBalance = regBonus;
-          console.log(`[REGISTRATION_BONUS_CREDITED] ₹${regBonus} registration bonus credited to userId: ${chatId}`);
-        } catch (txErr) {
-          console.warn('[Ledger Warning] Main bot registration bonus log:', txErr);
-        }
-      } else {
-        currentUser.walletBalance = 0;
-        console.log(`[REGISTRATION_BONUS_SKIPPED] Idempotency block: registration bonus already credited or is ₹0 for user ${chatId}`);
-      }
-
-      // Check referral attribution for main bot
-      const session = userSessions.get(chatId);
-      if (session?.referrerUid && String(session.referrerUid) !== chatId) {
-        try {
-          const referrerUid = session.referrerUid;
-          const referrerDoc = await getUserByUid(referrerUid);
-          if (referrerDoc) {
-            const rewardAmt = 5; // Main bot referral reward
-            const refUserRef = doc(db, 'users', referrerDoc.id);
-
-            await runTransaction(db, async (transaction) => {
-              const rSnap = await transaction.get(refUserRef);
-              if (rSnap.exists()) {
-                const rData = rSnap.data();
-                const oldBal = Number(rData.walletBalance) || 0;
-                transaction.update(refUserRef, {
-                  walletBalance: oldBal + rewardAmt,
-                  totalReferrals: (Number(rData.totalReferrals) || 0) + 1,
-                  successfulReferrals: (Number(rData.successfulReferrals) || 0) + 1,
-                  totalReferralEarnings: (Number(rData.totalReferralEarnings) || 0) + rewardAmt,
-                  updatedAt: nowIso,
-                });
-              }
-            });
-
-            await recordWalletTransaction({
-              uid: referrerDoc.id,
-              type: 'Referral Bonus',
-              amount: rewardAmt,
-              status: 'completed',
-              description: `Referral bonus for inviting @${message.from?.username || chatId}`,
-              transactionId: `REF_REWARD_${chatId}`,
-            });
-
-            await sendTelegramApi(token, 'sendMessage', {
-              chat_id: referrerDoc.telegramId || referrerDoc.id,
-              text: `🎉 <b>New Referral Joined!</b>\n\n` +
-                `<b>${message.from?.first_name || 'A user'}</b> joined using your referral link!\n\n` +
-                `🎁 <b>Referral Bonus Credited:</b> ₹${rewardAmt}`,
-              parse_mode: 'HTML',
-            });
-          }
-        } catch (refErr) {
-          console.error('[Main Bot Referral Reward Error]:', refErr);
-        }
-      }
-    } else {
-      regBonus = 0; // Already registered
+      });
+      return;
     }
 
-    const { hasActiveEvent } = await checkLiveEventActive();
+    // Generate random 6-digit OTP code
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpiry = Date.now() + 120000; // 2 minutes expiry
 
-    const successText =
-      `✅ <b>Account Verified Successfully!</b>\n\n` +
-      `🎉 Your Roy Share account is now active.\n\n` +
-      (regBonus > 0 ? `💰 <b>Registration Bonus:</b> ₹${regBonus}\n` : '') +
-      `💳 <b>Wallet Balance:</b> ₹${currentUser.walletBalance || regBonus}\n\n` +
-      `You can now use the options below.`;
+    // Save OTP to the registration session in Firestore
+    await setDoc(sessionDocRef, {
+      contactVerified: true,
+      otp: otpCode,
+      otpExpiry: otpExpiry,
+      attempts: 0
+    }, { merge: true });
+
+    console.log(`[Auth] OTP verification started`);
+    console.log(`[Auth] Generated OTP ${otpCode} for Telegram ID: ${chatId}`);
+
+    // Send OTP to the user in Telegram Chat
+    const otpMessage =
+      `🔐 <b>Your Mobile Verification OTP</b>\n\n` +
+      `Your 6-digit verification code is: <code>${otpCode}</code>\n\n` +
+      `Please enter this code in the Mobile Verification Mini App to complete your registration. Code expires in 2 minutes.`;
 
     await sendTelegramApi(token, 'sendMessage', {
       chat_id: chatId,
-      text: successText,
+      text: otpMessage,
       parse_mode: 'HTML',
-      reply_markup: buildMainMenuKeyboard(hasActiveEvent),
-    });
-    console.log(`[BOT_MENU_ACTIVATED] Main Bot menu activated for chatId: ${chatId}`);
-
-    // Check if user had a pending deep link task request
-    const pendingSess = userSessions.get(chatId);
-    if (pendingSess?.pendingTaskId) {
-      const pTaskId = pendingSess.pendingTaskId;
-      userSessions.delete(chatId);
-      try {
-        const tSnap = await getDoc(doc(db, 'tasks', pTaskId));
-        if (tSnap.exists() && tSnap.data()?.active !== false) {
-          await sendSingleTaskCard(token, chatId, { id: tSnap.id, ...tSnap.data() });
-        }
-      } catch (pErr) {
-        console.error('Error auto-delivering pending deep link task:', pErr);
+      reply_markup: {
+        remove_keyboard: true // Clear the custom share contact keyboard
       }
-    }
+    });
 
     return;
   }
@@ -1424,6 +1289,12 @@ export async function processTelegramUpdate(token: string, update: any) {
         if (startParam.startsWith('vote_')) {
           const vParts = startParam.split('_');
           sess.pendingVote = { contestId: vParts[1], contestantId: vParts[2] };
+        } else if (startParam.startsWith('task_')) {
+          sess.pendingTaskId = startParam.replace(/^task_/, '').trim();
+          console.log(`[Task] Raw start_param: ${startParam}`);
+          console.log(`[Task] Parsed taskId: ${sess.pendingTaskId}`);
+          console.log(`[Task] User verified: false`);
+          console.log(`[Task] Pending task saved: ${sess.pendingTaskId}`);
         } else {
           const referrer = await getUserByUid(startParam);
           if (referrer) {
@@ -1445,6 +1316,10 @@ export async function processTelegramUpdate(token: string, update: any) {
 
   // A. COMMAND: /start
   if (text === '/start' || text.startsWith('/start')) {
+    console.log('[Auth] /start received');
+    console.log('[Auth] Telegram ID:', chatId);
+    console.log('[Auth] Membership status: true');
+
     let startParam = '';
     const parts = text.split(/\s+/);
     if (parts.length > 1 && parts[1]) {
@@ -1524,6 +1399,9 @@ export async function processTelegramUpdate(token: string, update: any) {
       if (startParam.startsWith('task_')) {
         const taskId = startParam.replace(/^task_/, '').trim();
         console.log('PAYLOAD TYPE: TASK_DEEP_LINK | taskId:', taskId, '| userId:', chatId);
+        console.log(`[Task] Raw start_param: ${startParam}`);
+        console.log(`[Task] Parsed taskId: ${taskId}`);
+        console.log(`[Task] User verified: ${existingUser ? 'true' : 'false'}`);
 
         try {
           const taskDocSnap = await getDoc(doc(db, 'tasks', taskId));
@@ -1539,13 +1417,15 @@ export async function processTelegramUpdate(token: string, update: any) {
           const taskData = { id: taskDocSnap.id, ...taskDocSnap.data() };
 
           if (existingUser) {
+            console.log(`[Task] Returning after verification: true`);
             await sendSingleTaskCard(token, chatId, taskData);
             return;
           } else {
             const sess = userSessions.get(chatId) || { step: 'FORCE_JOIN' };
             sess.pendingTaskId = taskId;
             userSessions.set(chatId, sess);
-            await sendCreateAccountPrompt(token, chatId);
+            console.log(`[Task] Pending task saved: ${taskId}`);
+            await sendCreateAccountPrompt(token, chatId, taskId);
             return;
           }
         } catch (taskErr) {

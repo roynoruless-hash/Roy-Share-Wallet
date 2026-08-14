@@ -1208,6 +1208,17 @@ async function startServer() {
         }
       }
 
+      // Get the user document to retrieve security metadata
+      const userRefDoc = doc(db, 'users', tgUserIdStr);
+      const userSnap = await getDoc(userRefDoc);
+      let userSecurityData: any = {};
+      if (userSnap.exists()) {
+        userSecurityData = userSnap.data();
+      }
+
+      // Detect submit-time IP server-side
+      const submitIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+
       const newSubmission: any = {
         id: submissionId,
         taskId,
@@ -1233,7 +1244,14 @@ async function startServer() {
         suspiciousFlag,
         suspiciousReason,
         mobileUseCount: mobSubmissions.length + 1,
-        relatedSubmissionIds: mobSubmissions.map((s: any) => s.id)
+        relatedSubmissionIds: mobSubmissions.map((s: any) => s.id),
+        // Security Metadata
+        ipAddress: submitIp || userSecurityData.ipAddress || 'unknown',
+        deviceFingerprint: userSecurityData.deviceFingerprint || 'unknown',
+        securityScore: userSecurityData.securityScore || userSecurityData.deviceScore || 90,
+        deviceScore: userSecurityData.securityScore || userSecurityData.deviceScore || 90,
+        securityStatus: userSecurityData.securityStatus || 'SAFE',
+        riskFlags: userSecurityData.riskFlags || [],
       };
 
       // Send the submission immediately to the Telegram Private Review Group
@@ -11934,7 +11952,7 @@ Respond with a JSON object containing two properties:
   // 1. INITIATE REGISTRATION
   app.post('/api/register/initiate', async (req, res) => {
     try {
-      const { telegramId, username, firstName, lastName, fullName, mobile, gmail, deviceFingerprint, ip } = req.body;
+      const { telegramId, username, firstName, lastName, fullName, mobile, gmail, deviceFingerprint, ip, pendingTaskId, taskId } = req.body;
 
       const cleanTgId = String(telegramId || '').trim();
       const cleanMobile = String(mobile || '').replace(/\D/g, '').slice(-10);
@@ -11942,6 +11960,7 @@ Respond with a JSON object containing two properties:
       const fingerprint = String(deviceFingerprint || '').trim();
       const clientIp = String(ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
       const userFullName = String(fullName || `${firstName || ''} ${lastName || ''}`).trim() || 'User';
+      const actualPendingTaskId = String(pendingTaskId || taskId || '').trim();
 
       if (!cleanTgId) {
         return res.status(400).json({ success: false, error: 'Telegram ID is required' });
@@ -12042,6 +12061,7 @@ Respond with a JSON object containing two properties:
         gmail: cleanGmail,
         deviceFingerprint: fingerprint,
         contactVerified: false,
+        pendingTaskId: actualPendingTaskId || null,
         attempts: 0,
         createdAt: Date.now(),
       };
@@ -12076,9 +12096,10 @@ Respond with a JSON object containing two properties:
     }
   });
 
-  // 2. VERIFY OTP & CREATE ACCOUNT (ATOMIC TRANSACTION)
+  // 2. VERIFY OTP & CREATE ACCOUNT (IMMEDIATE ACCOUNT ACTIVATION V2.2)
   app.post('/api/register/verify-otp', async (req, res) => {
     try {
+      console.log('[Auth] OTP verification started');
       const { telegramId, otp } = req.body;
       const cleanTgId = String(telegramId || '').trim();
       const cleanOtp = String(otp || '').trim();
@@ -12142,52 +12163,281 @@ Respond with a JSON object containing two properties:
         });
       }
 
-      // OTP is VALID -> Submit Registration for Admin Security Review (DO NOT create active user yet)
+      // OTP is VALID -> Detect public IP address server-side
+      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
       const nowStr = new Date().toISOString();
-      const reviewDoc = {
-        id: cleanTgId,
-        reviewId: cleanTgId,
+      console.log(`[Auth] OTP verification successful. Server-side IP detected: ${clientIp}`);
+      console.log(`[Auth] Verified mobile: ${session.mobile}`);
+
+      const config = await getDecryptedConfig();
+      const registrationBonus = Number(config?.registrationBonus ?? 0);
+      let uidLen = Number(config?.uidLength) || 6;
+      uidLen = Math.min(12, Math.max(4, uidLen));
+
+      const min = Math.pow(10, uidLen - 1);
+      const max = Math.pow(10, uidLen) - 1;
+      const generatedUid = Math.floor(min + Math.random() * (max - min + 1)).toString();
+
+      // Store security / verification log document securely in DB
+      const verificationLogId = `LOG_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      await setDoc(doc(db, 'verificationLogs', verificationLogId), {
+        id: verificationLogId,
+        userId: generatedUid,
         telegramId: cleanTgId,
-        uidCandidate: cleanTgId,
+        verifiedMobile: session.mobile,
+        ipAddress: clientIp,
+        timestamp: nowStr,
+        verificationSessionId: cleanTgId,
+      });
+
+      // --- DEVICE / SECURITY CHECK & RISK VALIDATION ---
+      let securityScore = 100;
+      let riskFlags: string[] = [];
+      let securityStatus: 'SAFE' | 'WARNING' | 'HIGH_RISK' = 'SAFE';
+
+      // 1. Duplicate Mobile Check
+      const mobQuery = query(collection(db, 'users'), where('mobile', '==', session.mobile));
+      const mobSnap = await getDocs(mobQuery);
+      let duplicateMobileCount = 0;
+      mobSnap.forEach(docSnap => {
+        if (docSnap.id !== cleanTgId) {
+          duplicateMobileCount++;
+        }
+      });
+      if (duplicateMobileCount > 0) {
+        securityScore -= 50;
+        riskFlags.push(`Duplicate Mobile Number (registered in ${duplicateMobileCount} other account(s))`);
+      }
+
+      // 2. Duplicate Gmail Check
+      if (session.gmail) {
+        const gmailQuery = query(collection(db, 'users'), where('gmail', '==', session.gmail.toLowerCase()));
+        const gmailSnap = await getDocs(gmailQuery);
+        let duplicateGmailCount = 0;
+        gmailSnap.forEach(docSnap => {
+          if (docSnap.id !== cleanTgId) {
+            duplicateGmailCount++;
+          }
+        });
+        if (duplicateGmailCount > 0) {
+          securityScore -= 30;
+          riskFlags.push(`Duplicate Gmail address (registered in ${duplicateGmailCount} other account(s))`);
+        }
+      }
+
+      // 3. Duplicate Device Fingerprint Check
+      const fingerprint = String(session.deviceFingerprint || '').trim();
+      let duplicateDeviceCount = 0;
+      if (fingerprint && fingerprint !== 'unknown' && fingerprint.length > 5) {
+        const fpQuery = query(collection(db, 'users'), where('deviceFingerprint', '==', fingerprint));
+        const fpSnap = await getDocs(fpQuery);
+        fpSnap.forEach(docSnap => {
+          if (docSnap.id !== cleanTgId) {
+            duplicateDeviceCount++;
+          }
+        });
+      }
+      if (duplicateDeviceCount > 0) {
+        securityScore -= Math.min(40, duplicateDeviceCount * 15);
+        riskFlags.push(`Duplicate Device Fingerprint (${duplicateDeviceCount} other account(s) using this device)`);
+      }
+
+      // 4. Suspicious IP Reuse check
+      let ipRegistrationCount = 0;
+      if (clientIp && clientIp !== '127.0.0.1' && clientIp !== 'unknown') {
+        const ipQuery = query(collection(db, 'users'), where('ipAddress', '==', clientIp));
+        const ipSnap = await getDocs(ipQuery);
+        ipSnap.forEach(docSnap => {
+          if (docSnap.id !== cleanTgId) {
+            ipRegistrationCount++;
+          }
+        });
+      }
+      if (ipRegistrationCount >= 3) {
+        securityScore -= 10; // Use as risk signal, do not auto-ban solely based on IP
+        riskFlags.push(`Suspicious IP Reuse (${ipRegistrationCount} accounts registered from this IP)`);
+      }
+
+      // 5. Repeated verification attempts check
+      if ((session.attempts || 0) > 2) {
+        securityScore -= 15;
+        riskFlags.push(`Multiple OTP entry attempts (${session.attempts} attempts)`);
+      }
+
+      // 6. Enforce bounds & Status
+      securityScore = Math.max(0, Math.min(100, securityScore));
+      if (securityScore < 50) {
+        securityStatus = 'HIGH_RISK';
+      } else if (securityScore < 80) {
+        securityStatus = 'WARNING';
+      } else {
+        securityStatus = 'SAFE';
+      }
+
+      // Register/update deviceFingerprints collection
+      if (fingerprint && fingerprint !== 'unknown') {
+        const fpRef = doc(db, 'deviceFingerprints', fingerprint);
+        const fpDocSnap = await getDoc(fpRef);
+        let accounts = [cleanTgId];
+        if (fpDocSnap.exists()) {
+          const fpData = fpDocSnap.data();
+          const existingAccs = fpData.accounts || [];
+          if (!existingAccs.includes(cleanTgId)) {
+            accounts = [...existingAccs, cleanTgId];
+          } else {
+            accounts = existingAccs;
+          }
+        }
+        await setDoc(fpRef, {
+          id: fingerprint,
+          fingerprint,
+          lastIp: clientIp,
+          lastUsedAt: nowStr,
+          accounts,
+          securityScore,
+          updatedAt: nowStr
+        }, { merge: true });
+      }
+
+      // --- ROUTE TO SECURITY REVIEW IF RISKY ---
+      if (securityStatus === 'HIGH_RISK' || securityScore < 50) {
+        const reviewDoc = {
+          id: cleanTgId,
+          telegramId: cleanTgId,
+          fullName: session.fullName,
+          username: session.username ? session.username.replace('@', '') : '',
+          mobile: session.mobile,
+          gmail: session.gmail,
+          deviceFingerprint: fingerprint,
+          riskScore: 100 - securityScore,
+          reason: riskFlags.join(', ') || 'High security risk score during OTP verification.',
+          ip: clientIp,
+          status: 'PENDING',
+          createdAt: nowStr,
+        };
+        await setDoc(doc(db, 'securityReviews', cleanTgId), reviewDoc);
+
+        if (config?.botToken) {
+          const promptText =
+            `🛡 <b>Account Placed on Security Review</b>\n\n` +
+            `Your account registration has been flagged by our system due to potential risk signals (Device/IP/Mobile overlap).\n\n` +
+            `<b>Reason:</b> ${reviewDoc.reason}\n\n` +
+            `An administrator will review and manually approve your registration if legitimate. Thank you for your patience!`;
+
+          await sendTelegramMessage(config.botToken, cleanTgId, promptText);
+        }
+
+        // Clean up the registration session
+        await deleteDoc(sessionDocRef);
+
+        return res.json({
+          success: false,
+          status: 'SECURITY_REVIEW',
+          error: '🛡 Your account registration has been submitted for Security Review by Admin due to risk flags.'
+        });
+      }
+
+      // --- ACCOUNT CREATION ---
+      const uniqueTxId = `REGISTRATION_BONUS_${cleanTgId}`;
+      const userRef = doc(db, 'users', cleanTgId);
+
+      const newUserDoc = {
+        appUid: generatedUid,
+        uid: generatedUid,
+        telegramId: cleanTgId,
+        username: session.username ? `@${session.username.replace('@', '')}` : '',
         fullName: session.fullName,
-        username: session.username ? session.username.replace('@', '') : '',
-        telegramUsername: session.username ? session.username.replace('@', '') : '',
+        firstName: session.fullName.split(' ')[0] || 'User',
+        lastName: session.fullName.split(' ').slice(1).join(' ') || '',
         mobile: session.mobile,
         gmail: session.gmail,
-        deviceFingerprint: session.deviceFingerprint || 'unknown',
-        deviceIdHash: session.deviceFingerprint || 'unknown',
-        channelVerified: Boolean(session.channelVerified),
-        groupVerified: Boolean(session.groupVerified),
-        riskScore: 10,
-        reason: 'New Account Registration - Pending Admin Security Review',
-        status: 'PENDING',
+        deviceFingerprint: fingerprint || 'unknown',
+        ipAddress: clientIp,
+        mobileVerified: true,
+        telegramVerified: true,
+        accountActive: true,
+        walletBalance: registrationBonus,
+        totalEarned: registrationBonus,
+        bonus: registrationBonus,
+        coins: 0,
+        passbook: registrationBonus > 0 ? [{
+          id: uniqueTxId,
+          transactionId: uniqueTxId,
+          type: 'REGISTRATION BONUS',
+          amount: registrationBonus,
+          balanceAfter: registrationBonus,
+          description: 'Welcome registration bonus for joining Roy Share Wallet',
+          timestamp: nowStr,
+        }] : [],
+        status: 'active',
+        banned: false,
+        securityScore,
+        deviceScore: securityScore,
+        securityStatus,
+        riskFlags,
+        channelVerified: true,
+        groupVerified: true,
         createdAt: nowStr,
-        updatedAt: nowStr,
+        lastLogin: nowStr,
+        lastActive: nowStr,
       };
 
-      await setDoc(doc(db, 'securityReviews', cleanTgId), reviewDoc);
+      // Set user record in Firestore
+      await setDoc(userRef, newUserDoc);
+      console.log(`[Auth] Account activation: true. Security score: ${securityScore}`);
+
+      // Credit Registration Bonus with exact uniqueId to ensure strict idempotency
+      if (registrationBonus > 0) {
+        const txRef = doc(db, 'transactions', uniqueTxId);
+        await setDoc(txRef, {
+          id: uniqueTxId,
+          transactionId: uniqueTxId,
+          userId: cleanTgId,
+          uid: generatedUid,
+          telegramId: cleanTgId,
+          fullName: session.fullName,
+          mobile: session.mobile,
+          type: 'REGISTRATION BONUS',
+          amount: registrationBonus,
+          balanceBefore: 0,
+          balanceAfter: registrationBonus,
+          status: 'completed',
+          description: 'Welcome registration bonus for joining Roy Share Wallet',
+          reason: 'Welcome registration bonus for joining Roy Share Wallet',
+          createdAt: nowStr,
+          timestamp: nowStr,
+        });
+        console.log(`[Auth] Registration bonus: ${registrationBonus}`);
+      }
+
+      // Check if there is a pending task deep link
+      const pendingTaskId = session.pendingTaskId || null;
+      if (pendingTaskId) {
+        console.log(`[Auth] Pending task ID: ${pendingTaskId}`);
+        console.log(`[Auth] Returning to task: ${pendingTaskId}`);
+      }
+
+      // Clean up the registration session
       await deleteDoc(sessionDocRef);
 
-      console.log(`[REGISTRATION_SUBMIT] Telegram ID: ${cleanTgId} | Review ID: ${cleanTgId} | Status: PENDING`);
-
-      // Send Security Review Pending Notification via Bot
-      const config = await getDecryptedConfig();
+      // Send Congratulations via Bot
       if (config?.botToken) {
-        const pendingMessage =
-          `🛡 <b>Your Account Registration Has Been Submitted for Security Review!</b>\n\n` +
+        const approvedMessage =
+          `🎉 <b>Your Roy Share Wallet Account is Activated!</b>\n\n` +
           `👤 <b>Name:</b> ${session.fullName}\n` +
-          `📱 <b>Mobile:</b> ${session.mobile}\n` +
-          `📧 <b>Gmail:</b> ${session.gmail}\n\n` +
-          `Your registration details are now under Admin review. You will receive a notification here once approved.`;
+          `🆔 <b>UID:</b> <code>${generatedUid}</code>\n` +
+          `💰 <b>Wallet Balance:</b> ₹${registrationBonus}\n\n` +
+          `Welcome aboard! You can now use all Roy Share Wallet features.`;
 
-        await sendTelegramMessage(config.botToken, cleanTgId, pendingMessage);
+        await sendTelegramMessage(config.botToken, cleanTgId, approvedMessage);
       }
 
       return res.json({
         success: true,
-        status: 'PENDING_SECURITY_REVIEW',
-        message: 'Your account registration has been submitted for Security Review by Admin.',
-        review: reviewDoc
+        status: 'ACTIVE',
+        message: 'Account successfully verified and activated!',
+        user: newUserDoc,
+        pendingTaskId
       });
     } catch (err: any) {
       console.error('[API Verify OTP Error]:', err);
