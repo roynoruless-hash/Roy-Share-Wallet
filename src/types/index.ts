@@ -876,9 +876,11 @@ export interface TaskItem {
   url?: string; // external link if any
   externalDestinationUrl?: string; // External URL for task
   taskImage?: string; // Image for task card
+  taskImageUrl?: string; // ImgBB URL for task card
   description?: string; // Short Description / Instructions
   detailedInstructions?: string; // Detailed Step-by-Step Instructions
   proofDemoImage?: string; // Proof Screenshot Demo Image
+  proofDemoImageUrl?: string; // ImgBB URL for proof screenshot demo
   privateAdminGroupChatId?: string; // Private Telegram Admin Group Chat ID e.g. -100xxxxxxxxxx
   telegramAdminChatId?: string; // Telegram Admin/Review Chat ID e.g. -100xxxxxxxxxx
   allowResubmission?: boolean; // Allow Resubmission After Rejection: ON / OFF

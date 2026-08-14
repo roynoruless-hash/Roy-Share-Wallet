@@ -5,6 +5,8 @@ import {
   deleteTaskFromDb,
   fetchManualSubmissionsFromDb,
 } from '../../services/taskService';
+import { uploadImageToImgBB } from '../../services/storageService';
+import { loadAdminConfig } from '../../services/configService';
 import {
   Plus,
   Edit2,
@@ -120,6 +122,8 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
   const [allowResubmission, setAllowResubmission] = useState<boolean>(true);
   const [maxSubmissionsPerUser, setMaxSubmissionsPerUser] = useState<number>(1);
   const [active, setActive] = useState<boolean>(true);
+  const [isUploadingTaskImage, setIsUploadingTaskImage] = useState(false);
+  const [isUploadingProofImage, setIsUploadingProofImage] = useState(false);
 
   // Group Verification State
   const [isVerifyingGroup, setIsVerifyingGroup] = useState(false);
@@ -483,24 +487,85 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     setShowForm(true);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, setter: (val: string) => void) => {
+  // Helper to retrieve ImgBB API key
+  const getImgbbApiKey = async (): Promise<string> => {
+    let apiKey = config?.imgbbApiKey?.trim() || '';
+    if (!apiKey) {
+      try {
+        const loaded = await loadAdminConfig();
+        if (loaded?.config?.imgbbApiKey) {
+          apiKey = loaded.config.imgbbApiKey.trim();
+        }
+      } catch (e) {}
+    }
+    if (!apiKey) {
+      apiKey = ((import.meta as any).env?.VITE_IMGBB_API_KEY || '').trim();
+    }
+    return apiKey;
+  };
+
+  const handleImageUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    type: 'taskImage' | 'proofDemoImage'
+  ) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
     if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.type)) {
       showToast('Please select a valid JPG, PNG, or WEBP image file', 'error');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      showToast('Image size should be less than 5MB', 'error');
+
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('Image size should be less than 10MB', 'error');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (reader.result) {
-        setter(String(reader.result));
+
+    if (type === 'taskImage') {
+      setIsUploadingTaskImage(true);
+    } else {
+      setIsUploadingProofImage(true);
+    }
+    setPublishFormError(null);
+
+    try {
+      const apiKey = await getImgbbApiKey();
+      if (!apiKey) {
+        const errMsg = 'ImgBB API Key is not configured in System Settings (Security tab). Please set your ImgBB API Key first.';
+        setPublishFormError(errMsg);
+        showToast('❌ ' + errMsg, 'error');
+        return;
       }
-    };
-    reader.readAsDataURL(file);
+
+      showToast('Compressing & uploading image to ImgBB CDN...', 'info');
+
+      // Upload directly to ImgBB API
+      const cdnUrl = await uploadImageToImgBB(file, apiKey);
+
+      if (!cdnUrl || !cdnUrl.startsWith('http')) {
+        throw new Error('ImgBB API returned an invalid response or missing image URL.');
+      }
+
+      if (type === 'taskImage') {
+        setTaskImage(cdnUrl);
+      } else {
+        setProofDemoImage(cdnUrl);
+      }
+
+      showToast('✅ Image uploaded successfully to ImgBB CDN!', 'success');
+    } catch (err: any) {
+      console.error('ImgBB Upload Error:', err);
+      const errMsg = err?.message || 'Failed to upload image to ImgBB CDN.';
+      setPublishFormError('Image upload failed: ' + errMsg);
+      showToast('❌ Image upload failed: ' + errMsg, 'error');
+    } finally {
+      if (type === 'taskImage') {
+        setIsUploadingTaskImage(false);
+      } else {
+        setIsUploadingProofImage(false);
+      }
+      e.target.value = '';
+    }
   };
 
   const handleVerifyTelegramGroup = async () => {
@@ -625,6 +690,63 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
     setIsPublishingTask(true);
 
     try {
+      const apiKey = await getImgbbApiKey();
+
+      let finalTaskImage = taskImage.trim();
+      let finalProofDemoImage = proofDemoImage.trim();
+
+      // Convert any Base64 data string to ImgBB URL before writing to Firestore
+      if (finalTaskImage.startsWith('data:image/')) {
+        if (!apiKey) {
+          const msg = 'ImgBB API Key is required to convert Task Image Base64 data. Please set ImgBB API Key in System Settings.';
+          setPublishFormError(msg);
+          showToast('❌ ' + msg, 'error');
+          setIsPublishingTask(false);
+          return;
+        }
+        showToast('Uploading Task Image Base64 data to ImgBB CDN...', 'info');
+        try {
+          finalTaskImage = await uploadImageToImgBB(finalTaskImage, apiKey);
+          setTaskImage(finalTaskImage);
+        } catch (err: any) {
+          const msg = 'Task Image upload to ImgBB failed: ' + (err.message || 'Error');
+          setPublishFormError(msg);
+          showToast('❌ ' + msg, 'error');
+          setIsPublishingTask(false);
+          return;
+        }
+      }
+
+      if (finalProofDemoImage.startsWith('data:image/')) {
+        if (!apiKey) {
+          const msg = 'ImgBB API Key is required to convert Proof Demo Image Base64 data. Please set ImgBB API Key in System Settings.';
+          setPublishFormError(msg);
+          showToast('❌ ' + msg, 'error');
+          setIsPublishingTask(false);
+          return;
+        }
+        showToast('Uploading Proof Demo Image Base64 data to ImgBB CDN...', 'info');
+        try {
+          finalProofDemoImage = await uploadImageToImgBB(finalProofDemoImage, apiKey);
+          setProofDemoImage(finalProofDemoImage);
+        } catch (err: any) {
+          const msg = 'Proof Demo Image upload to ImgBB failed: ' + (err.message || 'Error');
+          setPublishFormError(msg);
+          showToast('❌ ' + msg, 'error');
+          setIsPublishingTask(false);
+          return;
+        }
+      }
+
+      // STRICT VALIDATION: BLOCK FIRESTORE WRITE IF ANY IMAGE IS STILL BASE64
+      if (finalTaskImage.startsWith('data:image/') || finalProofDemoImage.startsWith('data:image/')) {
+        const msg = 'Image upload failed. Base64 images cannot be saved to Firestore. Please upload images to ImgBB CDN first.';
+        setPublishFormError(msg);
+        showToast('❌ ' + msg, 'error');
+        setIsPublishingTask(false);
+        return;
+      }
+
       const taskData: Partial<TaskItem> = {
         title: cleanTitle,
         reward: numReward,
@@ -634,9 +756,11 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
         sortOrder: Number(sortOrder) || 10,
         url: url.trim(),
         externalDestinationUrl: url.trim(),
-        taskImage,
+        taskImage: finalTaskImage,
+        taskImageUrl: finalTaskImage,
         description: description.trim(),
-        proofDemoImage,
+        proofDemoImage: finalProofDemoImage,
+        proofDemoImageUrl: finalProofDemoImage,
         privateAdminGroupChatId: privateAdminGroupChatId.trim(),
         telegramAdminChatId: telegramAdminChatId.trim(),
         allowResubmission,
@@ -1040,9 +1164,14 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
                     {/* Task Image */}
                     <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-300 block">Task Image (Displayed on user task card)</label>
+                      <label className="text-xs font-bold text-slate-300 block">Task Image (Hosted on ImgBB CDN)</label>
                       <div className="flex items-center gap-3">
-                        {taskImage ? (
+                        {isUploadingTaskImage ? (
+                          <div className="w-16 h-16 rounded-xl border border-amber-500/30 bg-slate-950 flex flex-col items-center justify-center shrink-0">
+                            <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
+                            <span className="text-[8px] font-bold text-amber-400 mt-1">ImgBB...</span>
+                          </div>
+                        ) : taskImage ? (
                           <div className="relative w-16 h-16 rounded-xl border border-slate-700 overflow-hidden shrink-0">
                             <img src={taskImage} alt="Task Visual" className="w-full h-full object-cover" />
                             <button
@@ -1061,13 +1190,14 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                               type="file"
                               accept="image/jpeg,image/png,image/webp"
                               className="hidden"
-                              onChange={(e) => handleImageUpload(e, setTaskImage)}
+                              disabled={isUploadingTaskImage}
+                              onChange={(e) => handleImageUpload(e, 'taskImage')}
                             />
                           </label>
                         )}
                         <input
                           type="url"
-                          placeholder="Or paste Task Image URL (https://...)"
+                          placeholder="Or paste Task Image URL (https://i.ibb.co/...)"
                           value={taskImage}
                           onChange={(e) => setTaskImage(e.target.value)}
                           className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs text-white outline-none"
@@ -1102,9 +1232,14 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
                     {/* Proof Screenshot Demo Image */}
                     <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-300 block">Proof Screenshot Demo Image (Example for Users)</label>
+                      <label className="text-xs font-bold text-slate-300 block">Proof Screenshot Demo Image (Hosted on ImgBB CDN)</label>
                       <div className="flex items-center gap-3">
-                        {proofDemoImage ? (
+                        {isUploadingProofImage ? (
+                          <div className="w-20 h-20 rounded-xl border border-amber-500/30 bg-slate-950 flex flex-col items-center justify-center shrink-0">
+                            <RefreshCw className="w-5 h-5 text-amber-400 animate-spin" />
+                            <span className="text-[8px] font-bold text-amber-400 mt-1">ImgBB...</span>
+                          </div>
+                        ) : proofDemoImage ? (
                           <div className="relative w-20 h-20 rounded-xl border border-slate-700 overflow-hidden shrink-0">
                             <img src={proofDemoImage} alt="Demo Proof" className="w-full h-full object-cover" />
                             <button
@@ -1123,13 +1258,14 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                               type="file"
                               accept="image/jpeg,image/png,image/webp"
                               className="hidden"
-                              onChange={(e) => handleImageUpload(e, setProofDemoImage)}
+                              disabled={isUploadingProofImage}
+                              onChange={(e) => handleImageUpload(e, 'proofDemoImage')}
                             />
                           </label>
                         )}
                         <input
                           type="url"
-                          placeholder="Or paste Proof Demo Image URL (https://...)"
+                          placeholder="Or paste Proof Demo Image URL (https://i.ibb.co/...)"
                           value={proofDemoImage}
                           onChange={(e) => setProofDemoImage(e.target.value)}
                           className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs text-white outline-none"

@@ -1444,6 +1444,45 @@ async function startServer() {
     }
   });
 
+  // Helper to upload Base64 images to ImgBB CDN from server side
+  async function uploadBase64ToImgBBServer(base64Data: string, apiKey: string): Promise<string> {
+    const cleanKey = apiKey ? apiKey.trim() : '';
+    if (!cleanKey) {
+      throw new Error('ImgBB API Key is missing or not configured in settings.');
+    }
+    let base64Body = base64Data;
+    if (base64Data.includes(',')) {
+      base64Body = base64Data.split(',')[1];
+    }
+    const params = new URLSearchParams();
+    params.append('image', base64Body);
+
+    const response = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(cleanKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMsg = `ImgBB upload failed (HTTP ${response.status})`;
+      try {
+        const errJson = JSON.parse(errorText);
+        if (errJson.error && errJson.error.message) {
+          errorMsg = `ImgBB Error: ${errJson.error.message}`;
+        }
+      } catch (e) {}
+      throw new Error(errorMsg);
+    }
+
+    const json = await response.json();
+    if (json.success && json.data && (json.data.url || json.data.display_url)) {
+      return json.data.url || json.data.display_url;
+    } else {
+      throw new Error('ImgBB API response did not contain a valid image URL.');
+    }
+  }
+
   // 3.5.9 ROY SHARE WALLET — SAVE & PUBLISH TASK ENDPOINT
   app.post('/api/admin/save-and-publish-task', requireAdminSession, async (req, res) => {
     const startTime = Date.now();
@@ -1519,12 +1558,78 @@ async function startServer() {
         }
       }
 
+      // Image Processing & Base64 Guard
+      let cleanTaskImage = typeof taskImage === 'string' ? taskImage.trim() : (typeof payload.taskImageUrl === 'string' ? payload.taskImageUrl.trim() : '');
+      let cleanProofDemoImage = typeof proofDemoImage === 'string' ? proofDemoImage.trim() : (typeof payload.proofDemoImageUrl === 'string' ? payload.proofDemoImageUrl.trim() : '');
+
+      if (cleanTaskImage.startsWith('data:image/') || cleanProofDemoImage.startsWith('data:image/')) {
+        let imgbbKey = '';
+        try {
+          const sysConfig = await getDoc(doc(db, 'settings', 'config'));
+          if (sysConfig.exists()) {
+            imgbbKey = (sysConfig.data()?.imgbbApiKey || '').trim();
+          }
+        } catch (e) {}
+        if (!imgbbKey && process.env.IMGBB_API_KEY) {
+          imgbbKey = process.env.IMGBB_API_KEY.trim();
+        }
+
+        if (cleanTaskImage.startsWith('data:image/')) {
+          if (!imgbbKey) {
+            return res.status(400).json({
+              success: false,
+              error: 'ImgBB API Key is required to host Task Image. Base64 storage is blocked. Please configure ImgBB Key in System Settings.'
+            });
+          }
+          try {
+            console.log('[TASK_PUBLISH_IMGBB_CONVERT] Converting Task Image base64 to ImgBB CDN URL...');
+            cleanTaskImage = await uploadBase64ToImgBBServer(cleanTaskImage, imgbbKey);
+            console.log('[TASK_PUBLISH_IMGBB_SUCCESS] Task Image URL:', cleanTaskImage);
+          } catch (imgErr: any) {
+            console.error('[TASK_PUBLISH_IMGBB_ERROR] Task Image upload failed:', imgErr);
+            return res.status(400).json({
+              success: false,
+              error: `Task Image upload to ImgBB failed: ${imgErr.message || 'Image upload error'}. Please retry.`
+            });
+          }
+        }
+
+        if (cleanProofDemoImage.startsWith('data:image/')) {
+          if (!imgbbKey) {
+            return res.status(400).json({
+              success: false,
+              error: 'ImgBB API Key is required to host Proof Demo Image. Base64 storage is blocked. Please configure ImgBB Key in System Settings.'
+            });
+          }
+          try {
+            console.log('[TASK_PUBLISH_IMGBB_CONVERT] Converting Proof Demo Image base64 to ImgBB CDN URL...');
+            cleanProofDemoImage = await uploadBase64ToImgBBServer(cleanProofDemoImage, imgbbKey);
+            console.log('[TASK_PUBLISH_IMGBB_SUCCESS] Proof Demo Image URL:', cleanProofDemoImage);
+          } catch (imgErr: any) {
+            console.error('[TASK_PUBLISH_IMGBB_ERROR] Proof Demo Image upload failed:', imgErr);
+            return res.status(400).json({
+              success: false,
+              error: `Proof Demo Image upload to ImgBB failed: ${imgErr.message || 'Image upload error'}. Please retry.`
+            });
+          }
+        }
+      }
+
+      if (cleanTaskImage.startsWith('data:image/') || cleanProofDemoImage.startsWith('data:image/')) {
+        return res.status(400).json({
+          success: false,
+          error: 'Image upload failed. Base64 image data is strictly prohibited in Firestore. Images must be hosted on ImgBB CDN.'
+        });
+      }
+
       console.log('[TASK_VALIDATION] Passed', {
         title: cleanTitle,
         reward: numReward,
         coins: numCoins,
         verificationType: cleanVerificationType,
-        privateGroupChatId: effectivePrivateGroupChatId || 'N/A'
+        privateGroupChatId: effectivePrivateGroupChatId || 'N/A',
+        taskImageUrl: cleanTaskImage || 'None',
+        proofDemoImageUrl: cleanProofDemoImage || 'None'
       });
 
       // 2. Database Write
@@ -1561,10 +1666,12 @@ async function startServer() {
         sortOrder: targetSortOrder,
         url: cleanUrl,
         externalDestinationUrl: cleanUrl,
-        taskImage: typeof taskImage === 'string' ? taskImage : '',
+        taskImage: cleanTaskImage,
+        taskImageUrl: cleanTaskImage,
         description: typeof description === 'string' ? description.trim() : '',
         detailedInstructions: typeof description === 'string' ? description.trim() : '',
-        proofDemoImage: typeof proofDemoImage === 'string' ? proofDemoImage : '',
+        proofDemoImage: cleanProofDemoImage,
+        proofDemoImageUrl: cleanProofDemoImage,
         privateAdminGroupChatId: effectivePrivateGroupChatId,
         privateReviewGroupChatId: effectivePrivateGroupChatId,
         telegramAdminChatId: effectiveAdminReviewChatId,
