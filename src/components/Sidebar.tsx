@@ -57,7 +57,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'dashboard' as TabType, label: 'Dashboard', icon: LayoutDashboard },
         { id: 'users' as TabType, label: 'Users', icon: Users },
         { id: 'wallet' as TabType, label: 'Wallet', icon: Wallet },
-        { id: 'withdrawal' as TabType, label: 'Withdraw Requests', icon: Banknote },
+        { id: 'withdrawal' as TabType, label: 'Roy Share Withdraws', icon: Banknote },
+        { id: 'earning_bot_withdrawals' as TabType, label: 'Bot Withdrawals', icon: Banknote, badge: 'BOTS' },
         { id: 'transactions' as TabType, label: 'History & Ledger', icon: History },
       ]
     },

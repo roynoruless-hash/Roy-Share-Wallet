@@ -7362,6 +7362,7 @@ Respond with a JSON object containing two properties:
         id: withdrawalId,
         withdrawalId,
         earningBotId: botId || '',
+        botId: botId || '',
         uid: targetUserDocId,
         telegramId: cleanTgId,
         fullName: uData.fullName || uData.firstName || uData.userName || 'User',
@@ -10980,19 +10981,6 @@ Respond with a JSON object containing two properties:
   app.post('/api/admin/earning-bots/:id/update', requireAdminSession, async (req, res) => {
     try {
       const { id } = req.params;
-      const {
-        adminChatId,
-        miniAppUrl,
-        referralReward,
-        registrationBonus,
-        minWithdrawal,
-        withdrawalTax,
-        withdrawalMethods,
-        status,
-        dailyReferralLimit,
-        referralEarningCap,
-      } = req.body;
-
       const botRef = doc(db, 'earningBots', id);
       const botSnap = await getDoc(botRef);
 
@@ -11000,21 +10988,48 @@ Respond with a JSON object containing two properties:
         return res.status(404).json({ success: false, error: 'Bot configuration not found' });
       }
 
-      const updates: any = {
-        adminChatId: String(adminChatId || '').trim(),
-        miniAppUrl: String(miniAppUrl || '').trim(),
-        referralReward: Number(referralReward) || 0,
-        registrationBonus: Number(registrationBonus) || 0,
-        minWithdrawal: Number(minWithdrawal) || 0,
-        withdrawalTax: Number(withdrawalTax) || 0,
-        withdrawalMethods: Array.isArray(withdrawalMethods) ? withdrawalMethods : ['UPI'],
-        status: status || 'active',
-        dailyReferralLimit: Number(dailyReferralLimit) || 50,
-        referralEarningCap: Number(referralEarningCap) || 1000,
+      const oldData = botSnap.data() as any;
+      const newData = req.body;
+
+      // Identify changed fields and compile old vs new values for audit log
+      const changedFields: any[] = [];
+      const ignoreFields = ['token', 'updatedAt', 'createdAt']; // ignore token for security logs
+
+      for (const key of Object.keys(newData)) {
+        if (ignoreFields.includes(key)) continue;
+        const oldVal = oldData[key];
+        const newVal = newData[key];
+        if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+          changedFields.push({
+            field: key,
+            oldValue: typeof oldVal === 'object' ? JSON.stringify(oldVal) : String(oldVal ?? 'N/A'),
+            newValue: typeof newVal === 'object' ? JSON.stringify(newVal) : String(newVal ?? 'N/A'),
+          });
+        }
+      }
+
+      // Merge changes into document safely
+      const updates = {
+        ...newData,
         updatedAt: new Date().toISOString(),
       };
 
-      await updateDoc(botRef, updates);
+      // Never allow overwriting token from client UI unless explicitly passed
+      if (!updates.token) {
+        delete updates.token;
+      }
+
+      await setDoc(botRef, updates, { merge: true });
+
+      // Save to audit logs
+      if (changedFields.length > 0) {
+        await recordAuditLog('UPDATE_BOT_CONFIGURATION', 'SYSTEM', {
+          botId: id,
+          botUsername: oldData.botUsername,
+          changedFields,
+        }, 'SuperAdmin');
+      }
+
       return res.json({ success: true, message: 'Bot configuration updated successfully' });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });

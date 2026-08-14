@@ -7,6 +7,7 @@ import { Sidebar } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
 import { TelegramConfigView } from './components/TelegramConfigView';
 import { EarningBotsView } from './components/EarningBotsView';
+import { EarningBotWithdrawalsView } from './components/EarningBotWithdrawalsView';
 import { ChannelGroupView } from './components/ChannelGroupView';
 import { WalletSettingsView } from './components/WalletSettingsView';
 import { WithdrawalSettingsView } from './components/WithdrawalSettingsView';
@@ -914,6 +915,10 @@ export default function App() {
 
               {activeTab === 'earning_bots' && (
                 <EarningBotsView showToast={showToast} />
+              )}
+
+              {activeTab === 'earning_bot_withdrawals' && (
+                <EarningBotWithdrawalsView showToast={showToast} />
               )}
 
               {activeTab === 'channel' && (

@@ -178,6 +178,7 @@ export type TabType =
   | 'feedback_reviews'
   | 'enterprise_ops'
   | 'earning_bots'
+  | 'earning_bot_withdrawals'
   | 'ai_revenue_automation';
 
 export interface FraudReport {

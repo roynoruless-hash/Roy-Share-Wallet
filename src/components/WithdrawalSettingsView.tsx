@@ -118,7 +118,11 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
       (snapshot) => {
         const list: WithdrawalRecord[] = [];
         snapshot.forEach((doc) => {
-          list.push({ id: doc.id, ...(doc.data() as Omit<WithdrawalRecord, 'id'>) });
+          const data = doc.data() as any;
+          // Filter to show only Roy Share Wallet withdrawals (not associate with Earning Bots)
+          if (!data.earningBotId || data.earningBotId === '' || data.earningBotId === 'roy-share-wallet') {
+            list.push({ id: doc.id, ...(data as Omit<WithdrawalRecord, 'id'>) });
+          }
         });
 
         const sorted = list.sort((a, b) => {

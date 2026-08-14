@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Bot, Plus, ToggleLeft, ToggleRight, Check, X, Shield, ShieldCheck, Users, Trophy, Gift, ArrowRight, RefreshCw, Layers, Radio, Trash2, Copy, Share2, ExternalLink, Search, CheckCircle2, AlertTriangle, ChevronRight, BarChart2 } from 'lucide-react';
+import { Bot, Plus, ToggleLeft, ToggleRight, Check, X, Shield, ShieldCheck, Users, Trophy, Gift, ArrowRight, RefreshCw, Layers, Radio, Trash2, Copy, Share2, ExternalLink, Search, CheckCircle2, AlertTriangle, ChevronRight, BarChart2, ArrowLeft, Save, ChevronDown, Edit3, Sliders, Settings, Smartphone, Bell, Layout, Coins } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 
 interface EarningBot {
@@ -43,7 +43,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
   const [selectedBot, setSelectedBot] = useState<EarningBot | null>(null);
   const [botAnalytics, setBotAnalytics] = useState<Record<string, EarningBotAnalytics>>({});
   const [isConnecting, setIsConnecting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'wizard' | 'referrals'>('wizard');
+  const [activeTab, setActiveTab] = useState<'wizard' | 'referrals' | 'withdrawals' | 'edit'>('wizard');
 
   // New Bot Form State
   const [newToken, setNewToken] = useState('');
@@ -75,6 +75,118 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
   const [resetConfirmationInput, setResetConfirmationInput] = useState('');
   const [isResetting, setIsResetting] = useState(false);
   const [resetResult, setResetResult] = useState<any | null>(null);
+
+  // Edit Configuration States
+  const [editingBot, setEditingBot] = useState<any | null>(null);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
+    basic: false,
+    registration: true,
+    referral: true,
+    withdrawal: true,
+    security: true,
+    channels: true,
+    groups: true,
+    miniapp: true,
+    payout: true,
+    menu: true,
+    tasks: true,
+    notifications: true,
+  });
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Bot-specific Withdrawals States
+  const [botWithdrawals, setBotWithdrawals] = useState<any[]>([]);
+  const [loadingBotWithdrawals, setLoadingBotWithdrawals] = useState(false);
+  const [withdrawalActionId, setWithdrawalActionId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [withdrawalTabFilter, setWithdrawalTabFilter] = useState<'ALL' | 'PENDING' | 'PROCESSING' | 'APPROVED' | 'REJECTED'>('ALL');
+
+  const fetchBotWithdrawals = async (botId: string) => {
+    setLoadingBotWithdrawals(true);
+    try {
+      const res = await apiFetch(`/api/admin/withdrawals?botId=${botId}`);
+      const data = await res.json();
+      if (data.success) {
+        setBotWithdrawals(data.withdrawals || []);
+      }
+    } catch (err) {
+      console.error('Error fetching bot withdrawals:', err);
+    } finally {
+      setLoadingBotWithdrawals(false);
+    }
+  };
+
+  const handleApproveWithdrawal = async (wdId: string) => {
+    if (!confirm('Are you sure you want to approve this withdrawal request?')) return;
+    try {
+      const res = await apiFetch('/api/admin/withdrawals/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ withdrawalId: wdId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Withdrawal approved and paid successfully!', 'success');
+        if (selectedBot) {
+          fetchBotWithdrawals(selectedBot.id);
+          fetchBotAnalytics(selectedBot.id);
+        }
+      } else {
+        showToast(data.error || 'Failed to approve withdrawal', 'error');
+      }
+    } catch (err) {
+      showToast('Network error while approving withdrawal', 'error');
+    }
+  };
+
+  const handleRejectWithdrawal = async (wdId: string) => {
+    if (!rejectReason.trim()) {
+      showToast('Please enter a rejection reason.', 'error');
+      return;
+    }
+    try {
+      const res = await apiFetch('/api/admin/withdrawals/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ withdrawalId: wdId, reason: rejectReason }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Withdrawal request rejected and refunded.', 'success');
+        setWithdrawalActionId(null);
+        setRejectReason('');
+        if (selectedBot) {
+          fetchBotWithdrawals(selectedBot.id);
+          fetchBotAnalytics(selectedBot.id);
+        }
+      } else {
+        showToast(data.error || 'Failed to reject withdrawal', 'error');
+      }
+    } catch (err) {
+      showToast('Network error while rejecting withdrawal', 'error');
+    }
+  };
+
+  // Quick edit helper to update properties in editingBot
+  const updateEditField = (path: string, value: any) => {
+    setEditingBot((prev: any) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      const keys = path.split('.');
+      let current = next;
+      for (let i = 0; i < keys.length - 1; i++) {
+        if (!current[keys[i]]) current[keys[i]] = {};
+        current[keys[i]] = { ...current[keys[i]] };
+        current = current[keys[i]];
+      }
+      current[keys[keys.length - 1]] = value;
+      return next;
+    });
+  };
+
+  const toggleSection = (section: string) => {
+    setCollapsedSections((prev) => ({ ...prev, [section]: !prev[section] }));
+  };
 
   const handleResetEarningBot = async () => {
     if (!selectedBot) return;
@@ -159,6 +271,38 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
     }
   };
 
+  const handleSaveBotChanges = async () => {
+    if (!editingBot) return;
+
+    // Basic Validation
+    if (!editingBot.botName?.trim()) {
+      showToast('Bot Name is required.', 'error');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const res = await apiFetch(`/api/admin/earning-bots/${editingBot.id}/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingBot),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        showToast(`✅ BOT CONFIGURATION UPDATED\n\nBot:\n${editingBot.botName}\n\nUpdated successfully.`, 'success');
+        setEditingBot(null);
+        await fetchBots();
+      } else {
+        showToast(data.error || 'Failed to save bot configuration', 'error');
+      }
+    } catch (err: any) {
+      showToast('Network error while saving bot configuration', 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   useEffect(() => {
     fetchBots();
   }, []);
@@ -166,6 +310,7 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
   useEffect(() => {
     if (selectedBot) {
       fetchBotReferralsData(selectedBot.id);
+      fetchBotWithdrawals(selectedBot.id);
     }
   }, [selectedBot?.id]);
 
@@ -687,59 +832,505 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
                 {bots.map((b) => {
                   const evalRes = evalBotReadiness(b);
                   const isSelected = selectedBot?.id === b.id;
+                  const analytics = botAnalytics[b.id];
 
                   return (
                     <div
                       key={b.id}
-                      onClick={() => setSelectedBot(b)}
-                      className={`p-4 rounded-xl transition-all duration-300 cursor-pointer border relative overflow-hidden ${
+                      onClick={() => {
+                        setSelectedBot(b);
+                        setEditingBot(null);
+                        setActiveTab('wizard');
+                      }}
+                      className={`p-4 rounded-xl transition-all duration-300 cursor-pointer border relative overflow-hidden flex flex-col justify-between ${
                         isSelected
                           ? 'bg-slate-900 border-orange-500/60 shadow-lg shadow-orange-500/10'
                           : 'bg-slate-950/65 border-slate-900 hover:border-slate-800 hover:bg-slate-900/50'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-orange-400 shrink-0">
-                            <Bot className="w-4 h-4" />
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-orange-400 shrink-0">
+                              <Bot className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <h3 className="text-xs font-bold text-white leading-tight">{b.botName}</h3>
+                              <p className="text-[10px] text-slate-500 font-mono">@{b.botUsername}</p>
+                            </div>
                           </div>
-                          <div>
-                            <h3 className="text-xs font-bold text-white leading-tight">{b.botName}</h3>
-                            <p className="text-[10px] text-slate-500 font-mono">@{b.botUsername}</p>
+
+                          <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => handleToggleStatus(b)}
+                              className="p-1 rounded text-slate-400 hover:text-white transition-colors"
+                            >
+                              {b.status === 'active' ? (
+                                <ToggleRight className="w-7 h-7 text-emerald-400" />
+                              ) : (
+                                <ToggleLeft className="w-7 h-7 text-slate-600" />
+                              )}
+
+              {/* TAB 3: EDIT BOT CONFIGURATION */}
+              {activeTab === 'edit' && editingBot && (
+                <div className="space-y-6">
+                  <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-orange-400">✏️ Quick Configuration Edit</h3>
+                    <p className="text-[10px] text-slate-500">Update parameters for @{selectedBot.botUsername}. Changes apply instantly upon saving.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Bot Name</label>
+                        <input
+                          type="text"
+                          value={editingBot.botName || ''}
+                          onChange={(e) => updateEditField('botName', e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Mini App URL / Web App Link</label>
+                        <input
+                          type="text"
+                          value={editingBot.miniAppUrl || ''}
+                          onChange={(e) => updateEditField('miniAppUrl', e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Referral Reward</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">₹</span>
+                            <input
+                              type="number"
+                              value={editingBot.referralReward ?? 0}
+                              onChange={(e) => updateEditField('referralReward', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl pl-6 pr-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => handleToggleStatus(b)}
-                            className="p-1 rounded text-slate-400 hover:text-white transition-colors"
-                          >
-                            {b.status === 'active' ? (
-                              <ToggleRight className="w-7 h-7 text-emerald-400" />
-                            ) : (
-                              <ToggleLeft className="w-7 h-7 text-slate-600" />
-                            )}
-                          </button>
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Signup Bonus</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">₹</span>
+                            <input
+                              type="number"
+                              value={editingBot.registrationBonus ?? 0}
+                              onChange={(e) => updateEditField('registrationBonus', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl pl-6 pr-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
+                          </div>
                         </div>
                       </div>
 
-                      {/* Status Readiness Badge */}
-                      <div className="mt-3 flex items-center justify-between pt-2 border-t border-slate-900">
-                        {evalRes.isReady ? (
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span>READY</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                            <AlertTriangle className="w-3 h-3" />
-                            <span>SETUP INCOMPLETE</span>
-                          </span>
-                        )}
-
-                        <div className="text-[9px] font-mono text-slate-500 font-bold">
-                          <span>Ch: {evalRes.channelsCount}</span> | <span>Gr: {evalRes.groupsCount}</span>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Min Withdrawal</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">₹</span>
+                            <input
+                              type="number"
+                              value={editingBot.minWithdrawal ?? 0}
+                              onChange={(e) => updateEditField('minWithdrawal', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl pl-6 pr-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
+                          </div>
                         </div>
+
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Tax Deducted</label>
+                          <div className="relative">
+                            <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">%</span>
+                            <input
+                              type="number"
+                              value={editingBot.withdrawalTax ?? 0}
+                              onChange={(e) => updateEditField('withdrawalTax', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Admin Chat ID</label>
+                        <input
+                          type="text"
+                          value={editingBot.adminChatId || ''}
+                          onChange={(e) => updateEditField('adminChatId', e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Daily Ref Limit</label>
+                          <input
+                            type="number"
+                            value={editingBot.dailyReferralLimit ?? 50}
+                            onChange={(e) => updateEditField('dailyReferralLimit', Number(e.target.value))}
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Ref Earning Cap</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">₹</span>
+                            <input
+                              type="number"
+                              value={editingBot.referralEarningCap ?? 1000}
+                              onChange={(e) => updateEditField('referralEarningCap', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl pl-6 pr-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Supported Withdrawal Methods</label>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {['UPI', 'REDEEM_CODE', 'ULTRA_PAY'].map((m) => {
+                            const currentMethods = editingBot.withdrawalMethods || ['UPI'];
+                            const isSelected = currentMethods.includes(m);
+                            return (
+                              <button
+                                type="button"
+                                key={m}
+                                onClick={() => {
+                                  const next = isSelected
+                                    ? currentMethods.filter((x: string) => x !== m)
+                                    : [...currentMethods, m];
+                                  updateEditField('withdrawalMethods', next.length > 0 ? next : ['UPI']);
+                                }}
+                                className={`px-3 py-1.5 text-[10px] font-bold rounded-lg border uppercase transition-all duration-300 ${
+                                  isSelected
+                                    ? 'bg-orange-500/10 text-orange-400 border-orange-500/30'
+                                    : 'bg-slate-950 text-slate-500 border-slate-800 hover:border-slate-700'
+                                }`}
+                              >
+                                {m.replace('_', ' ')}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-slate-800/50 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={handleSaveBotChanges}
+                      className="flex items-center justify-center gap-2 py-2.5 px-6 rounded-xl text-xs font-black tracking-wider uppercase bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-400 hover:to-amber-500 text-slate-950 shadow-lg shadow-orange-500/10 active:scale-95 transition-all duration-300 disabled:opacity-50"
+                    >
+                      {isSaving ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Save className="w-4 h-4" />
+                      )}
+                      <span>{isSaving ? 'Saving Changes...' : 'Save Configuration'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 4: BOT-SPECIFIC WITHDRAWALS */}
+              {activeTab === 'withdrawals' && (
+                <div className="space-y-6">
+                  {/* Payout Management Header */}
+                  <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div>
+                      <h3 className="text-xs font-black uppercase tracking-wider text-orange-400 flex items-center gap-1.5">
+                        <Coins className="w-4 h-4" />
+                        <span>💸 {selectedBot.botName} Withdrawal Requests</span>
+                      </h3>
+                      <p className="text-[10px] text-slate-500 mt-0.5">Isolated withdrawal accounting and approval workflow for @{selectedBot.botUsername}.</p>
+                    </div>
+
+                    <button
+                      onClick={() => fetchBotWithdrawals(selectedBot.id)}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 self-start sm:self-auto"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Refresh</span>
+                    </button>
+                  </div>
+
+                  {/* Filter Tabs */}
+                  <div className="flex flex-wrap gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800/60">
+                    {(['ALL', 'PENDING', 'PROCESSING', 'APPROVED', 'REJECTED'] as const).map((tab) => {
+                      const count = tab === 'ALL' 
+                        ? botWithdrawals.length
+                        : botWithdrawals.filter(w => String(w.status).toUpperCase() === tab || (tab === 'APPROVED' && String(w.status).toUpperCase() === 'PAID')).length;
+                      
+                      const isActive = withdrawalTabFilter === tab;
+                      return (
+                        <button
+                          key={tab}
+                          onClick={() => setWithdrawalTabFilter(tab)}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
+                            isActive
+                              ? 'bg-orange-500 text-slate-950 font-black shadow shadow-orange-500/10'
+                              : 'text-slate-400 hover:text-white hover:bg-slate-900/60'
+                          }`}
+                        >
+                          <span>{tab}</span>
+                          <span className={`px-1.5 py-0.2 bg-slate-900 rounded font-mono text-[9px] ${isActive ? 'text-slate-950 bg-white/30' : 'text-slate-500'}`}>
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Withdrawals Content */}
+                  {loadingBotWithdrawals ? (
+                    <div className="py-12 text-center text-slate-500 font-bold uppercase text-xs flex items-center justify-center gap-2">
+                      <RefreshCw className="w-4 h-4 animate-spin text-orange-500" />
+                      <span>Loading withdrawal requests...</span>
+                    </div>
+                  ) : botWithdrawals.length === 0 ? (
+                    <div className="py-12 text-center text-slate-500 font-bold uppercase text-xs border border-dashed border-slate-800 rounded-xl">
+                      No withdrawal records found.
+                    </div>
+                  ) : (() => {
+                    const filtered = botWithdrawals.filter((w) => {
+                      if (withdrawalTabFilter === 'ALL') return true;
+                      if (withdrawalTabFilter === 'APPROVED') return w.status === 'APPROVED' || w.status === 'PAID';
+                      return String(w.status).toUpperCase() === withdrawalTabFilter;
+                    });
+
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="py-8 text-center text-slate-500 font-bold uppercase text-xs bg-slate-950/40 rounded-xl border border-slate-900">
+                          No {withdrawalTabFilter.toLowerCase()} requests.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-3">
+                        {filtered.map((w) => {
+                          const isActionActive = withdrawalActionId === w.id;
+                          return (
+                            <div key={w.id} className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3 relative overflow-hidden">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-white font-extrabold text-sm">{w.fullName || 'Earning Bot User'}</span>
+                                    <span className="text-xs text-slate-400 font-mono font-medium">({w.telegramId})</span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">WD ID: {w.withdrawalId} | Time: {new Date(w.createdAt).toLocaleString()}</p>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider border ${
+                                    w.status === 'PENDING' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                                    w.status === 'PROCESSING' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                                    (w.status === 'APPROVED' || w.status === 'PAID') ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                                    'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                                  }`}>
+                                    {w.status}
+                                  </span>
+                                  <span className="text-sm font-black text-orange-400 font-mono">₹{w.amount}</span>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-900/40 p-3 rounded-lg border border-slate-900">
+                                <div className="flex flex-col">
+                                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Method</span>
+                                  <span className="text-xs font-bold text-slate-300 font-mono">{w.method}</span>
+                                </div>
+                                <div className="flex flex-col sm:col-span-2">
+                                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Payout Account / UPI</span>
+                                  <span className="text-xs font-bold text-white font-mono break-all">
+                                    {w.method === 'UPI' ? w.upiId : w.paytoNumber || 'N/A'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Reject Reason Box */}
+                              {isActionActive && (
+                                <div className="p-3 bg-slate-900 rounded-lg border border-rose-500/30 space-y-2">
+                                  <label className="block text-[10px] font-black text-rose-400 uppercase tracking-wider">Rejection Reason (Required)</label>
+                                  <input
+                                    type="text"
+                                    placeholder="Enter detailed reason for rejection..."
+                                    value={rejectReason}
+                                    onChange={(e) => setRejectReason(e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
+                                  />
+                                  <div className="flex justify-end gap-2">
+                                    <button
+                                      onClick={() => {
+                                        setWithdrawalActionId(null);
+                                        setRejectReason('');
+                                      }}
+                                      className="px-3 py-1.5 bg-slate-850 hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white rounded-lg transition-colors"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectWithdrawal(w.id)}
+                                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-[10px] font-bold text-slate-950 rounded-lg transition-colors"
+                                    >
+                                      Submit Rejection
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Action Trigger Buttons */}
+                              {w.status === 'PENDING' && !isActionActive && (
+                                <div className="flex items-center gap-2 pt-1">
+                                  <button
+                                    onClick={() => handleApproveWithdrawal(w.id)}
+                                    className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-[10px] font-black uppercase tracking-wider rounded-lg transition-colors flex items-center gap-1"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Approve & Payout</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setWithdrawalActionId(w.id);
+                                      setRejectReason('');
+                                    }}
+                                    className="px-4 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all flex items-center gap-1"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                    <span>Reject</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Status Readiness Badge */}
+                        <div className="mt-3 flex items-center justify-between pt-2 border-t border-slate-800/50">
+                          {evalRes.isReady ? (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>READY</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                              <AlertTriangle className="w-3 h-3" />
+                              <span>INCOMPLETE</span>
+                            </span>
+                          )}
+
+                          <div className="text-[9px] font-mono text-slate-500 font-bold">
+                            <span>Ch: {evalRes.channelsCount}</span> | <span>Gr: {evalRes.groupsCount}</span>
+                          </div>
+                        </div>
+
+                        {/* Isolated Bot-Specific Accounting Statistics */}
+                        <div className="mt-3 grid grid-cols-2 gap-2 bg-slate-950/80 p-2.5 rounded-lg border border-slate-900">
+                          <div className="flex flex-col">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">👥 Users</span>
+                            <span className="text-xs font-bold font-mono text-slate-300">{analytics?.totalUsers ?? 0}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">💰 Earnings</span>
+                            <span className="text-xs font-bold font-mono text-emerald-400">₹{analytics?.totalRewardAmount ?? 0}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">💸 Withdrawals</span>
+                            <span className="text-xs font-bold font-mono text-blue-400">₹{analytics?.totalWithdrawnAmount ?? 0}</span>
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">⏱ Pending WD</span>
+                            <span className={`text-xs font-bold font-mono ${analytics?.pendingWithdrawals > 0 ? 'text-amber-400 font-black animate-pulse' : 'text-slate-400'}`}>
+                              {analytics?.pendingWithdrawals ?? 0}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Interactive Bot Management Actions */}
+                      <div className="mt-3.5 grid grid-cols-2 gap-2" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedBot(b);
+                            setEditingBot(null);
+                            setActiveTab('wizard');
+                          }}
+                          className={`py-2 px-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all duration-200 border text-center flex items-center justify-center gap-1 ${
+                            isSelected && activeTab === 'wizard' && !editingBot
+                              ? 'bg-orange-500 text-slate-950 border-orange-500/10 shadow-md shadow-orange-500/10'
+                              : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:text-white'
+                          }`}
+                        >
+                          <Settings className="w-3 h-3" />
+                          <span>Wizard</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedBot(b);
+                            setEditingBot(JSON.parse(JSON.stringify(b)));
+                            setActiveTab('edit');
+                          }}
+                          className={`py-2 px-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all duration-200 border text-center flex items-center justify-center gap-1 ${
+                            isSelected && activeTab === 'edit'
+                              ? 'bg-orange-500 text-slate-950 border-orange-500/10 shadow-md shadow-orange-500/10'
+                              : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:text-white'
+                          }`}
+                        >
+                          <Edit3 className="w-3 h-3 text-orange-400" />
+                          <span>Edit Bot</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedBot(b);
+                            setEditingBot(null);
+                            setActiveTab('withdrawals');
+                          }}
+                          className={`py-2 px-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all duration-200 border text-center flex items-center justify-center gap-1 ${
+                            isSelected && activeTab === 'withdrawals'
+                              ? 'bg-orange-500 text-slate-950 border-orange-500/10 shadow-md shadow-orange-500/10'
+                              : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:text-white'
+                          }`}
+                        >
+                          <Coins className="w-3 h-3 text-blue-400" />
+                          <span>Withdraws</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedBot(b);
+                            setEditingBot(null);
+                            setActiveTab('referrals');
+                          }}
+                          className={`py-2 px-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all duration-200 border text-center flex items-center justify-center gap-1 ${
+                            isSelected && activeTab === 'referrals'
+                              ? 'bg-orange-500 text-slate-950 border-orange-500/10 shadow-md shadow-orange-500/10'
+                              : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700 hover:text-white'
+                          }`}
+                        >
+                          <Users className="w-3 h-3 text-emerald-400" />
+                          <span>Users</span>
+                        </button>
                       </div>
                     </div>
                   );
@@ -765,9 +1356,12 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
 
                   <div className="flex flex-wrap items-center gap-2">
                     <button
-                      onClick={() => setActiveTab('wizard')}
+                      onClick={() => {
+                        setActiveTab('wizard');
+                        setEditingBot(null);
+                      }}
                       className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 flex items-center gap-1.5 ${
-                        activeTab === 'wizard'
+                        activeTab === 'wizard' && !editingBot
                           ? 'bg-orange-500 text-slate-950 shadow-md shadow-orange-500/20'
                           : 'bg-slate-800 text-slate-400 hover:text-white'
                       }`}
@@ -776,14 +1370,45 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
                       <span>Setup Wizard</span>
                     </button>
                     <button
-                      onClick={() => setActiveTab('referrals')}
+                      onClick={() => {
+                        setActiveTab('edit');
+                        setEditingBot(JSON.parse(JSON.stringify(selectedBot)));
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 flex items-center gap-1.5 ${
+                        activeTab === 'edit'
+                          ? 'bg-orange-500 text-slate-950 shadow-md shadow-orange-500/20'
+                          : 'bg-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span>Edit Bot</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActiveTab('withdrawals');
+                        setEditingBot(null);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 flex items-center gap-1.5 ${
+                        activeTab === 'withdrawals'
+                          ? 'bg-orange-500 text-slate-950 shadow-md shadow-orange-500/20'
+                          : 'bg-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <Coins className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Withdrawals</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActiveTab('referrals');
+                        setEditingBot(null);
+                      }}
                       className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 flex items-center gap-1.5 ${
                         activeTab === 'referrals'
                           ? 'bg-orange-500 text-slate-950 shadow-md shadow-orange-500/20'
                           : 'bg-slate-800 text-slate-400 hover:text-white'
                       }`}
                     >
-                      <Users className="w-3.5 h-3.5" />
+                      <Users className="w-3.5 h-3.5 text-emerald-400" />
                       <span>Referrals & Users ({botUsers.length})</span>
                     </button>
                     <button
@@ -1224,6 +1849,355 @@ export const EarningBotsView: React.FC<EarningBotsViewProps> = ({ showToast }) =
                       </table>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* TAB 3: EDIT BOT CONFIGURATION */}
+              {activeTab === 'edit' && editingBot && (
+                <div className="space-y-6">
+                  <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+                    <h3 className="text-xs font-black uppercase tracking-wider text-orange-400">✏️ Quick Configuration Edit</h3>
+                    <p className="text-[10px] text-slate-500">Update parameters for @{selectedBot.botUsername}. Changes apply instantly upon saving.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Bot Name</label>
+                        <input
+                          type="text"
+                          value={editingBot.botName || ''}
+                          onChange={(e) => updateEditField('botName', e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Mini App URL / Web App Link</label>
+                        <input
+                          type="text"
+                          value={editingBot.miniAppUrl || ''}
+                          onChange={(e) => updateEditField('miniAppUrl', e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Referral Reward</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">₹</span>
+                            <input
+                              type="number"
+                              value={editingBot.referralReward ?? 0}
+                              onChange={(e) => updateEditField('referralReward', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl pl-6 pr-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Signup Bonus</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">₹</span>
+                            <input
+                              type="number"
+                              value={editingBot.registrationBonus ?? 0}
+                              onChange={(e) => updateEditField('registrationBonus', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl pl-6 pr-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Min Withdrawal</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">₹</span>
+                            <input
+                              type="number"
+                              value={editingBot.minWithdrawal ?? 0}
+                              onChange={(e) => updateEditField('minWithdrawal', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl pl-6 pr-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Tax Deducted</label>
+                          <div className="relative">
+                            <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">%</span>
+                            <input
+                              type="number"
+                              value={editingBot.withdrawalTax ?? 0}
+                              onChange={(e) => updateEditField('withdrawalTax', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Admin Chat ID</label>
+                        <input
+                          type="text"
+                          value={editingBot.adminChatId || ''}
+                          onChange={(e) => updateEditField('adminChatId', e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Daily Ref Limit</label>
+                          <input
+                            type="number"
+                            value={editingBot.dailyReferralLimit ?? 50}
+                            onChange={(e) => updateEditField('dailyReferralLimit', Number(e.target.value))}
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Ref Earning Cap</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs font-bold">₹</span>
+                            <input
+                              type="number"
+                              value={editingBot.referralEarningCap ?? 1000}
+                              onChange={(e) => updateEditField('referralEarningCap', Number(e.target.value))}
+                              className="w-full bg-slate-950 border border-slate-800 focus:border-orange-500 rounded-xl pl-6 pr-3.5 py-2.5 text-xs text-white font-mono focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">Supported Withdrawal Methods</label>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {['UPI', 'REDEEM_CODE', 'ULTRA_PAY'].map((m) => {
+                            const currentMethods = editingBot.withdrawalMethods || ['UPI'];
+                            const isSelected = currentMethods.includes(m);
+                            return (
+                              <button
+                                type="button"
+                                key={m}
+                                onClick={() => {
+                                  const next = isSelected
+                                    ? currentMethods.filter((x: string) => x !== m)
+                                    : [...currentMethods, m];
+                                  updateEditField('withdrawalMethods', next.length > 0 ? next : ['UPI']);
+                                }}
+                                className={`px-3 py-1.5 text-[10px] font-bold rounded-lg border uppercase transition-all duration-300 ${
+                                  isSelected
+                                    ? 'bg-orange-500/10 text-orange-400 border-orange-500/30'
+                                    : 'bg-slate-950 text-slate-500 border-slate-800 hover:border-slate-700'
+                                }`}
+                              >
+                                {m.replace('_', ' ')}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-slate-800/50 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={handleSaveBotChanges}
+                      className="flex items-center justify-center gap-2 py-2.5 px-6 rounded-xl text-xs font-black tracking-wider uppercase bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-400 hover:to-amber-500 text-slate-950 shadow-lg shadow-orange-500/10 active:scale-95 transition-all duration-300 disabled:opacity-50"
+                    >
+                      {isSaving ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Save className="w-4 h-4" />
+                      )}
+                      <span>{isSaving ? 'Saving Changes...' : 'Save Configuration'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 4: BOT-SPECIFIC WITHDRAWALS */}
+              {activeTab === 'withdrawals' && (
+                <div className="space-y-6">
+                  {/* Payout Management Header */}
+                  <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div>
+                      <h3 className="text-xs font-black uppercase tracking-wider text-orange-400 flex items-center gap-1.5">
+                        <Coins className="w-4 h-4" />
+                        <span>💸 {selectedBot.botName} Withdrawal Requests</span>
+                      </h3>
+                      <p className="text-[10px] text-slate-500 mt-0.5">Isolated withdrawal accounting and approval workflow for @{selectedBot.botUsername}.</p>
+                    </div>
+
+                    <button
+                      onClick={() => fetchBotWithdrawals(selectedBot.id)}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 self-start sm:self-auto"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Refresh</span>
+                    </button>
+                  </div>
+
+                  {/* Filter Tabs */}
+                  <div className="flex flex-wrap gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800/60">
+                    {(['ALL', 'PENDING', 'PROCESSING', 'APPROVED', 'REJECTED'] as const).map((tab) => {
+                      const count = tab === 'ALL' 
+                        ? botWithdrawals.length
+                        : botWithdrawals.filter(w => String(w.status).toUpperCase() === tab || (tab === 'APPROVED' && String(w.status).toUpperCase() === 'PAID')).length;
+                      
+                      const isActive = withdrawalTabFilter === tab;
+                      return (
+                        <button
+                          key={tab}
+                          onClick={() => setWithdrawalTabFilter(tab)}
+                          className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all duration-200 flex items-center gap-1.5 ${
+                            isActive
+                              ? 'bg-orange-500 text-slate-950 font-black shadow shadow-orange-500/10'
+                              : 'text-slate-400 hover:text-white hover:bg-slate-900/60'
+                          }`}
+                        >
+                          <span>{tab}</span>
+                          <span className={`px-1.5 py-0.2 bg-slate-900 rounded font-mono text-[9px] ${isActive ? 'text-slate-950 bg-white/30' : 'text-slate-500'}`}>
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Withdrawals Content */}
+                  {loadingBotWithdrawals ? (
+                    <div className="py-12 text-center text-slate-500 font-bold uppercase text-xs flex items-center justify-center gap-2">
+                      <RefreshCw className="w-4 h-4 animate-spin text-orange-500" />
+                      <span>Loading withdrawal requests...</span>
+                    </div>
+                  ) : botWithdrawals.length === 0 ? (
+                    <div className="py-12 text-center text-slate-500 font-bold uppercase text-xs border border-dashed border-slate-800 rounded-xl">
+                      No withdrawal records found.
+                    </div>
+                  ) : (() => {
+                    const filtered = botWithdrawals.filter((w) => {
+                      if (withdrawalTabFilter === 'ALL') return true;
+                      if (withdrawalTabFilter === 'APPROVED') return w.status === 'APPROVED' || w.status === 'PAID';
+                      return String(w.status).toUpperCase() === withdrawalTabFilter;
+                    });
+
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="py-8 text-center text-slate-500 font-bold uppercase text-xs bg-slate-950/40 rounded-xl border border-slate-900">
+                          No {withdrawalTabFilter.toLowerCase()} requests.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-3">
+                        {filtered.map((w) => {
+                          const isActionActive = withdrawalActionId === w.id;
+                          return (
+                            <div key={w.id} className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3 relative overflow-hidden">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-white font-extrabold text-sm">{w.fullName || 'Earning Bot User'}</span>
+                                    <span className="text-xs text-slate-400 font-mono font-medium">({w.telegramId})</span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">WD ID: {w.withdrawalId} | Time: {new Date(w.createdAt).toLocaleString()}</p>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider border ${
+                                    w.status === 'PENDING' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                                    w.status === 'PROCESSING' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                                    (w.status === 'APPROVED' || w.status === 'PAID') ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                                    'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                                  }`}>
+                                    {w.status}
+                                  </span>
+                                  <span className="text-sm font-black text-orange-400 font-mono">₹{w.amount}</span>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-900/40 p-3 rounded-lg border border-slate-900">
+                                <div className="flex flex-col">
+                                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Method</span>
+                                  <span className="text-xs font-bold text-slate-300 font-mono">{w.method}</span>
+                                </div>
+                                <div className="flex flex-col sm:col-span-2">
+                                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Payout Account / UPI</span>
+                                  <span className="text-xs font-bold text-white font-mono break-all">
+                                    {w.method === 'UPI' ? w.upiId : w.paytoNumber || 'N/A'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Reject Reason Box */}
+                              {isActionActive && (
+                                <div className="p-3 bg-slate-900 rounded-lg border border-rose-500/30 space-y-2">
+                                  <label className="block text-[10px] font-black text-rose-400 uppercase tracking-wider">Rejection Reason (Required)</label>
+                                  <input
+                                    type="text"
+                                    placeholder="Enter detailed reason for rejection..."
+                                    value={rejectReason}
+                                    onChange={(e) => setRejectReason(e.target.value)}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
+                                  />
+                                  <div className="flex justify-end gap-2">
+                                    <button
+                                      onClick={() => {
+                                        setWithdrawalActionId(null);
+                                        setRejectReason('');
+                                      }}
+                                      className="px-3 py-1.5 bg-slate-850 hover:bg-slate-800 text-[10px] font-bold text-slate-400 hover:text-white rounded-lg transition-colors"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectWithdrawal(w.id)}
+                                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-[10px] font-bold text-slate-950 rounded-lg transition-colors"
+                                    >
+                                      Submit Rejection
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Action Trigger Buttons */}
+                              {w.status === 'PENDING' && !isActionActive && (
+                                <div className="flex items-center gap-2 pt-1">
+                                  <button
+                                    onClick={() => handleApproveWithdrawal(w.id)}
+                                    className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-[10px] font-black uppercase tracking-wider rounded-lg transition-colors flex items-center gap-1"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>Approve & Payout</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setWithdrawalActionId(w.id);
+                                      setRejectReason('');
+                                    }}
+                                    className="px-4 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all flex items-center gap-1"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                    <span>Reject</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
