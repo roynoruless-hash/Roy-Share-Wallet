@@ -335,6 +335,10 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
             const isRejectedActive = rejectingId === w.id;
             const targetBot = bots.find(b => b.id === w.earningBotId);
 
+            const gross = Number(w.grossAmount ?? w.amountRequested ?? w.amount ?? 0);
+            const tax = Number(w.taxAmount ?? ((w.processingFee || 0) + (w.platformFee || 0)));
+            const net = Number(w.netAmount ?? w.finalPayout ?? w.payoutAmount ?? (gross - tax));
+
             return (
               <div
                 key={w.id}
@@ -369,21 +373,38 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
                     }`}>
                       {w.status}
                     </span>
-                    <span className="text-base font-black text-orange-400 font-mono">₹{w.amount}</span>
+                    <span className="text-base font-black text-orange-400 font-mono">₹{net}</span>
                   </div>
                 </div>
 
                 {/* Details grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-950 p-3.5 rounded-xl border border-slate-900">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-950 p-3.5 rounded-xl border border-slate-900 text-xs">
                   <div className="flex flex-col">
                     <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Payment Method</span>
                     <span className="text-xs font-bold text-slate-300 font-mono mt-0.5">{w.method}</span>
                   </div>
-                  <div className="flex flex-col sm:col-span-2">
+                  <div className="flex flex-col">
                     <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Account Information</span>
                     <span className="text-xs font-bold text-white font-mono break-all mt-0.5">
                       {w.method === 'UPI' ? w.upiId : w.paytoNumber || 'N/A'}
                     </span>
+                  </div>
+                  <div className="flex flex-col sm:col-span-2 bg-slate-900/50 p-2 rounded-lg border border-slate-800">
+                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">Financial Breakdown</span>
+                    <div className="grid grid-cols-3 gap-2 text-[10.5px]">
+                      <div>
+                        <span className="text-slate-500">Gross:</span>
+                        <span className="font-bold text-white font-mono ml-1">₹{gross}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Tax/Fee:</span>
+                        <span className="font-bold text-rose-400 font-mono ml-1">₹{tax}</span>
+                      </div>
+                      <div>
+                        <span className="text-emerald-400 font-black">Net:</span>
+                        <span className="font-extrabold text-emerald-400 font-mono ml-1">₹{net}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -424,10 +445,10 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
                     <button
                       disabled={isProcessing === w.id}
                       onClick={() => handleApprove(w.id, w.botId || w.earningBotId)}
-                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all flex items-center gap-1 disabled:opacity-50"
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
                     >
                       <Check className="w-3.5 h-3.5" />
-                      <span>{isProcessing === w.id ? 'Processing...' : 'Approve & Payout'}</span>
+                      <span>{isProcessing === w.id ? 'Processing...' : `✓ APPROVE & PAYOUT ₹${net}`}</span>
                     </button>
                     <button
                       disabled={isProcessing === w.id}
@@ -435,7 +456,7 @@ export const EarningBotWithdrawalsView: React.FC<EarningBotWithdrawalsViewProps>
                         setRejectingId(w.id);
                         setRejectReason('Details verification failed');
                       }}
-                      className="px-4 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all flex items-center gap-1 disabled:opacity-50"
+                      className="px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
                     >
                       <X className="w-3.5 h-3.5" />
                       <span>Reject</span>

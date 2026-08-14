@@ -7389,9 +7389,14 @@ Respond with a JSON object containing two properties:
         amount: amountRequested,
         amountRequested,
         processingFee,
-        taxAmount,
+        taxAmount: Number((processingFee + taxAmount).toFixed(2)),
         finalPayout,
         totalDeduction,
+        grossAmount: amountRequested,
+        netAmount: finalPayout,
+        taxRate: methodCfg.tax,
+        taxType: methodCfg.feeType,
+        paymentMethod: normMethod,
         method: normMethod as any,
         upiId: paymentDetails?.upiId || '',
         qrData: paymentDetails?.qrData || paymentDetails?.qrUrl || '',
@@ -7562,12 +7567,30 @@ Respond with a JSON object containing two properties:
         return res.status(400).json({ success: false, error: 'Unauthorized: This withdrawal does not belong to the selected bot context.' });
       }
 
+      if (wData.status !== 'PENDING') {
+        return res.status(400).json({ success: false, error: 'Only PENDING withdrawal requests can be approved.' });
+      }
+
       if (wData.status === 'PAID') {
         return res.status(400).json({ success: false, error: 'Withdrawal has already been processed and marked PAID.' });
       }
 
       if (wData.providerPaymentStarted === true && wData.status === 'PROCESSING') {
         return res.status(400).json({ success: false, error: 'Payment is currently in progress with provider. Please wait.' });
+      }
+
+      // Load & verify grossAmount, taxAmount, and netAmount
+      const grossAmount = Number(wData.grossAmount ?? wData.amountRequested ?? wData.amount ?? wData.totalDeduction ?? 0);
+      const taxAmount = Number(wData.taxAmount ?? ((wData.processingFee || 0) + (wData.taxAmount || 0)));
+      const netAmount = Number(wData.netAmount ?? wData.finalPayout ?? (grossAmount - taxAmount));
+
+      // Re-calculate/verify as safety check
+      const verifiedGrossAmount = grossAmount;
+      const verifiedTaxAmount = taxAmount;
+      const verifiedNetAmount = Number(netAmount.toFixed(2));
+
+      if (verifiedNetAmount <= 0) {
+        return res.status(400).json({ success: false, error: 'Invalid net payout amount. It must be greater than ₹0.' });
       }
 
       const configData = await getDecryptedConfig();
@@ -7600,10 +7623,10 @@ Respond with a JSON object containing two properties:
           ultraUrl.searchParams.append('token', apiToken);
           ultraUrl.searchParams.append('key', apiKey);
           ultraUrl.searchParams.append('paytoNumber', paytoNumber);
-          ultraUrl.searchParams.append('amount', String(wData.finalPayout || wData.amount));
+          ultraUrl.searchParams.append('amount', String(verifiedNetAmount));
           ultraUrl.searchParams.append('comment', `RoyShare Withdrawal ${withdrawalId}`);
 
-          console.log(`[Ultra Pay Provider Call] Executing payout for ${withdrawalId} to ${paytoNumber} amount ₹${wData.finalPayout}...`);
+          console.log(`[Ultra Pay Provider Call] Executing payout for ${withdrawalId} to ${paytoNumber} amount ₹${verifiedNetAmount}...`);
           const apiRes = await fetch(ultraUrl.toString(), { method: 'GET', headers: { 'Accept': 'application/json' } });
           const resText = await apiRes.text();
 
@@ -7639,6 +7662,11 @@ Respond with a JSON object containing two properties:
                 status: 'PAID',
                 paidAt: nowIso,
                 approvedAt: nowIso,
+                approvedBy: 'Admin',
+                payoutAmount: verifiedNetAmount,
+                taxAmount: verifiedTaxAmount,
+                grossAmount: verifiedGrossAmount,
+                netAmount: verifiedNetAmount,
                 providerReference: providerRef,
                 providerResponse: resData,
                 updatedAt: nowIso,
@@ -7763,7 +7791,7 @@ Respond with a JSON object containing two properties:
           withdrawalId,
           uid: wData.uid,
           telegramId: wData.telegramId,
-          amount: wData.finalPayout || wData.amount,
+          amount: verifiedNetAmount,
           createdAt: nowIso,
           expiresAt: expiresAtIso,
           status: 'ACTIVE',
@@ -7785,6 +7813,11 @@ Respond with a JSON object containing two properties:
             status: 'PAID',
             paidAt: nowIso,
             approvedAt: nowIso,
+            approvedBy: 'Admin',
+            payoutAmount: verifiedNetAmount,
+            taxAmount: verifiedTaxAmount,
+            grossAmount: verifiedGrossAmount,
+            netAmount: verifiedNetAmount,
             paymentDetails: { ...(wData.paymentDetails || {}), redeemCode },
             redeemCodeDetails: redeemCode,
             updatedAt: nowIso,
@@ -7795,7 +7828,7 @@ Respond with a JSON object containing two properties:
           const msg =
             `🎟️ <b>Redeem Code Withdrawal Ready!</b>\n\n` +
             `🎁 <b>Your Redeem Code:</b> <code>${redeemCode}</code>\n` +
-            `💵 <b>Value:</b> ₹${wData.finalPayout || wData.amount}\n` +
+            `💵 <b>Value:</b> ₹${verifiedNetAmount}\n` +
             `⏱ <b>Expires:</b> ${new Date(expiresAtIso).toLocaleDateString()}\n` +
             `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n\n` +
             `Use this redeem code to claim your payout!`;
@@ -7822,6 +7855,11 @@ Respond with a JSON object containing two properties:
           status: 'PAID',
           paidAt: nowIso,
           approvedAt: nowIso,
+          approvedBy: 'Admin',
+          payoutAmount: verifiedNetAmount,
+          taxAmount: verifiedTaxAmount,
+          grossAmount: verifiedGrossAmount,
+          netAmount: verifiedNetAmount,
           processedBy: 'Admin',
           updatedAt: nowIso,
         });
@@ -7830,8 +7868,9 @@ Respond with a JSON object containing two properties:
       if (botToken) {
         const msg =
           `✅ <b>Withdrawal Approved & Paid!</b>\n\n` +
-          `💰 <b>Requested Amount:</b> ₹${wData.amountRequested || wData.amount}\n` +
-          `🎁 <b>Payout Sent:</b> ₹${wData.finalPayout || wData.amount}\n` +
+          `💰 <b>Requested Amount:</b> ₹${verifiedGrossAmount}\n` +
+          `🧾 <b>Tax/Fee Deducted:</b> ₹${verifiedTaxAmount}\n` +
+          `🎁 <b>Payout Sent:</b> ₹${verifiedNetAmount}\n` +
           `📌 <b>Method:</b> ${normMethod}\n` +
           `🆔 <b>Withdrawal ID:</b> <code>${withdrawalId}</code>\n\n` +
           `Thank you for using Roy Share Wallet!`;

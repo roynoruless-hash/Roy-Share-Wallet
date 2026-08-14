@@ -1199,6 +1199,10 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                   const isPending = String(w.status).toLowerCase() === 'pending';
                   const method = String(w.method || 'upi').toLowerCase();
 
+                  const gross = Number(w.grossAmount ?? w.amountRequested ?? w.amount ?? 0);
+                  const tax = Number(w.taxAmount ?? ((w.processingFee || 0) + (w.platformFee || 0)));
+                  const net = Number(w.netAmount ?? w.finalPayout ?? w.payoutAmount ?? (gross - tax));
+
                   return (
                     <tr
                       key={w.id || w.withdrawalId}
@@ -1331,13 +1335,19 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
 
                       {/* Requested Amount -> Platform Fee -> Payout Value */}
                       <td className="p-4 font-mono">
-                        <div className="space-y-0.5">
-                          <span className="text-base font-black text-emerald-400 block">
-                            ₹{w.payoutAmount !== undefined ? w.payoutAmount : w.amount}
-                          </span>
-                          <span className="text-[9px] text-slate-500 block">
-                            Requested: ₹{w.requestedAmount || w.amount} | Tax: ₹{w.platformFee || 0}
-                          </span>
+                        <div className="space-y-1 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/60 min-w-[130px]">
+                          <div className="flex justify-between gap-2 text-[10px]">
+                            <span className="text-slate-500 font-bold">💸 Gross:</span>
+                            <span className="text-slate-300 font-black">₹{gross}</span>
+                          </div>
+                          <div className="flex justify-between gap-2 text-[10px]">
+                            <span className="text-slate-500 font-bold">🧾 Tax/Fee:</span>
+                            <span className="text-rose-400 font-black">₹{tax}</span>
+                          </div>
+                          <div className="flex justify-between gap-2 text-[11px] pt-1 border-t border-slate-800">
+                            <span className="text-emerald-400 font-black">✅ Net:</span>
+                            <span className="text-emerald-400 font-extrabold">₹{net}</span>
+                          </div>
                         </div>
                       </td>
 
@@ -1348,7 +1358,7 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                             Pending
                           </span>
                         )}
-                        {['completed', 'approved'].includes(String(w.status).toLowerCase()) && (
+                        {['completed', 'approved', 'paid'].includes(String(w.status).toLowerCase()) && (
                           <span className="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-400 text-[10px] font-black uppercase tracking-wider">
                             Approved
                           </span>
@@ -1403,14 +1413,14 @@ export const WithdrawalSettingsView: React.FC<WithdrawalSettingsViewProps> = ({
                               <button
                                 disabled={isProcessing}
                                 onClick={() => handleApprove(w.id!, w.withdrawalId || w.requestId || '')}
-                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] uppercase tracking-wide transition disabled:opacity-50"
+                                className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black text-[10px] uppercase tracking-wide transition disabled:opacity-50"
                               >
-                                Approve
+                                ✓ Approve & Payout ₹{net}
                               </button>
                               <button
                                 disabled={isProcessing}
                                 onClick={() => setRejectingDocId(w.id!)}
-                                className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-black text-[10px] uppercase tracking-wide transition disabled:opacity-50"
+                                className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-black text-[10px] uppercase tracking-wide transition disabled:opacity-50"
                               >
                                 Reject
                               </button>
