@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { doc, onSnapshot, collection, query, where, runTransaction, addDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
+import { FormattedTaskDescription } from './common/FormattedTaskDescription';
 import {
   Wallet,
   Users,
@@ -2472,7 +2473,7 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
                           <div className="space-y-1">
                             <h3 className="text-xs font-black text-white">{task.title}</h3>
                             {task.description && (
-                              <p className="text-[11px] text-slate-400 leading-normal line-clamp-2">{task.description}</p>
+                              <p className="text-[11px] text-slate-400 leading-normal line-clamp-2 whitespace-pre-line">{task.description}</p>
                             )}
                             <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                               <span className="text-[9px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/10 px-1.5 py-0.5 rounded font-bold">
@@ -3339,11 +3340,11 @@ export const UserAppView: React.FC<UserAppViewProps> = ({ botUsername }) => {
               </button>
             </div>
 
-            <div className="space-y-1">
-              <h3 className="text-sm font-black text-white">{activeProofTask.title}</h3>
-              <p className="text-xs text-emerald-400 font-bold">Reward: ₹{activeProofTask.reward} Cash</p>
+            <div className="space-y-2">
+              <h3 className="text-base font-black text-white">{activeProofTask.title}</h3>
+              <p className="text-xs text-emerald-400 font-bold">Reward: ₹{activeProofTask.reward} Cash {activeProofTask.coins > 0 ? `+ ${activeProofTask.coins} Coins` : ''}</p>
               {activeProofTask.description && (
-                <p className="text-xs text-slate-300 pt-1 leading-relaxed">{activeProofTask.description}</p>
+                <FormattedTaskDescription description={activeProofTask.description} cardStyle={true} />
               )}
             </div>
 

@@ -7,6 +7,7 @@ import {
 } from '../../services/taskService';
 import { uploadImageToImgBB } from '../../services/storageService';
 import { loadAdminConfig } from '../../services/configService';
+import { FormattedTaskDescription } from '../common/FormattedTaskDescription';
 import {
   Plus,
   Edit2,
@@ -1207,13 +1208,13 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
 
                     {/* Short Description */}
                     <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-300 block">Short Description / Instructions</label>
+                      <label className="text-xs font-bold text-slate-300 block">Task Description & Step-by-Step Instructions</label>
                       <textarea
-                        rows={2}
-                        placeholder="Open the website, complete your account registration and submit the required proof screenshot."
+                        rows={6}
+                        placeholder={"Amundi Fund Task – ₹3 Reward + 20 Coins\n\n1️⃣ Register on app/website\n2️⃣ Claim ₹300 Free Trial Fund\n3️⃣ Complete required investment\n4️⃣ Upload profile screenshot\n\n✅ Approval ke baad reward wallet me credit honge.\n⚠️ Fake/invalid screenshot par reward nahi milega."}
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs text-white outline-none"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl py-2.5 px-3.5 text-xs text-white outline-none leading-relaxed font-sans"
                       />
                     </div>
 
@@ -1555,7 +1556,7 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                       </div>
 
                       {task.description && (
-                        <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
+                        <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed whitespace-pre-line">
                           {task.description}
                         </p>
                       )}
@@ -2067,16 +2068,16 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
               </button>
             </div>
 
-            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-850 space-y-3">
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-850 space-y-3.5 max-h-[70vh] overflow-y-auto">
               {previewTaskModal.taskImage && (
-                <img src={previewTaskModal.taskImage} alt="Task" className="w-full h-32 object-cover rounded-xl border border-slate-800" />
+                <img src={previewTaskModal.taskImage} alt="Task" className="w-full h-36 object-cover rounded-xl border border-slate-800" />
               )}
-              <h4 className="text-sm font-black text-white">{previewTaskModal.title}</h4>
-              <p className="text-xs text-slate-300 leading-relaxed">{previewTaskModal.description}</p>
-              <div className="flex items-center gap-3 text-xs font-bold pt-1">
-                <span className="text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">₹{previewTaskModal.reward} Reward</span>
-                <span className="text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">+{previewTaskModal.coins} Coins</span>
+              <h4 className="text-base font-black text-white leading-snug">{previewTaskModal.title}</h4>
+              <div className="flex items-center gap-2.5 text-xs font-bold py-1 border-y border-slate-850">
+                <span className="text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">₹{previewTaskModal.reward} Cash Reward</span>
+                <span className="text-purple-400 bg-purple-500/10 px-2.5 py-1 rounded-lg border border-purple-500/20">+{previewTaskModal.coins} Coins</span>
               </div>
+              <FormattedTaskDescription description={previewTaskModal.description || ''} cardStyle={true} />
             </div>
 
             <div className="flex justify-end pt-2">
@@ -2463,6 +2464,18 @@ export const TasksManagerView: React.FC<TasksManagerViewProps> = ({
                 <span className="text-slate-300">{selectedSubmissionForModal.userAppUid || selectedSubmissionForModal.userId}</span>
               </div>
             </div>
+
+            {(() => {
+              const matchingTask = tasks.find((t) => t.id === selectedSubmissionForModal.taskId);
+              if (matchingTask?.description) {
+                return (
+                  <div className="pt-2 border-t border-slate-800">
+                    <FormattedTaskDescription description={matchingTask.description} cardStyle={true} />
+                  </div>
+                );
+              }
+              return null;
+            })()}
 
             {selectedSubmissionForModal.status === 'PENDING_APPROVAL' && (
               <div className="flex items-center gap-3 pt-2">
